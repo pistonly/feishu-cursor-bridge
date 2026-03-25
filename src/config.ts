@@ -28,6 +28,10 @@ export interface Config {
     sessionIdleTimeoutMs: number;
     sessionStorePath: string;
     cardUpdateThrottleMs: number;
+    /** `/new list` 等使用的快捷列表 JSON 路径 */
+    workspacePresetsPath: string;
+    /** 列表文件为空时，用环境变量种子初始化（绝对路径） */
+    workspacePresetsSeed: string[];
   };
   autoApprovePermissions: boolean;
   bridgeDebug: boolean;
@@ -129,6 +133,25 @@ export function loadConfig(): Config {
     ),
   );
 
+  const defaultPresetsFile = path.join(
+    os.homedir(),
+    ".feishu-cursor-bridge",
+    "workspace-presets.json",
+  );
+  const workspacePresetsPath = path.resolve(
+    expandHome(
+      process.env["CURSOR_WORK_PRESETS_FILE"]?.trim() || defaultPresetsFile,
+    ),
+  );
+
+  const presetsSeedRaw = process.env["CURSOR_WORK_PRESETS"]?.trim();
+  const workspacePresetsSeed = presetsSeedRaw
+    ? presetsSeedRaw
+        .split(",")
+        .map((s) => path.resolve(expandHome(s.trim())))
+        .filter((p) => p.length > 0)
+    : [];
+
   const sessionIdleTimeoutMs = Math.max(
     60_000,
     Number(process.env["SESSION_IDLE_TIMEOUT_MS"] ?? 30 * 60_000) || 30 * 60_000,
@@ -166,6 +189,8 @@ export function loadConfig(): Config {
       sessionIdleTimeoutMs,
       sessionStorePath,
       cardUpdateThrottleMs,
+      workspacePresetsPath,
+      workspacePresetsSeed,
     },
     autoApprovePermissions:
       (process.env["AUTO_APPROVE_PERMISSIONS"] ?? "true").toLowerCase() ===

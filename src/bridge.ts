@@ -8,6 +8,7 @@ import { SessionManager } from "./session-manager.js";
 import { SessionStore } from "./session-store.js";
 import { ConversationService } from "./conversation-service.js";
 import { resolveAllowedWorkspaceDir } from "./workspace-policy.js";
+import { WorkspacePresetsStore } from "./workspace-presets-store.js";
 
 export class Bridge {
   private config: Config;
@@ -16,6 +17,7 @@ export class Bridge {
   private feishuBot: FeishuBot;
   private sessionStore: SessionStore;
   private sessionManager: SessionManager;
+  private presetsStore: WorkspacePresetsStore;
   private conversation: ConversationService;
   private activePrompts = new Set<string>();
   private cleanupInterval: ReturnType<typeof setInterval> | null = null;
@@ -25,6 +27,9 @@ export class Bridge {
     this.bridgeClient = new FeishuBridgeClient(config);
     this.acpRuntime = new AcpRuntime(config, this.bridgeClient);
     this.sessionStore = new SessionStore(config.bridge.sessionStorePath);
+    this.presetsStore = new WorkspacePresetsStore(
+      config.bridge.workspacePresetsPath,
+    );
     this.sessionManager = new SessionManager(
       this.acpRuntime,
       this.sessionStore,
@@ -60,6 +65,7 @@ export class Bridge {
     }
 
     await this.sessionManager.init();
+    await this.presetsStore.load(this.config.bridge.workspacePresetsSeed);
 
     await this.acpRuntime.start();
     await this.acpRuntime.initializeAndAuth();
@@ -114,13 +120,115 @@ export class Bridge {
     const newConv = parseNewConversationCommand(content);
     if (newConv) {
       try {
-        let workspaceAbs: string | undefined;
-        if (newConv.path) {
-          workspaceAbs = await resolveAllowedWorkspaceDir(
-            newConv.path,
-            this.config,
-          );
+        if (newConv.kind === "new") {
+          if (newConv.variant === "list") {
+            const presets = this.presetsStore.getPresets();
+            const lines =
+              presets.length > 0
+                ? presets.map((p, i) => `${i + 1}. \`${p}\``).join("\n")
+                : "（尚为空）";
+            await this.feishuBot.sendText(
+              msg.chatId,
+              `📋 工作区快捷列表（使用 \`/new <序号>\` 切换）。\n\n${lines}\n\n添加：\`/new add-list <路径>\`\n删除：\`/new remove-list <序号>\``,
+              msg.messageId,
+            );
+            return;
+          }
+          if (newConv.variant === "remove-list") {
+            if (newConv.index < 1) {
+              await this.feishuBot.sendText(
+                msg.chatId,
+                "用法：`/new remove-list <序号>`（序号见 `/new list`）",
+                msg.messageId,
+              );
+              return;
+            }
+            const removed = await this.presetsStore.removePresetAt(
+              newConv.index,
+            );
+            const list = this.presetsStore.getPresets();
+            const lines = list.map((p, i) => `${i + 1}. \`${p}\``).join("\n");
+            await this.feishuBot.sendText(
+              msg.chatId,
+              removed
+                ? `✅ 已删除序号 ${newConv.index}。\n\n${list.length ? lines : "（列表已空）"}`
+                : `❌ 无序号 ${newConv.index}。请先 \`/new list\` 查看当前列表。`,
+              msg.messageId,
+            );
+            return;
+          }
+          if (newConv.variant === "add-list") {
+            if (!newConv.path.trim()) {
+              await this.feishuBot.sendText(
+                msg.chatId,
+                "用法：`/new add-list <目录路径>`",
+                msg.messageId,
+              );
+              return;
+            }
+            const abs = await resolveAllowedWorkspaceDir(
+              newConv.path,
+              this.config,
+            );
+            const added = await this.presetsStore.addPreset(abs);
+            const list = this.presetsStore.getPresets();
+            const lines = list.map((p, i) => `${i + 1}. \`${p}\``).join("\n");
+            await this.feishuBot.sendText(
+              msg.chatId,
+              added
+                ? `✅ 已加入列表。\n\n${lines}`
+                : `ℹ️ 该路径已在列表中，未重复添加。\n\n${lines}`,
+              msg.messageId,
+            );
+            return;
+          }
         }
+
+        let workspaceAbs: string | undefined;
+        if (newConv.kind === "reset") {
+          if (newConv.path) {
+            workspaceAbs = await resolveAllowedWorkspaceDir(
+              newConv.path,
+              this.config,
+            );
+          }
+        } else {
+          switch (newConv.variant) {
+            case "default":
+              break;
+            case "workspace":
+              workspaceAbs = await resolveAllowedWorkspaceDir(
+                newConv.path,
+                this.config,
+              );
+              break;
+            case "preset": {
+              const idx = newConv.index;
+              if (idx < 1) {
+                await this.feishuBot.sendText(
+                  msg.chatId,
+                  "❌ 序号须为 ≥1 的整数。",
+                  msg.messageId,
+                );
+                return;
+              }
+              const p = this.presetsStore.getByIndex(idx);
+              if (!p) {
+                await this.feishuBot.sendText(
+                  msg.chatId,
+                  `❌ 列表中无序号 ${idx}。请先发送 \`/new list\` 查看。`,
+                  msg.messageId,
+                );
+                return;
+              }
+              workspaceAbs = await resolveAllowedWorkspaceDir(p, this.config);
+              break;
+            }
+            default:
+              return;
+          }
+        }
+
         await this.sessionManager.resetSession(
           msg.chatId,
           msg.senderId,

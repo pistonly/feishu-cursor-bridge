@@ -8,7 +8,7 @@
 - 回复流式推送到飞书（interactive 卡片，含回答、思考、工具、计划等区块）
 - 多用户会话隔离（私聊 / 群聊按用户维度映射 ACP `sessionId`）
 - 群聊 @ 机器人触发；私聊直接对话
-- 内置命令：`/reset`（cancel + close + 清除本地映射）、`/status`
+- 内置命令：`/reset`、`/new`（含快捷列表 `/new list`、`/new <序号>` 等）、`/status`、`/model`（见 `docs/feishu-commands.md`）
 - 会话映射持久化：进程重启后若 Agent 声明 `loadSession`，可 `session/load` 恢复
 
 ## 架构

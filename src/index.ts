@@ -14,6 +14,7 @@ async function main() {
   );
   console.log(`[main] Adapter session dir: ${config.acp.adapterSessionDir}`);
   console.log(`[main] Bridge session store: ${config.bridge.sessionStorePath}`);
+  console.log(`[main] Workspace presets file: ${config.bridge.workspacePresetsPath}`);
   console.log(`[main] Auto-approve permissions: ${config.autoApprovePermissions}`);
   console.log(`[main] Bridge debug: ${config.bridgeDebug}`);
 
