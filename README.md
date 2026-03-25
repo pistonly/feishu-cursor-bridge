@@ -1,72 +1,93 @@
 # 飞书-Cursor 桥接服务
 
-独立服务，通过飞书机器人控制 Cursor AI Agent。基于 Cursor ACP (Agent Client Protocol) 协议。
+独立服务，通过飞书机器人控制 Cursor AI Agent。桥接进程作为 **ACP Client**，子进程运行上游 **`@blowmage/cursor-agent-acp`**（完整 Cursor CLI 适配层），通过 **Agent Client Protocol** 与 Cursor 生态对齐，避免自研半套协议。
 
 ## 功能特性
 
-- 飞书消息自动转发到 Cursor Agent
-- Cursor Agent 回复实时流式推送到飞书（通过卡片消息）
-- 多用户会话隔离（每个用户独立的 Cursor 会话）
-- 群聊支持（@机器人 触发）
-- 私聊直接对话
-- 内置命令：`/reset` 重置会话，`/status` 查看状态
+- 飞书消息转发至 Cursor（经 `cursor-agent-acp`）
+- 回复流式推送到飞书（interactive 卡片，含回答、思考、工具、计划等区块）
+- 多用户会话隔离（私聊 / 群聊按用户维度映射 ACP `sessionId`）
+- 群聊 @ 机器人触发；私聊直接对话
+- 内置命令：`/reset`（cancel + close + 清除本地映射）、`/status`
+- 会话映射持久化：进程重启后若 Agent 声明 `loadSession`，可 `session/load` 恢复
 
 ## 架构
 
 ```
-飞书用户 ──(WebSocket)──> 飞书 Bot ──> Bridge ──(stdio/JSON-RPC)──> Cursor Agent ACP
-                                         ↑                              |
-                                         └──── 流式响应(卡片更新) <─────┘
+飞书用户 ──(WebSocket)──> FeishuBot ──> Bridge
+                                           │
+                    ConversationService / FeishuCardState
+                                           │
+                    @agentclientprotocol/sdk ClientSideConnection
+                                           │
+                    stdio NDJSON ──> cursor-agent-acp 子进程 ──> Cursor CLI (cursor-agent)
 ```
+
+- **飞书层**：`src/feishu-bot.ts`（仅 SDK 与消息收发）
+- **ACP 运行时**：`src/acp/runtime.ts` + `src/acp/feishu-bridge-client.ts`（实现 Client：权限、沙箱读写、`session/update` 归一化）
+- **编排**：`src/bridge.ts`、`src/conversation-service.ts`
+- **会话**：`src/session-manager.ts` + `src/session-store.ts`
 
 ## 前置条件
 
-1. 安装 Cursor CLI（`agent` 命令可用）
-2. 已通过 `agent login` 完成认证（或配置 API Key）
-3. 创建飞书企业自建应用，开通机器人能力
-4. 飞书应用权限：`im:message`、`im:message:send_as_bot`、`im:chat`
+1. **Node.js 18+**
+2. 已安装 **Cursor CLI**（`cursor-agent` 在 PATH 中，并完成 `cursor-agent login` 等认证方式）
+3. 飞书企业自建应用：机器人、`im:message`、`im:message:send_as_bot`、`im:chat`
 
 ## 快速开始
 
 ```bash
-# 1. 安装依赖
 npm install
-
-# 2. 配置环境变量
 cp .env.example .env
-# 编辑 .env 填入你的配置
+# 编辑 .env
 
-# 3. 开发模式运行
 npm run dev
-
-# 4. 编译并运行
-npm run build
-npm start
+# 或
+npm run build && npm start
 ```
 
-## 环境变量说明
+## 环境变量
 
-| 变量名 | 说明 | 默认值 |
-|--------|------|--------|
-| `FEISHU_APP_ID` | 飞书应用的 App ID（必填） | - |
-| `FEISHU_APP_SECRET` | 飞书应用的 App Secret（必填） | - |
-| `FEISHU_DOMAIN` | 飞书域名：`feishu` / `lark` / 自定义 URL | `feishu` |
-| `CURSOR_AGENT_PATH` | Cursor Agent 二进制路径 | `agent`（使用 PATH 查找） |
-| `CURSOR_API_KEY` | Cursor API Key（可选） | - |
-| `CURSOR_AUTH_TOKEN` | Cursor Auth Token（可选） | - |
-| `CURSOR_WORK_DIR` | Cursor 工作目录 | 当前目录 |
-| `AUTO_APPROVE_PERMISSIONS` | 自动批准所有权限请求 | `true` |
-| `LOG_LEVEL` | 日志级别：`debug` / `info` / `warn` / `error` | `info` |
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `FEISHU_APP_ID` | 飞书 App ID（必填） | - |
+| `FEISHU_APP_SECRET` | 飞书 App Secret（必填） | - |
+| `FEISHU_DOMAIN` | `feishu` / `lark` / 自定义 URL | `feishu` |
+| `CURSOR_WORK_DIR` | 工作区绝对路径（ACP `cwd`、读文件沙箱根） | 当前目录 |
+| `CURSOR_ACP_ADAPTER_ENTRY` | `cursor-agent-acp` 入口 JS 路径 | 包内 `dist/bin/cursor-agent-acp.js` |
+| `ACP_NODE_PATH` | 用于启动适配器的 Node | `process.execPath` |
+| `CURSOR_ACP_SESSION_DIR` | 适配器 `--session-dir` | `~/.feishu-cursor-bridge/cursor-acp-sessions` |
+| `CURSOR_ACP_EXTRA_ARGS` | 透传适配器 CLI（空格分隔） | 空 |
+| `BRIDGE_SESSION_STORE` | 飞书↔ACP 映射 JSON 路径 | `<CURSOR_WORK_DIR>/.feishu-bridge-sessions.json` |
+| `SESSION_IDLE_TIMEOUT_MS` | 空闲多久新建会话 | `1800000`（30 分钟） |
+| `FEISHU_CARD_THROTTLE_MS` | 卡片更新节流 | `800` |
+| `AUTO_APPROVE_PERMISSIONS` | 自动选择允许类权限选项 | `true` |
+| `LOG_LEVEL` | `debug` / `info` / `warn` / `error` | `info` |
+| `BRIDGE_DEBUG` | 调试日志与 `/status` 详情 | `false` |
 
 ## 使用方式
 
-- **私聊机器人**：直接发送消息
-- **群聊中**：@机器人 + 消息内容
-- 发送 `/reset` 重置会话
-- 发送 `/status` 查看服务状态
+- **私聊**：直接发消息
+- **群聊**：@机器人 + 内容
+- `/reset` 或 `/新对话`：结束当前 ACP 会话并清空本地映射
+- `/status` 或 `/状态`：会话统计；`BRIDGE_DEBUG=true` 时含 sessionId、路径等
+
+## 最小验证清单（手工）
+
+1. `npm run build` 通过
+2. 私聊发送一条消息，卡片出现「回答」区块
+3. 连续多轮对话，确认复用同一会话（`BRIDGE_DEBUG` 下 sessionId 不变）
+4. `/reset` 后再次提问，sessionId 变化
+5. 触发工具调用时，卡片「工具」列表有更新（视 Agent 输出而定）
 
 ## 技术栈
 
-- **Cursor ACP** (Agent Client Protocol) - JSON-RPC 2.0 over stdio
-- **飞书开放平台 SDK** (@larksuiteoapi/node-sdk)
+- **[@blowmage/cursor-agent-acp](https://www.npmjs.com/package/@blowmage/cursor-agent-acp)** — Cursor CLI 的 ACP 适配器（stdio）
+- **[@agentclientprotocol/sdk](https://www.npmjs.com/package/@agentclientprotocol/sdk)** — 官方 ACP Client 连接与类型
+- **@larksuiteoapi/node-sdk** — 飞书长连接与消息 API
 - **TypeScript + Node.js**
+
+## 与旧版差异（本分支）
+
+- 不再使用 `agent acp` 直连；统一走 **`cursor-agent-acp` 子进程**。
+- 协议实现以 SDK 为准，事件面覆盖思考、工具、计划、模式等，并由 `FeishuCardState` 折叠展示。

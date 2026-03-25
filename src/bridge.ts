@@ -1,51 +1,63 @@
 import type { Config } from "./config.js";
-import {
-  CursorACPClient,
-  type TextChunkEvent,
-} from "./cursor-acp.js";
+import { AcpRuntime } from "./acp/runtime.js";
+import { FeishuBridgeClient } from "./acp/feishu-bridge-client.js";
 import { FeishuBot, type FeishuMessage } from "./feishu-bot.js";
 import { SessionManager } from "./session-manager.js";
+import { SessionStore } from "./session-store.js";
+import { ConversationService } from "./conversation-service.js";
 
 export class Bridge {
   private config: Config;
-  private acpClient: CursorACPClient;
+  private bridgeClient: FeishuBridgeClient;
+  private acpRuntime: AcpRuntime;
   private feishuBot: FeishuBot;
+  private sessionStore: SessionStore;
   private sessionManager: SessionManager;
+  private conversation: ConversationService;
   private activePrompts = new Set<string>();
   private cleanupInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor(config: Config) {
     this.config = config;
-
-    this.acpClient = new CursorACPClient(config);
+    this.bridgeClient = new FeishuBridgeClient(config);
+    this.acpRuntime = new AcpRuntime(config, this.bridgeClient);
+    this.sessionStore = new SessionStore(config.bridge.sessionStorePath);
+    this.sessionManager = new SessionManager(
+      this.acpRuntime,
+      this.sessionStore,
+      config.bridge.sessionIdleTimeoutMs,
+      { debug: config.bridgeDebug },
+    );
     this.feishuBot = new FeishuBot({
       appId: config.feishu.appId,
       appSecret: config.feishu.appSecret,
       domain: config.feishu.domain,
     });
-    this.sessionManager = new SessionManager(this.acpClient, {
-      debug: config.bridgeDebug,
-    });
+    this.conversation = new ConversationService(
+      config,
+      this.acpRuntime,
+      this.feishuBot,
+    );
   }
 
   async start(): Promise<void> {
     if (this.config.bridgeDebug) {
       console.log(
-        "[bridge] BRIDGE_DEBUG=true — 控制台会输出 ACP sessionId / tool_call；飞书 /status 含详细信息",
+        "[bridge] BRIDGE_DEBUG=true — 控制台输出 ACP/会话信息；/status 含 session 与路径",
       );
     }
 
-    await this.acpClient.start();
-    await this.acpClient.initialize();
-    await this.acpClient.authenticate();
-    console.log("[bridge] Cursor ACP connected and authenticated");
+    await this.sessionManager.init();
+
+    await this.acpRuntime.start();
+    await this.acpRuntime.initializeAndAuth();
+    console.log(
+      `[bridge] cursor-agent-acp 已连接 protocolVersion=${this.acpRuntime.initializeResult?.protocolVersion} loadSession=${this.acpRuntime.supportsLoadSession}`,
+    );
 
     if (this.config.bridgeDebug) {
-      this.acpClient.on("tool_call", (ev) => {
-        console.log(
-          `[bridge:debug] tool_call sessionId=${ev.sessionId} name=${ev.name}`,
-          ev.params,
-        );
+      this.bridgeClient.on("acp", (ev) => {
+        console.log(`[bridge:debug] acp ${ev.type}`, ev);
       });
     }
 
@@ -88,10 +100,14 @@ export class Bridge {
     if (!content) return;
 
     if (content === "/reset" || content === "/新对话") {
-      this.sessionManager.resetSession(msg.chatId, msg.senderId, msg.chatType);
+      await this.sessionManager.resetSession(
+        msg.chatId,
+        msg.senderId,
+        msg.chatType,
+      );
       await this.feishuBot.sendText(
         msg.chatId,
-        "✅ 会话已重置，开始新对话。",
+        "✅ 会话已重置（已尝试 cancel/close ACP 会话），可开始新对话。",
         msg.messageId,
       );
       return;
@@ -99,7 +115,7 @@ export class Bridge {
 
     if (content === "/status" || content === "/状态") {
       const stats = this.sessionManager.getStats();
-      let body = `📊 活跃/总会话: ${stats.active}/${stats.total}`;
+      let body = `📊 活跃/内存会话: ${stats.active}/${stats.total}`;
       if (this.config.bridgeDebug) {
         const snap = this.sessionManager.getSessionSnapshot(
           msg.chatId,
@@ -109,7 +125,7 @@ export class Bridge {
         const idleMin = snap
           ? Math.round(snap.idleExpiresInMs / 60_000)
           : null;
-        body += `\n\n[调试 BRIDGE_DEBUG]\n• sessionKey: ${snap?.sessionKey ?? "(尚无，先发一条消息)"}\n• ACP sessionId: ${snap?.session.sessionId ?? "—"}\n• 空闲过期约: ${idleMin !== null ? `${idleMin} 分钟内无消息会建新会话` : "—"}\n• CURSOR_WORK_DIR: ${this.config.cursor.workDir}\n• LOG_LEVEL: ${this.config.logLevel}`;
+        body += `\n\n[调试 BRIDGE_DEBUG]\n• sessionKey: ${snap?.sessionKey ?? "(尚无)"}\n• ACP sessionId: ${snap?.session.sessionId ?? "—"}\n• 空闲过期约: ${idleMin !== null ? `${idleMin} 分钟` : "—"}\n• 工作区: ${this.config.acp.workspaceRoot}\n• 适配器会话目录: ${this.config.acp.adapterSessionDir}\n• 映射文件: ${this.config.bridge.sessionStorePath}\n• loadSession: ${this.acpRuntime.supportsLoadSession}\n• LOG_LEVEL: ${this.config.logLevel}`;
       }
       await this.feishuBot.sendText(msg.chatId, body, msg.messageId);
       return;
@@ -138,55 +154,12 @@ export class Bridge {
         msg.chatType,
       );
 
-      const cardMessageId = await this.feishuBot.sendCard(
-        msg.chatId,
-        "🤔 思考中...",
-        msg.messageId,
-      );
-
-      let fullText = "";
-      let lastUpdateTime = 0;
-      const UPDATE_INTERVAL_MS = 800;
-
-      const textHandler = (data: TextChunkEvent) => {
-        if (data.sessionId !== session.sessionId) return;
-        fullText += data.text;
-
-        const now = Date.now();
-        if (now - lastUpdateTime > UPDATE_INTERVAL_MS && cardMessageId) {
-          lastUpdateTime = now;
-          this.feishuBot.updateCard(cardMessageId, fullText).catch(() => {});
-        }
+      const msgForPrompt: FeishuMessage = {
+        ...msg,
+        content,
       };
 
-      this.acpClient.on("text_chunk", textHandler);
-
-      try {
-        if (this.config.bridgeDebug) {
-          console.log(
-            `[bridge:debug] prompt start sessionId=${session.sessionId} chars=${content.length}`,
-          );
-        }
-
-        const promptResult = await this.acpClient.prompt(
-          session.sessionId,
-          content,
-        );
-
-        if (this.config.bridgeDebug) {
-          console.log(
-            `[bridge:debug] prompt done sessionId=${session.sessionId} stopReason=${promptResult.stopReason}`,
-          );
-        }
-
-        if (cardMessageId && fullText) {
-          await this.feishuBot.updateCard(cardMessageId, fullText);
-        } else if (cardMessageId && !fullText) {
-          await this.feishuBot.updateCard(cardMessageId, "（无响应内容）");
-        }
-      } finally {
-        this.acpClient.off("text_chunk", textHandler);
-      }
+      await this.conversation.handleUserPrompt(msgForPrompt, session);
     } catch (err) {
       console.error(
         `[bridge] Error processing message from ${msg.senderId}:`,
@@ -210,7 +183,7 @@ export class Bridge {
       this.cleanupInterval = null;
     }
     await this.feishuBot.stop();
-    await this.acpClient.stop();
+    await this.acpRuntime.stop();
     console.log("[bridge] Service stopped");
   }
 }
