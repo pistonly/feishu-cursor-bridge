@@ -11,6 +11,8 @@ export interface Config {
     workDir: string;
   };
   autoApprovePermissions: boolean;
+  /** 为 true 时：控制台输出 ACP/会话调试信息，/status 显示 sessionId 等 */
+  bridgeDebug: boolean;
   logLevel: "debug" | "info" | "warn" | "error";
 }
 
@@ -47,6 +49,8 @@ export function loadConfig(): Config {
     autoApprovePermissions:
       (process.env["AUTO_APPROVE_PERMISSIONS"] ?? "true").toLowerCase() ===
       "true",
+    bridgeDebug:
+      (process.env["BRIDGE_DEBUG"] ?? "false").toLowerCase() === "true",
     logLevel: logLevel as Config["logLevel"],
   };
 }

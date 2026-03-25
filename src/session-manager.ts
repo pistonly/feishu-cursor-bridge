@@ -10,14 +10,28 @@ export interface UserSession {
 
 const DEFAULT_SESSION_TIMEOUT_MS = 30 * 60 * 1000;
 
+export interface SessionSnapshot {
+  sessionKey: string;
+  session: UserSession;
+  /** 距离会话因空闲被判定过期的大致剩余时间（毫秒） */
+  idleExpiresInMs: number;
+}
+
+export interface SessionManagerOptions {
+  sessionTimeoutMs?: number;
+  debug?: boolean;
+}
+
 export class SessionManager {
   private sessions = new Map<string, UserSession>();
   private acpClient: CursorACPClient;
   private sessionTimeoutMs: number;
+  private debug: boolean;
 
-  constructor(acpClient: CursorACPClient, sessionTimeoutMs?: number) {
+  constructor(acpClient: CursorACPClient, options?: SessionManagerOptions) {
     this.acpClient = acpClient;
-    this.sessionTimeoutMs = sessionTimeoutMs ?? DEFAULT_SESSION_TIMEOUT_MS;
+    this.sessionTimeoutMs = options?.sessionTimeoutMs ?? DEFAULT_SESSION_TIMEOUT_MS;
+    this.debug = options?.debug ?? false;
   }
 
   private makeKey(chatId: string, userId: string, chatType: string): string {
@@ -34,6 +48,11 @@ export class SessionManager {
 
     if (existing && Date.now() - existing.lastActiveAt < this.sessionTimeoutMs) {
       existing.lastActiveAt = Date.now();
+      if (this.debug) {
+        console.log(
+          `[bridge:debug] session reuse key=${key} acpSessionId=${existing.sessionId}`,
+        );
+      }
       return existing;
     }
 
@@ -46,12 +65,39 @@ export class SessionManager {
       lastActiveAt: Date.now(),
     };
     this.sessions.set(key, session);
+    if (this.debug) {
+      console.log(
+        `[bridge:debug] session/new key=${key} acpSessionId=${session.sessionId}`,
+      );
+    }
     return session;
+  }
+
+  /** 当前用户在当前聊天下是否有未过期的 ACP 会话（不触发新建） */
+  getSessionSnapshot(
+    chatId: string,
+    userId: string,
+    chatType: string,
+  ): SessionSnapshot | null {
+    const key = this.makeKey(chatId, userId, chatType);
+    const existing = this.sessions.get(key);
+    if (!existing) return null;
+    const idleFor = Date.now() - existing.lastActiveAt;
+    if (idleFor >= this.sessionTimeoutMs) return null;
+    return {
+      sessionKey: key,
+      session: existing,
+      idleExpiresInMs: this.sessionTimeoutMs - idleFor,
+    };
   }
 
   resetSession(chatId: string, userId: string, chatType: string): boolean {
     const key = this.makeKey(chatId, userId, chatType);
-    return this.sessions.delete(key);
+    const removed = this.sessions.delete(key);
+    if (removed && this.debug) {
+      console.log(`[bridge:debug] session reset key=${key}`);
+    }
+    return removed;
   }
 
   cleanupExpired(): number {

@@ -29,6 +29,9 @@ Thumbs.db
 coverage/
 .nyc_output/
 
+# Python（脚本用虚拟环境）
+scripts/.venv/
+
 # Optional caches
 .cache/
 *.pid

@@ -10,6 +10,7 @@ async function main() {
   console.log(`[main] Cursor agent: ${config.cursor.agentPath}`);
   console.log(`[main] Work directory: ${config.cursor.workDir}`);
   console.log(`[main] Auto-approve permissions: ${config.autoApprovePermissions}`);
+  console.log(`[main] Bridge debug: ${config.bridgeDebug}`);
 
   const bridge = new Bridge(config);
 
