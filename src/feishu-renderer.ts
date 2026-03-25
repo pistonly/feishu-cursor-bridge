@@ -65,6 +65,18 @@ export class FeishuCardState {
     );
   }
 
+  getMainText(): string {
+    return this.main;
+  }
+
+  setMainText(text: string): void {
+    this.main = text;
+  }
+
+  hasThoughtText(): boolean {
+    return this.thought.trim().length > 0;
+  }
+
   toMarkdown(): string {
     const parts: string[] = [];
 

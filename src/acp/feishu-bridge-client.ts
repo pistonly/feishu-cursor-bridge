@@ -9,6 +9,7 @@ import type {
   WriteTextFileRequest,
   WriteTextFileResponse,
 } from "@agentclientprotocol/sdk";
+import * as path from "node:path";
 import type { Config } from "../config.js";
 import { mapSessionNotificationToBridgeEvents } from "./events.js";
 import { readTextFileSafe, writeTextFileSafe } from "./fs-sandbox.js";
@@ -35,12 +36,26 @@ export class FeishuBridgeClient
   implements Client
 {
   private readonly config: Config;
-  private readonly workspaceRoot: string;
+  private readonly defaultWorkspaceRoot: string;
+  private readonly sessionWorkspaceRoots = new Map<string, string>();
 
   constructor(config: Config) {
     super();
     this.config = config;
-    this.workspaceRoot = config.acp.workspaceRoot;
+    this.defaultWorkspaceRoot = path.resolve(config.acp.workspaceRoot);
+  }
+
+  /** 绑定 ACP sessionId 与读/写沙箱根（与 session/new 的 cwd 一致） */
+  setSessionWorkspace(sessionId: string, workspaceRoot: string): void {
+    this.sessionWorkspaceRoots.set(sessionId, path.resolve(workspaceRoot));
+  }
+
+  removeSessionWorkspace(sessionId: string): void {
+    this.sessionWorkspaceRoots.delete(sessionId);
+  }
+
+  private fsRootForSession(sessionId: string): string {
+    return this.sessionWorkspaceRoots.get(sessionId) ?? this.defaultWorkspaceRoot;
   }
 
   async sessionUpdate(params: SessionNotification): Promise<void> {
@@ -100,7 +115,7 @@ export class FeishuBridgeClient
     params: ReadTextFileRequest,
   ): Promise<ReadTextFileResponse> {
     return readTextFileSafe(
-      this.workspaceRoot,
+      this.fsRootForSession(params.sessionId),
       params.path,
       params.line,
       params.limit,
@@ -111,7 +126,7 @@ export class FeishuBridgeClient
     params: WriteTextFileRequest,
   ): Promise<WriteTextFileResponse> {
     await writeTextFileSafe(
-      this.workspaceRoot,
+      this.fsRootForSession(params.sessionId),
       params.path,
       params.content,
     );

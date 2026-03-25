@@ -8,7 +8,10 @@ async function main() {
   const config = loadConfig();
   console.log(`[main] Feishu domain: ${config.feishu.domain}`);
   console.log(`[main] ACP adapter: ${config.acp.nodePath} ${config.acp.adapterEntry}`);
-  console.log(`[main] Workspace: ${config.acp.workspaceRoot}`);
+  console.log(`[main] Default workspace (CURSOR_WORK_DIR): ${config.acp.workspaceRoot}`);
+  console.log(
+    `[main] Allowed workspace roots: ${config.acp.allowedWorkspaceRoots.join(", ")}`,
+  );
   console.log(`[main] Adapter session dir: ${config.acp.adapterSessionDir}`);
   console.log(`[main] Bridge session store: ${config.bridge.sessionStorePath}`);
   console.log(`[main] Auto-approve permissions: ${config.autoApprovePermissions}`);

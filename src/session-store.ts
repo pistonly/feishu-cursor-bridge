@@ -7,6 +7,8 @@ export interface PersistedSessionRecord {
   userId: string;
   chatType: "p2p" | "group";
   lastActiveAt: number;
+  /** ACP session/new 与读文件沙箱使用的绝对路径；旧数据缺省则按 CURSOR_WORK_DIR */
+  workspaceRoot?: string;
 }
 
 interface StoreFileV1 {

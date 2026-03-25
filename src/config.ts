@@ -14,8 +14,13 @@ export interface Config {
     adapterEntry: string;
     /** 透传给 cursor-agent-acp 的额外参数（不含 --session-dir） */
     extraArgs: string[];
-    /** Cursor 工作区根目录（ACP cwd / 客户端文件沙箱根） */
+    /** Cursor 工作区根目录（ACP cwd / 客户端文件沙箱默认根） */
     workspaceRoot: string;
+    /**
+     * 允许作为会话 cwd 的根路径列表（绝对路径）。
+     * 未设置 `CURSOR_WORK_ALLOWLIST` 时仅包含 `workspaceRoot`。
+     */
+    allowedWorkspaceRoots: string[];
     /** 传给适配器的会话存储目录 */
     adapterSessionDir: string;
   };
@@ -39,7 +44,7 @@ function requireEnv(name: string): string {
   return value;
 }
 
-function expandHome(p: string): string {
+export function expandHome(p: string): string {
   if (p.startsWith("~/")) {
     return path.join(os.homedir(), p.slice(2));
   }
@@ -47,7 +52,7 @@ function expandHome(p: string): string {
 }
 
 /** 空格分隔，支持引号包裹片段（简单拆分） */
-function parseShellLikeArgs(raw: string): string[] {
+export function parseShellLikeArgs(raw: string): string[] {
   const out: string[] = [];
   let cur = "";
   let inQuote: "" | "\"" | "'" = "";
@@ -94,6 +99,17 @@ export function loadConfig(): Config {
   const workspaceRoot = path.resolve(
     expandHome(process.env["CURSOR_WORK_DIR"]?.trim() || process.cwd()),
   );
+
+  const allowlistRaw = process.env["CURSOR_WORK_ALLOWLIST"]?.trim();
+  let allowedWorkspaceRoots = allowlistRaw
+    ? allowlistRaw
+        .split(",")
+        .map((s) => path.resolve(expandHome(s.trim())))
+        .filter((p) => p.length > 0)
+    : [workspaceRoot];
+  if (allowedWorkspaceRoots.length === 0) {
+    allowedWorkspaceRoots = [workspaceRoot];
+  }
 
   const defaultAdapterSession = path.join(
     os.homedir(),
@@ -143,6 +159,7 @@ export function loadConfig(): Config {
       adapterEntry,
       extraArgs,
       workspaceRoot,
+      allowedWorkspaceRoots,
       adapterSessionDir,
     },
     bridge: {

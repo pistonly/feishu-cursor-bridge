@@ -125,27 +125,28 @@ export class AcpRuntime {
     }
   }
 
-  async newSession(): Promise<{ sessionId: string }> {
+  /** @param cwd 会话工作目录（ACP cwd）；缺省为 `CURSOR_WORK_DIR` */
+  async newSession(cwd?: string): Promise<{ sessionId: string }> {
     const conn = this.connection;
     if (!conn) throw new Error("ACP not started");
-    const cwd = path.resolve(this.config.acp.workspaceRoot);
+    const dir = path.resolve(cwd ?? this.config.acp.workspaceRoot);
     const res = await conn.newSession({
-      cwd,
+      cwd: dir,
       mcpServers: [],
     });
     return { sessionId: res.sessionId };
   }
 
-  async loadSession(sessionId: string): Promise<void> {
+  async loadSession(sessionId: string, cwd: string): Promise<void> {
     const conn = this.connection;
     if (!conn) throw new Error("ACP not started");
     if (!this.supportsLoadSession) {
       throw new Error("Agent does not advertise loadSession");
     }
-    const cwd = path.resolve(this.config.acp.workspaceRoot);
+    const dir = path.resolve(cwd);
     await conn.loadSession({
       sessionId,
-      cwd,
+      cwd: dir,
       mcpServers: [],
     });
   }
@@ -158,6 +159,13 @@ export class AcpRuntime {
       prompt: [{ type: "text", text }],
     });
     return { stopReason: String(res.stopReason) };
+  }
+
+  /** 对应 ACP `session/set_model`；避免依赖适配器在 prompt 内处理 /model（其仍会转发整句给 CLI）。 */
+  async setSessionModel(sessionId: string, modelId: string): Promise<void> {
+    const conn = this.connection;
+    if (!conn) throw new Error("ACP not started");
+    await conn.unstable_setSessionModel({ sessionId, modelId });
   }
 
   async cancelSession(sessionId: string): Promise<void> {

@@ -69,7 +69,7 @@ npm run build && npm start
 
 - **私聊**：直接发消息
 - **群聊**：@机器人 + 内容
-- `/reset` 或 `/新对话`：结束当前 ACP 会话并清空本地映射
+- `/reset` 或 `/new`：结束当前 ACP 会话并清空本地映射（可选指定工作区路径，见 `docs/feishu-commands.md`）
 - `/status` 或 `/状态`：会话统计；`BRIDGE_DEBUG=true` 时含 sessionId、路径等
 
 ## 最小验证清单（手工）

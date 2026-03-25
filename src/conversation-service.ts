@@ -5,6 +5,25 @@ import { FeishuBot, type FeishuMessage } from "./feishu-bot.js";
 import { FeishuCardState } from "./feishu-renderer.js";
 import type { UserSession } from "./session-manager.js";
 
+const AUTH_HINT_PATTERNS = [
+  "unable to process your request because cursor-agent cli is not authenticated",
+  "cursor-agent cli is not authenticated",
+  "not authenticated",
+  "cursor-agent login",
+];
+const MISLEADING_AUTH_TIMEOUT_MS = 110_000;
+
+function isLikelyTimeoutMisclassifiedAsAuth(
+  text: string,
+  elapsedMs: number,
+  hadThoughtOutput: boolean,
+): boolean {
+  const normalized = text.toLowerCase();
+  const hasAuthHint = AUTH_HINT_PATTERNS.some((p) => normalized.includes(p));
+  if (!hasAuthHint) return false;
+  return elapsedMs >= MISLEADING_AUTH_TIMEOUT_MS || hadThoughtOutput;
+}
+
 export class ConversationService {
   constructor(
     private readonly config: Config,
@@ -16,6 +35,7 @@ export class ConversationService {
     msg: FeishuMessage,
     session: UserSession,
   ): Promise<void> {
+    const startedAt = Date.now();
     const throttleMs = this.config.bridge.cardUpdateThrottleMs;
     const cardMessageId = await this.feishu.sendCard(
       msg.chatId,
@@ -56,6 +76,24 @@ export class ConversationService {
         console.log(
           `[conversation] done sessionId=${session.sessionId} stopReason=${result.stopReason}`,
         );
+      }
+
+      const elapsedMs = Date.now() - startedAt;
+      if (
+        isLikelyTimeoutMisclassifiedAsAuth(
+          state.getMainText(),
+          elapsedMs,
+          state.hasThoughtText(),
+        )
+      ) {
+        state.setMainText(
+          "⏱️ 本次请求在长时间执行后被中断，更可能是 Cursor CLI 超时（约 120 秒），而不是登录失效。\n\n请先尝试把任务拆小后重试；若短请求也出现同样报错，再执行 `cursor-agent login`。",
+        );
+        if (this.config.bridgeDebug) {
+          console.warn(
+            `[conversation] remap auth-like reply to timeout hint sessionId=${session.sessionId} elapsedMs=${elapsedMs}`,
+          );
+        }
       }
 
       await flush(true);
