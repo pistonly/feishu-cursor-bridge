@@ -126,7 +126,11 @@ export function loadConfig(): Config {
     ),
   );
 
-  const defaultStore = path.join(workspaceRoot, ".feishu-bridge-sessions.json");
+  const defaultStore = path.join(
+    os.homedir(),
+    ".feishu-cursor-bridge",
+    ".feishu-bridge-sessions.json",
+  );
   const sessionStorePath = path.resolve(
     expandHome(
       process.env["BRIDGE_SESSION_STORE"]?.trim() || defaultStore,

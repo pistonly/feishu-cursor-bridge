@@ -9,85 +9,186 @@
 | **私聊** | 直接发送命令或消息即可。 |
 | **群聊** | 必须先 **@机器人**，再输入命令或 `@机器人 + 内容`；命令必须紧跟在 @ 之后，且整条消息以 `/` 开头才会被识别为命令（与实现一致）。 |
 
+## 多 Session 管理
+
+同一用户在同一聊天中可以同时持有**多个** session（最多 5 个），每个 session 对应一个独立的 Cursor Agent 上下文与工作区。可以在多个 session 之间自由切换，切走的 session 保持 ACP 连接，不会被关闭。
+
+### Session 标识
+
+每个 session 有一个从 1 开始的**编号**（全局递增，已关闭的编号不复用），以及一个可选的**名称**。
+
+---
+
 ## 桥接内置命令
 
-### 1. 重置会话 / 新建会话
+### 1. 新建 session（`/new`）
 
-**等价命令**（二选一）：
+**等价命令**：`/new`、`/new <路径>`、`/new <快捷序号>`
 
-- `/reset`
-- `/new`
+**作用**：在当前聊天下**新建一个 session** 并自动切换到它，旧 session 保持 ACP 连接。
 
-**作用**：结束当前用户的 ACP 会话（尝试 cancel / close），并**立即**创建新的 ACP 会话；可选指定本次会话的**工作区目录**（与 `CURSOR_WORK_DIR` 及沙箱一致）。
+**用法**：
+
+```text
+/new
+```
+
+使用默认工作区（`CURSOR_WORK_DIR`）新建一个 session：
+
+```text
+/new
+```
+
+指定本地目录为该 session 的工作区：
+
+```text
+/new /home/you/project
+/new ~/projects/my-app
+/new "/path/with spaces/in name"
+```
+
+使用快捷列表中第 N 项作为工作区：
+
+```text
+/new 1
+/new 2
+```
+
+新建时附加一个名称（便于后续用名称切换）：
+
+```text
+/new --name backend
+/new ~/projects/api --name api
+/new 1 --name frontend
+```
+
+> 若已达到 5 个 session 上限，会提示先用 `/close` 关闭一个。
+
+#### 工作区快捷列表
+
+顺序保存在服务端的 JSON 文件中（默认 `~/.feishu-cursor-bridge/workspace-presets.json`，可用 `CURSOR_WORK_PRESETS_FILE` 覆盖）。
+
+| 命令 | 说明 |
+|------|------|
+| `/new list` | 列出当前快捷列表及序号（`1.`、`2.` …）。 |
+| `/new add-list <路径>` | 将**已存在且允许**的目录加入列表；重复路径不会重复添加。 |
+| `/new remove-list <序号>` | 按序号从列表中删除一项（不影响当前 session）。 |
+
+---
+
+### 2. 查看所有 session（`/sessions`）
+
+```text
+/sessions
+```
+
+列出当前聊天下所有 session，标注活跃的那个，并显示各自的工作区路径。
+
+---
+
+### 3. 切换 session（`/switch`）
+
+```text
+/switch <编号或名称>
+/switch          （不带参数：切换到上一次使用的 session）
+```
+
+切换到指定的 session，**不会关闭当前 session 的 ACP 连接**。
+
+不带参数时，会直接切换到当前聊天里**上一次使用的 session**；如果没有其它可切换的 session，会提示使用 `/sessions` 查看列表。
+
+**示例**：
+
+```text
+/switch 2
+/switch backend
+```
+
+---
+
+### 4. 关闭 session（`/close`）
+
+```text
+/close <编号或名称>
+```
+
+关闭并移除指定的 session（发送 ACP cancel + close），释放资源。**不能关闭唯一剩余的 session**（需用 `/reset` 代替）。
+
+**示例**：
+
+```text
+/close 3
+/close frontend
+```
+
+---
+
+### 5. 重命名 session（`/rename`）
+
+```text
+/rename <新名字>
+/rename <编号或名称> <新名字>
+```
+
+默认会重命名**当前活跃 session**；也可以显式指定编号或旧名称。重命名后可以继续用新名字执行 `/switch` 或 `/close`。
+
+**示例**：
+
+```text
+/rename backend
+/rename 2 backend
+/rename frontend "frontend-v2"
+```
+
+说明：
+
+- 同一聊天内，session 名称不能重复。
+- 新名字支持空格；如有空格，请用引号包裹。
+
+---
+
+### 6. 重置当前 session（`/reset`）
+
+```text
+/reset
+/reset <路径>
+```
+
+**等价命令**：`/reset`
+
+**作用**：关闭当前活跃 session 的 ACP 连接，在**相同 session 槽**中创建新的 ACP 会话，不影响其他 session。可选指定新的工作区目录。
 
 **用法**：
 
 ```text
 /reset
-/new
-```
-
-使用 **默认工作区**（环境变量 `CURSOR_WORK_DIR`，未设置则为当前进程工作目录）：
-
-```text
-/reset
-```
-
-指定 **本地目录**为本次会话的工作区（须为**已存在**的目录，且落在允许范围内）：
-
-```text
 /reset /home/you/project
-/new ~/projects/my-app
-/new "/path/with spaces/in name"
+/reset ~/projects/my-app
 ```
-
-路径说明：
-
-- 支持绝对路径与相对路径（相对路径解析依赖当前进程工作目录）。
-- 支持 `~` 表示用户主目录。
-- 路径中含空格时，请用英文单引号或双引号包裹（与 shell 类似）。
 
 **权限范围**：
 
 - 默认仅允许 **`CURSOR_WORK_DIR`** 及其子目录作为工作区。
 - 若需使用其它目录（例如 `/data/repos/foo`），请在环境变量 **`CURSOR_WORK_ALLOWLIST`** 中配置允许的**根路径**（逗号分隔）；会话目录必须落在**某一个根**之下。
 
-失败时，机器人会回复错误原因（例如路径不存在、不是目录、不在允许列表内）。
-
-#### 工作区快捷列表（便于手机输入）
-
-顺序保存在服务端的 JSON 文件中（默认 `~/.feishu-cursor-bridge/workspace-presets.json`，可用 `CURSOR_WORK_PRESETS_FILE` 覆盖）。
-
-| 命令 | 说明 |
-|------|------|
-| `/new list` | 列出当前列表及序号（`1.`、`2.` …）。 |
-| `/new add-list <路径>` | 将**已存在且允许**的目录加入列表；重复路径不会重复添加。 |
-| `/new remove-list <序号>` | 按序号从列表中删除一项（不重置当前会话）。 |
-| `/new <序号>` | 使用列表中第 N 项作为工作区并**重置会话**（序号从 1 开始，纯数字，如 `/new 1`）。 |
-
-可选环境变量 **`CURSOR_WORK_PRESETS`**：逗号分隔的绝对路径；**仅当列表文件为空**时，会作为初始内容写入文件（首次部署用）。
-
 ---
 
-### 2. 状态
+### 7. 状态（`/status`）
 
-**等价命令**：
+**等价命令**：`/status`、`/状态`
 
-- `/status`
-- `/状态`
-
-**作用**：返回当前桥接会话统计（活跃与内存中的会话数）。
+**作用**：返回当前桥接 session 统计（活跃与内存中的 slot 总数）。
 
 **增强信息**：当服务环境 **`BRIDGE_DEBUG=true`** 时，同一条回复中会追加调试信息，包括：
 
-- 当前 `sessionKey`、ACP `sessionId`
-- 当前会话 **cwd**（工作区绝对路径）
+- 当前 `sessionKey`、活跃 slot 编号与名称、ACP `sessionId`
+- 当前 session **cwd**（工作区绝对路径）
 - 空闲过期时间、默认 `CURSOR_WORK_DIR`、允许的 `CURSOR_WORK_ALLOWLIST` 根列表
 - 适配器会话目录、映射文件路径、`loadSession` 能力、日志级别等
 
 ---
 
-### 3. 切换模型
+### 8. 切换模型（`/model`）
 
 **格式**：
 
@@ -95,7 +196,7 @@
 /model <模型ID>
 ```
 
-**作用**：通过 ACP `session/set_model` 切换**当前会话**使用的模型，**不会**把整条消息再发给大模型（避免仅出现「解释 /model」类回复）。
+**作用**：通过 ACP `session/set_model` 切换**当前活跃 session** 使用的模型，**不会**把整条消息再发给大模型（避免仅出现「解释 /model」类回复）。
 
 **示例**：
 
@@ -110,6 +211,21 @@
 
 ---
 
+## 典型多 Session 工作流
+
+```
+你：（发送第一条消息，自动创建 session #1）
+你：/sessions            → 查看当前 session 列表
+你：/new ~/proj-b --name proj-b   → 新建 session #2，工作区为 ~/proj-b
+你：（对话，针对 proj-b）
+你：/switch 1            → 切回 session #1（proj-b 保持 ACP 连接）
+你：（继续对话，针对原来的工作区）
+你：/switch proj-b       → 用名称切换回 session #2
+你：/close 1             → 关闭 session #1
+```
+
+---
+
 ## 非命令消息
 
 不以以上命令开头的文本，会进入正常对话流程（流式卡片、Cursor Agent 等）。若适配器在 Cursor 侧注册了 `/plan` 等斜杠命令，通常需**整段消息**以 `/命令` 开头发送；具体以 `cursor-agent-acp` 与 Cursor CLI 行为为准，本桥接不对其做单独解析。
@@ -118,8 +234,8 @@
 
 | 变量 | 与命令的关系 |
 |------|----------------|
-| `CURSOR_WORK_DIR` | `/reset` 等不带路径时的默认工作区；也是读文件沙箱的默认根。 |
-| `CURSOR_WORK_ALLOWLIST` | 可选；指定允许作为工作区的根路径列表（逗号分隔），用于 `/reset /某路径` 等。 |
+| `CURSOR_WORK_DIR` | `/reset`、`/new` 等不带路径时的默认工作区；也是读文件沙箱的默认根。 |
+| `CURSOR_WORK_ALLOWLIST` | 可选；指定允许作为工作区的根路径列表（逗号分隔），用于 `/reset /某路径`、`/new /某路径` 等。 |
 | `CURSOR_WORK_PRESETS_FILE` | 可选；`/new list` 使用的快捷列表 JSON 路径。 |
 | `CURSOR_WORK_PRESETS` | 可选；列表文件为空时用于首次写入的初始路径（逗号分隔）。 |
 | `BRIDGE_DEBUG` | 为 `true` 时 `/status` 输出调试详情。 |

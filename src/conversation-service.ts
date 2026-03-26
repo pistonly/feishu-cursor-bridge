@@ -48,7 +48,7 @@ export class ConversationService {
   async handleUserPrompt(
     msg: FeishuMessage,
     session: UserSession,
-  ): Promise<void> {
+  ): Promise<string | undefined> {
     const startedAt = Date.now();
     const throttleMs = this.config.bridge.cardUpdateThrottleMs;
     const cardMessageId = await this.feishu.sendCard(
@@ -114,6 +114,8 @@ export class ConversationService {
       if (cardMessageId && !state.hasContent()) {
         await this.feishu.updateCard(cardMessageId, "（无响应内容）");
       }
+
+      return state.hasContent() ? state.toMarkdown() : undefined;
     } finally {
       this.acp.bridgeClient.off("acp", onAcp);
     }

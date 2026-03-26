@@ -58,7 +58,7 @@ npm run build && npm start
 | `ACP_NODE_PATH` | 用于启动适配器的 Node | `process.execPath` |
 | `CURSOR_ACP_SESSION_DIR` | 适配器 `--session-dir` | `~/.feishu-cursor-bridge/cursor-acp-sessions` |
 | `CURSOR_ACP_EXTRA_ARGS` | 透传适配器 CLI（空格分隔） | 空 |
-| `BRIDGE_SESSION_STORE` | 飞书↔ACP 映射 JSON 路径 | `<CURSOR_WORK_DIR>/.feishu-bridge-sessions.json` |
+| `BRIDGE_SESSION_STORE` | 飞书↔ACP 映射 JSON 路径 | `~/.feishu-cursor-bridge/.feishu-bridge-sessions.json` |
 | `SESSION_IDLE_TIMEOUT_MS` | 空闲多久新建会话 | `1800000`（30 分钟） |
 | `FEISHU_CARD_THROTTLE_MS` | 卡片更新节流 | `800` |
 | `AUTO_APPROVE_PERMISSIONS` | 自动选择允许类权限选项 | `true` |

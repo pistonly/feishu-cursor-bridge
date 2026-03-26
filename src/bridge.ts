@@ -19,6 +19,7 @@ export class Bridge {
   private sessionManager: SessionManager;
   private presetsStore: WorkspacePresetsStore;
   private conversation: ConversationService;
+  /** key: `<sessionKey>:<slotIndex>` — 同一 slot 同一时刻只能有一个 prompt 在跑 */
   private activePrompts = new Set<string>();
   private cleanupInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -120,6 +121,130 @@ export class Bridge {
     const newConv = parseNewConversationCommand(content);
     if (newConv) {
       try {
+        // ----------------------------------------------------------------
+        // /sessions — list all slots
+        // ----------------------------------------------------------------
+        if (newConv.kind === "sessions") {
+          await this.handleSessionsList(msg);
+          return;
+        }
+
+        // ----------------------------------------------------------------
+        // /switch [target]
+        // ----------------------------------------------------------------
+        if (newConv.kind === "switch") {
+          if (newConv.target === null) {
+            const slot = await this.sessionManager.switchToPreviousSlot(
+              msg.chatId,
+              msg.senderId,
+              msg.chatType,
+            );
+            const label = slot.name ? ` (${slot.name})` : "";
+            await this.feishuBot.sendText(
+              msg.chatId,
+              `✅ 已切换到上一个 session #${slot.slotIndex}${label}\n工作区：\`${slot.session.workspaceRoot}\``,
+              msg.messageId,
+            );
+            if (slot.lastReply) {
+              const MAX_CARD_LEN = 28_000;
+              let preview = slot.lastReply;
+              let truncated = false;
+              if (preview.length > MAX_CARD_LEN) {
+                preview = preview.slice(0, MAX_CARD_LEN);
+                truncated = true;
+              }
+              const cardContent = `**↩️ Session #${slot.slotIndex}${label} 上一轮回复：**\n\n${preview}${truncated ? "\n\n_（内容过长，已截断）_" : ""}`;
+              await this.feishuBot.sendCard(msg.chatId, cardContent);
+            }
+            return;
+          }
+          const slot = await this.sessionManager.switchSlot(
+            msg.chatId,
+            msg.senderId,
+            msg.chatType,
+            newConv.target,
+          );
+          const label = slot.name ? ` (${slot.name})` : "";
+          await this.feishuBot.sendText(
+            msg.chatId,
+            `✅ 已切换到 session #${slot.slotIndex}${label}\n工作区：\`${slot.session.workspaceRoot}\``,
+            msg.messageId,
+          );
+          if (slot.lastReply) {
+            const MAX_CARD_LEN = 28_000;
+            let preview = slot.lastReply;
+            let truncated = false;
+            if (preview.length > MAX_CARD_LEN) {
+              preview = preview.slice(0, MAX_CARD_LEN);
+              truncated = true;
+            }
+            const cardContent = `**↩️ Session #${slot.slotIndex}${label} 上一轮回复：**\n\n${preview}${truncated ? "\n\n_（内容过长，已截断）_" : ""}`;
+            await this.feishuBot.sendCard(msg.chatId, cardContent);
+          }
+          return;
+        }
+
+        // ----------------------------------------------------------------
+        // /rename <name>
+        // /rename <target> <name>
+        // ----------------------------------------------------------------
+        if (newConv.kind === "rename") {
+          if (
+            (typeof newConv.target === "number" && isNaN(newConv.target as number)) ||
+            !newConv.name.trim()
+          ) {
+            await this.feishuBot.sendText(
+              msg.chatId,
+              "用法：`/rename <新名字>` 或 `/rename <编号或名称> <新名字>`\n\n示例：`/rename backend`、`/rename 2 backend`",
+              msg.messageId,
+            );
+            return;
+          }
+          const renamed = await this.sessionManager.renameSlot(
+            msg.chatId,
+            msg.senderId,
+            msg.chatType,
+            newConv.target,
+            newConv.name,
+          );
+          await this.feishuBot.sendText(
+            msg.chatId,
+            `✅ 已将 session #${renamed.slotIndex} 重命名为 \`${renamed.name}\``,
+            msg.messageId,
+          );
+          return;
+        }
+
+        // ----------------------------------------------------------------
+        // /close <target>
+        // ----------------------------------------------------------------
+        if (newConv.kind === "close") {
+          if (typeof newConv.target === "number" && isNaN(newConv.target as number)) {
+            await this.feishuBot.sendText(
+              msg.chatId,
+              "用法：`/close <编号或名称>`\n\n发送 `/sessions` 查看当前所有 session。",
+              msg.messageId,
+            );
+            return;
+          }
+          const closed = await this.sessionManager.closeSlot(
+            msg.chatId,
+            msg.senderId,
+            msg.chatType,
+            newConv.target,
+          );
+          const label = closed.name ? ` (${closed.name})` : "";
+          await this.feishuBot.sendText(
+            msg.chatId,
+            `✅ 已关闭 session #${closed.slotIndex}${label}`,
+            msg.messageId,
+          );
+          return;
+        }
+
+        // ----------------------------------------------------------------
+        // /new — workspace presets list management (no session creation)
+        // ----------------------------------------------------------------
         if (newConv.kind === "new") {
           if (newConv.variant === "list") {
             const presets = this.presetsStore.getPresets();
@@ -129,7 +254,7 @@ export class Bridge {
                 : "（尚为空）";
             await this.feishuBot.sendText(
               msg.chatId,
-              `📋 工作区快捷列表（使用 \`/new <序号>\` 切换）。\n\n${lines}\n\n添加：\`/new add-list <路径>\`\n删除：\`/new remove-list <序号>\``,
+              `📋 工作区快捷列表（使用 \`/new <序号>\` 新建并切换）。\n\n${lines}\n\n添加：\`/new add-list <路径>\`\n删除：\`/new remove-list <序号>\``,
               msg.messageId,
             );
             return;
@@ -184,7 +309,13 @@ export class Bridge {
           }
         }
 
+        // ----------------------------------------------------------------
+        // /new (default / workspace / preset) — create new slot
+        // /reset — reset active slot
+        // ----------------------------------------------------------------
         let workspaceAbs: string | undefined;
+        let slotName: string | undefined;
+
         if (newConv.kind === "reset") {
           if (newConv.path) {
             workspaceAbs = await resolveAllowedWorkspaceDir(
@@ -192,7 +323,8 @@ export class Bridge {
               this.config,
             );
           }
-        } else {
+        } else if (newConv.kind === "new") {
+          slotName = newConv.name;
           switch (newConv.variant) {
             case "default":
               break;
@@ -229,20 +361,35 @@ export class Bridge {
           }
         }
 
-        await this.sessionManager.resetSession(
-          msg.chatId,
-          msg.senderId,
-          msg.chatType,
-          workspaceAbs,
-        );
-        const cwdLine = workspaceAbs
-          ? workspaceAbs
-          : this.config.acp.workspaceRoot;
-        await this.feishuBot.sendText(
-          msg.chatId,
-          `✅ 会话已重置，当前工作区：\n\`${cwdLine}\``,
-          msg.messageId,
-        );
+        if (newConv.kind === "reset") {
+          await this.sessionManager.resetSession(
+            msg.chatId,
+            msg.senderId,
+            msg.chatType,
+            workspaceAbs,
+          );
+          const cwdLine = workspaceAbs ?? this.config.acp.workspaceRoot;
+          await this.feishuBot.sendText(
+            msg.chatId,
+            `✅ 当前 session 已重置，工作区：\n\`${cwdLine}\``,
+            msg.messageId,
+          );
+        } else {
+          // /new — create a new slot and auto-switch
+          const result = await this.sessionManager.createNewSlot(
+            msg.chatId,
+            msg.senderId,
+            msg.chatType,
+            workspaceAbs,
+            slotName,
+          );
+          const nameLabel = result.name ? ` (${result.name})` : "";
+          await this.feishuBot.sendText(
+            msg.chatId,
+            `✅ 已新建并切换到 session #${result.slotIndex}${nameLabel}\n工作区：\`${result.workspaceRoot}\`\n\n发送 \`/sessions\` 查看所有 session。`,
+            msg.messageId,
+          );
+        }
       } catch (e) {
         await this.feishuBot.sendText(
           msg.chatId,
@@ -255,7 +402,7 @@ export class Bridge {
 
     if (content === "/status" || content === "/状态") {
       const stats = this.sessionManager.getStats();
-      let body = `📊 活跃/内存会话: ${stats.active}/${stats.total}`;
+      let body = `📊 活跃/内存 slot: ${stats.active}/${stats.total}`;
       if (this.config.bridgeDebug) {
         const snap = this.sessionManager.getSessionSnapshot(
           msg.chatId,
@@ -265,7 +412,8 @@ export class Bridge {
         const idleMin = snap
           ? Math.round(snap.idleExpiresInMs / 60_000)
           : null;
-        body += `\n\n[调试 BRIDGE_DEBUG]\n• sessionKey: ${snap?.sessionKey ?? "(尚无)"}\n• ACP sessionId: ${snap?.session.sessionId ?? "—"}\n• 会话 cwd: ${snap?.session.workspaceRoot ?? "—"}\n• 空闲过期约: ${idleMin !== null ? `${idleMin} 分钟` : "—"}\n• 默认工作区 (CURSOR_WORK_DIR): ${this.config.acp.workspaceRoot}\n• 允许根 (CURSOR_WORK_ALLOWLIST): ${this.config.acp.allowedWorkspaceRoots.join(", ")}\n• 适配器会话目录: ${this.config.acp.adapterSessionDir}\n• 映射文件: ${this.config.bridge.sessionStorePath}\n• loadSession: ${this.acpRuntime.supportsLoadSession}\n• LOG_LEVEL: ${this.config.logLevel}`;
+        const slot = snap?.activeSlot;
+        body += `\n\n[调试 BRIDGE_DEBUG]\n• sessionKey: ${snap?.sessionKey ?? "(尚无)"}\n• 活跃 slot: #${slot?.slotIndex ?? "—"}${slot?.name ? ` (${slot.name})` : ""}\n• ACP sessionId: ${slot?.session.sessionId ?? "—"}\n• 会话 cwd: ${slot?.session.workspaceRoot ?? "—"}\n• 空闲过期约: ${idleMin !== null ? `${idleMin} 分钟` : "—"}\n• 默认工作区 (CURSOR_WORK_DIR): ${this.config.acp.workspaceRoot}\n• 允许根 (CURSOR_WORK_ALLOWLIST): ${this.config.acp.allowedWorkspaceRoots.join(", ")}\n• 适配器会话目录: ${this.config.acp.adapterSessionDir}\n• 映射文件: ${this.config.bridge.sessionStorePath}\n• loadSession: ${this.acpRuntime.supportsLoadSession}\n• LOG_LEVEL: ${this.config.logLevel}`;
       }
       await this.feishuBot.sendText(msg.chatId, body, msg.messageId);
       return;
@@ -306,12 +454,24 @@ export class Bridge {
       return;
     }
 
+    // Prompt key is scoped to the active slot so different slots can run in parallel,
+    // but the same slot is still serialized.
     const sessionKey =
       msg.chatType === "p2p"
         ? `dm:${msg.senderId}`
         : `${msg.chatId}:${msg.senderId}`;
 
-    if (this.activePrompts.has(sessionKey)) {
+    // Peek at current active slot index for the prompt key
+    const snap = this.sessionManager.getSessionSnapshot(
+      msg.chatId,
+      msg.senderId,
+      msg.chatType,
+    );
+    const promptKey = snap
+      ? `${sessionKey}:${snap.activeSlot.slotIndex}`
+      : sessionKey;
+
+    if (this.activePrompts.has(promptKey)) {
       await this.feishuBot.sendText(
         msg.chatId,
         "⏳ 上一个请求还在处理中，请稍候...",
@@ -321,7 +481,7 @@ export class Bridge {
     }
 
     try {
-      this.activePrompts.add(sessionKey);
+      this.activePrompts.add(promptKey);
 
       const session = await this.sessionManager.getOrCreateSession(
         msg.chatId,
@@ -334,7 +494,16 @@ export class Bridge {
         content,
       };
 
-      await this.conversation.handleUserPrompt(msgForPrompt, session);
+      const lastReply = await this.conversation.handleUserPrompt(msgForPrompt, session);
+      if (lastReply) {
+        this.sessionManager.setSlotLastReply(
+          msg.chatId,
+          msg.senderId,
+          msg.chatType,
+          session.sessionId,
+          lastReply,
+        );
+      }
     } catch (err) {
       console.error(
         `[bridge] Error processing message from ${msg.senderId}:`,
@@ -348,8 +517,34 @@ export class Bridge {
         )
         .catch(() => {});
     } finally {
-      this.activePrompts.delete(sessionKey);
+      this.activePrompts.delete(promptKey);
     }
+  }
+
+  private async handleSessionsList(msg: FeishuMessage): Promise<void> {
+    const slots = await this.sessionManager.listSlots(
+      msg.chatId,
+      msg.senderId,
+      msg.chatType,
+    );
+    if (slots.length === 0) {
+      await this.feishuBot.sendText(
+        msg.chatId,
+        "当前没有任何 session。发送任意消息自动创建。",
+        msg.messageId,
+      );
+      return;
+    }
+    const lines = slots.map((s) => {
+      const active = s.isActive ? " ◀ 当前" : "";
+      const name = s.name ? ` (${s.name})` : "";
+      return `#${s.slotIndex}${name}${active}\n  工作区：\`${s.workspaceRoot}\``;
+    });
+    await this.feishuBot.sendText(
+      msg.chatId,
+      `📋 当前所有 session（共 ${slots.length} 个）：\n\n${lines.join("\n\n")}\n\n• \`/new\` — 新建 session\n• \`/switch <编号或名称>\` — 切换\n• \`/rename <新名字>\` — 重命名当前 session\n• \`/rename <编号或名称> <新名字>\` — 重命名指定 session\n• \`/close <编号或名称>\` — 关闭\n• \`/reset\` — 重置当前 session`,
+      msg.messageId,
+    );
   }
 
   async stop(): Promise<void> {

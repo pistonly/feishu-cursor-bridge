@@ -2,16 +2,25 @@ import { parseShellLikeArgs } from "./config.js";
 
 export type NewConversationCommand =
   | { kind: "reset"; path?: string }
-  | { kind: "new"; variant: "default" }
-  | { kind: "new"; variant: "workspace"; path: string }
+  | { kind: "new"; variant: "default"; name?: string }
+  | { kind: "new"; variant: "workspace"; path: string; name?: string }
   /** 序号从 1 开始，对应列表中的第 N 项 */
-  | { kind: "new"; variant: "preset"; index: number }
+  | { kind: "new"; variant: "preset"; index: number; name?: string }
   | { kind: "new"; variant: "list" }
   | { kind: "new"; variant: "add-list"; path: string }
-  | { kind: "new"; variant: "remove-list"; index: number };
+  | { kind: "new"; variant: "remove-list"; index: number }
+  | { kind: "switch"; target: number | string | null }
+  | { kind: "rename"; target: number | string | null; name: string }
+  | { kind: "close"; target: number | string }
+  | { kind: "sessions" };
 
 /**
- * 解析重置会话类命令：`/reset`、`/new`（含 `/new 1`、`/new list`、`/new add-list`、`/new remove-list`）。
+ * 解析重置/会话类命令：
+ * - `/reset`、`/new`（含 `/new 1`、`/new list`、`/new add-list`、`/new remove-list`、`/new --name`）
+ * - `/switch [编号或名称]`
+ * - `/rename <新名字>`、`/rename <编号或名称> <新名字>`
+ * - `/close <编号或名称>`
+ * - `/sessions`
  */
 export function parseNewConversationCommand(
   content: string,
@@ -23,25 +32,82 @@ export function parseNewConversationCommand(
   const tokens = parseShellLikeArgs(body);
   if (tokens.length === 0) return null;
   const cmd = tokens[0];
-  if (cmd !== "reset" && cmd !== "new") return null;
 
+  if (cmd !== "reset" && cmd !== "new" && cmd !== "switch" && cmd !== "rename" && cmd !== "close" && cmd !== "sessions") {
+    return null;
+  }
+
+  // /sessions — list all slots
+  if (cmd === "sessions") {
+    return { kind: "sessions" };
+  }
+
+  // /switch [target]
+  if (cmd === "switch") {
+    if (tokens.length === 1) {
+      return { kind: "switch", target: null };
+    }
+    const arg = tokens[1];
+    const num = parseInt(arg, 10);
+    return { kind: "switch", target: isNaN(num) ? arg : num };
+  }
+
+  // /rename <name>
+  // /rename <target> <name>
+  if (cmd === "rename") {
+    if (tokens.length < 2) {
+      return { kind: "rename", target: NaN as unknown as number, name: "" };
+    }
+    if (tokens.length === 2) {
+      return { kind: "rename", target: null, name: tokens[1] };
+    }
+    const arg = tokens[1];
+    const num = parseInt(arg, 10);
+    return {
+      kind: "rename",
+      target: isNaN(num) ? arg : num,
+      name: tokens.slice(2).join(" ").trim(),
+    };
+  }
+
+  // /close <target>
+  if (cmd === "close") {
+    if (tokens.length < 2) {
+      // Return a sentinel that bridge.ts will handle as missing-arg error
+      return { kind: "close", target: NaN as unknown as number };
+    }
+    const arg = tokens[1];
+    const num = parseInt(arg, 10);
+    return { kind: "close", target: isNaN(num) ? arg : num };
+  }
+
+  // /reset
   if (cmd === "reset") {
     if (tokens.length === 1) return { kind: "reset" };
     return { kind: "reset", path: tokens.slice(1).join(" ").trim() };
   }
 
+  // /new ...
   if (tokens.length === 1) return { kind: "new", variant: "default" };
 
-  const sub = tokens[1];
+  // Extract optional --name <value> from remaining tokens (can appear anywhere after cmd)
+  const { name, remainingTokens } = extractNameFlag(tokens.slice(1));
+
+  if (remainingTokens.length === 0) {
+    return { kind: "new", variant: "default", name };
+  }
+
+  const sub = remainingTokens[0];
+
   if (sub === "list") {
     return { kind: "new", variant: "list" };
   }
   if (sub === "add-list") {
-    const rest = tokens.slice(2).join(" ").trim();
+    const rest = remainingTokens.slice(1).join(" ").trim();
     return { kind: "new", variant: "add-list", path: rest };
   }
   if (sub === "remove-list") {
-    const idxTok = tokens[2];
+    const idxTok = remainingTokens[1];
     if (!idxTok || !/^\d+$/.test(idxTok)) {
       return { kind: "new", variant: "remove-list", index: 0 };
     }
@@ -52,11 +118,36 @@ export function parseNewConversationCommand(
     };
   }
   if (/^\d+$/.test(sub)) {
-    return { kind: "new", variant: "preset", index: parseInt(sub, 10) };
+    return { kind: "new", variant: "preset", index: parseInt(sub, 10), name };
   }
   return {
     kind: "new",
     variant: "workspace",
-    path: tokens.slice(1).join(" ").trim(),
+    path: remainingTokens.join(" ").trim(),
+    name,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Helper: extract --name <value> flag from token list
+// ---------------------------------------------------------------------------
+
+function extractNameFlag(tokens: string[]): { name: string | undefined; remainingTokens: string[] } {
+  const remaining: string[] = [];
+  let name: string | undefined;
+  let i = 0;
+  while (i < tokens.length) {
+    const tok = tokens[i];
+    if (tok === "--name" && i + 1 < tokens.length) {
+      name = tokens[i + 1];
+      i += 2;
+    } else if (tok.startsWith("--name=")) {
+      name = tok.slice("--name=".length);
+      i++;
+    } else {
+      remaining.push(tok);
+      i++;
+    }
+  }
+  return { name, remainingTokens: remaining };
 }
