@@ -55,6 +55,7 @@ export class ConversationService {
       msg.chatId,
       "🤔 思考中...",
       msg.messageId,
+      msg.replyInThread ? { replyInThread: true } : undefined,
     );
 
     const state = new FeishuCardState();

@@ -125,8 +125,14 @@ export class AcpRuntime {
     }
   }
 
-  /** @param cwd 会话工作目录（ACP cwd）；缺省为 `CURSOR_WORK_DIR` */
-  async newSession(cwd?: string): Promise<{ sessionId: string }> {
+  /**
+   * @param cwd 会话工作目录（ACP cwd）；缺省为 `CURSOR_WORK_DIR`
+   * @returns `cursorCliChatId` 为 `cursor-agent create-chat` 返回的 id，可与终端 `cursor-agent ... --resume` 对齐（由适配器放在 session/new 的 _meta.cursorChatId）
+   */
+  async newSession(cwd?: string): Promise<{
+    sessionId: string;
+    cursorCliChatId?: string;
+  }> {
     const conn = this.connection;
     if (!conn) throw new Error("ACP not started");
     const dir = path.resolve(cwd ?? this.config.acp.workspaceRoot);
@@ -134,7 +140,10 @@ export class AcpRuntime {
       cwd: dir,
       mcpServers: [],
     });
-    return { sessionId: res.sessionId };
+    const meta = res._meta as { cursorChatId?: unknown } | null | undefined;
+    const c = meta?.cursorChatId;
+    const cursorCliChatId = typeof c === "string" && c.length > 0 ? c : undefined;
+    return { sessionId: res.sessionId, cursorCliChatId };
   }
 
   async loadSession(sessionId: string, cwd: string): Promise<void> {

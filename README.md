@@ -10,7 +10,8 @@
 - **多 session**：同一用户在同一聊天中可同时持有多个 session（最多 5 个），各自独立上下文与工作区；可用 `/switch` 在它们之间切换，未活跃的 session 仍保持 ACP 连接
 - 群聊 @ 机器人触发；私聊直接对话
 - 内置命令：`/new`、`/sessions`、`/switch`、`/close`、`/rename`、`/reset`（含快捷列表 `/new list`、`/new <序号>` 等）、`/status`、`/model`（详见 `docs/feishu-commands.md`）
-- 会话映射持久化：进程重启后若 Agent 声明 `loadSession`，可 `session/load` 恢复
+- **CLI resume ID（PC 续聊）**：`/status` 会展示当前活跃 session 对应的 **CLI chat id**，与本机 `cursor-agent` 的 **`--resume`** 参数一致，便于在手机飞书聊完后到 PC 终端接手同一会话；该 id 与 ACP `sessionId` 不同，由适配器在 `create-chat` 时生成。上游包默认不在 `session/new` 回包中暴露此字段，本项目通过 **`patches/` + `patch-package`**（`npm install` 后自动打补丁）写入 `session/new` 的 `_meta.cursorChatId`。
+- 会话映射持久化：进程重启后若 Agent 声明 `loadSession`，可 `session/load` 恢复；**CLI resume ID** 同时写入 `BRIDGE_SESSION_STORE`，与 ACP 会话一并恢复（旧的无该字段的持久化记录在 `/reset` 或新建会话后才会出现 id）
 
 ## 架构
 
@@ -72,7 +73,7 @@ npm run build && npm start
 - **群聊**：@机器人 + 内容
 - **多 session 切换**：`/new` 新建并切到该 session（旧 session 保持连接）；`/sessions` 列表；`/switch <编号或名称>` 切换活跃 session（无参数时切到上一次用过的）；`/close` 关闭指定；`/rename` 便于用名称切换。完整语法与快捷列表见 `docs/feishu-commands.md`
 - `/reset` 仅重置**当前活跃** session（同槽位换新 ACP 会话），不关闭其它 session
-- `/status` 或 `/状态`：会话统计；`BRIDGE_DEBUG=true` 时含 sessionId、路径等
+- `/status` 或 `/状态`：会话统计，**并始终含当前活跃 slot 的 CLI resume ID**（若适配器未返回或 `create-chat` 失败则显示暂无）；`BRIDGE_DEBUG=true` 时额外含 ACP `sessionId`、路径等调试信息
 
 ## 最小验证清单（手工）
 
@@ -81,6 +82,7 @@ npm run build && npm start
 3. 连续多轮对话，确认复用同一会话（`BRIDGE_DEBUG` 下 sessionId 不变）
 4. `/reset` 后再次提问，当前活跃 slot 的 ACP sessionId 变化；若已用 `/new` 建多个 session，可用 `/switch` 在编号间切换且各 session 独立
 5. 触发工具调用时，卡片「工具」列表有更新（视 Agent 输出而定）
+6. 发送 `/status`，确认出现 **CLI resume ID**；在 PC 上可用同一 id 测试 `cursor-agent` 的 `--resume` 续聊（具体子命令以本机 CLI 文档为准）
 
 ## 技术栈
 

@@ -1,0 +1,12 @@
+diff --git a/node_modules/@blowmage/cursor-agent-acp/dist/adapter/cursor-agent-adapter.js b/node_modules/@blowmage/cursor-agent-acp/dist/adapter/cursor-agent-adapter.js
+index 686283b..e45887b 100644
+--- a/node_modules/@blowmage/cursor-agent-acp/dist/adapter/cursor-agent-adapter.js
++++ b/node_modules/@blowmage/cursor-agent-acp/dist/adapter/cursor-agent-adapter.js
+@@ -689,6 +689,7 @@ class CursorAgentAdapter {
+                 createdAt: sessionData.createdAt.toISOString(),
+                 cwd,
+                 mcpServerCount: mcpServers.length,
++                ...(cursorChatId && { cursorChatId }),
+                 ...(mcpServers.length > 0 && {
+                     mcpStatus: 'not-implemented',
+                     mcpServers: mcpServers.map((s) => ({

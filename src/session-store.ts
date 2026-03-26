@@ -9,6 +9,8 @@ export interface PersistedSlotRecord {
   slotIndex: number;
   name?: string;
   sessionId: string;
+  /** 与 cursor-agent CLI `--resume` 对齐的 chat id */
+  cursorCliChatId?: string;
   workspaceRoot?: string;
   lastActiveAt: number;
 }

@@ -8,6 +8,10 @@ import type { SessionStore, PersistedSessionGroup, PersistedSlotRecord } from ".
 
 export interface UserSession {
   sessionId: string;
+  /**
+   * `cursor-agent create-chat` 的 chat id，与 CLI `--resume` 一致；来自适配器 session/new._meta（无则未创建或未暴露）
+   */
+  cursorCliChatId?: string;
   /** ACP session/new 与读文件沙箱使用的绝对路径 */
   workspaceRoot: string;
   chatId: string;
@@ -158,8 +162,18 @@ export class SessionManager {
     }
 
     // No group or no valid slot — create fresh group with slot #1
-    const { sessionId } = await this.acp.newSession(this.defaultWorkspaceRoot);
-    const session = this.makeSession(sessionId, this.defaultWorkspaceRoot, chatId, userId, chatType, now);
+    const { sessionId, cursorCliChatId } = await this.acp.newSession(
+      this.defaultWorkspaceRoot,
+    );
+    const session = this.makeSession(
+      sessionId,
+      this.defaultWorkspaceRoot,
+      chatId,
+      userId,
+      chatType,
+      now,
+      cursorCliChatId,
+    );
     const newGroup: UserSessionGroup = {
       slots: [{ slotIndex: 1, session }],
       activeSlotIndex: 1,
@@ -205,8 +219,16 @@ export class SessionManager {
     }
 
     const cwd = workspaceRoot ? path.resolve(workspaceRoot) : this.defaultWorkspaceRoot;
-    const { sessionId } = await this.acp.newSession(cwd);
-    const session = this.makeSession(sessionId, cwd, chatId, userId, chatType, now);
+    const { sessionId, cursorCliChatId } = await this.acp.newSession(cwd);
+    const session = this.makeSession(
+      sessionId,
+      cwd,
+      chatId,
+      userId,
+      chatType,
+      now,
+      cursorCliChatId,
+    );
 
     let slotIndex: number;
     if (!group) {
@@ -474,8 +496,16 @@ export class SessionManager {
 
     if (!group) {
       // Bootstrap fresh
-      const { sessionId } = await this.acp.newSession(cwd);
-      const session = this.makeSession(sessionId, cwd, chatId, userId, chatType, now);
+      const { sessionId, cursorCliChatId } = await this.acp.newSession(cwd);
+      const session = this.makeSession(
+        sessionId,
+        cwd,
+        chatId,
+        userId,
+        chatType,
+        now,
+        cursorCliChatId,
+      );
       const newGroup: UserSessionGroup = {
         slots: [{ slotIndex: 1, session }],
         activeSlotIndex: 1,
@@ -497,8 +527,16 @@ export class SessionManager {
       await this.acp.closeSession(slot.session.sessionId);
     }
 
-    const { sessionId } = await this.acp.newSession(cwd);
-    const session = this.makeSession(sessionId, cwd, chatId, userId, chatType, now);
+    const { sessionId, cursorCliChatId } = await this.acp.newSession(cwd);
+    const session = this.makeSession(
+      sessionId,
+      cwd,
+      chatId,
+      userId,
+      chatType,
+      now,
+      cursorCliChatId,
+    );
 
     if (slot) {
       slot.session = session;
@@ -609,8 +647,21 @@ export class SessionManager {
     userId: string,
     chatType: "p2p" | "group",
     now: number,
+    cursorCliChatId?: string,
   ): UserSession {
-    return { sessionId, workspaceRoot, chatId, userId, chatType, createdAt: now, lastActiveAt: now };
+    const s: UserSession = {
+      sessionId,
+      workspaceRoot,
+      chatId,
+      userId,
+      chatType,
+      createdAt: now,
+      lastActiveAt: now,
+    };
+    if (cursorCliChatId) {
+      s.cursorCliChatId = cursorCliChatId;
+    }
+    return s;
   }
 
   private findSlot(group: UserSessionGroup, slotIndex: number): SessionSlot | undefined {
@@ -695,8 +746,17 @@ export class SessionManager {
         // Fall through to new session
       }
     }
-    const { sessionId } = await this.acp.newSession(cwd);
-    slot.session = { ...slot.session, sessionId, workspaceRoot: cwd, lastActiveAt: now };
+    const { sessionId, cursorCliChatId } = await this.acp.newSession(cwd);
+    slot.session = {
+      ...slot.session,
+      sessionId,
+      workspaceRoot: cwd,
+      lastActiveAt: now,
+      ...(cursorCliChatId ? { cursorCliChatId } : {}),
+    };
+    if (!cursorCliChatId) {
+      delete slot.session.cursorCliChatId;
+    }
     this.onSessionWorkspace?.(sessionId, cwd);
     if (this.debug) {
       console.log(`[session] renew slot=#${slot.slotIndex} old=${oldId} new=${sessionId}`);
@@ -729,8 +789,10 @@ export class SessionManager {
         : this.defaultWorkspaceRoot;
 
       let sessionId: string;
+      let cursorCliChatId: string | undefined;
       if (this.acp.supportsLoadSession) {
         sessionId = ps.sessionId;
+        cursorCliChatId = ps.cursorCliChatId;
         try {
           await this.acp.loadSession(ps.sessionId, cwd);
           if (this.debug) {
@@ -739,6 +801,7 @@ export class SessionManager {
         } catch {
           const fresh = await this.acp.newSession(cwd);
           sessionId = fresh.sessionId;
+          cursorCliChatId = fresh.cursorCliChatId;
           if (this.debug) {
             console.log(`[session] restore new slot=#${ps.slotIndex} (load failed) sessionId=${sessionId}`);
           }
@@ -746,12 +809,21 @@ export class SessionManager {
       } else {
         const fresh = await this.acp.newSession(cwd);
         sessionId = fresh.sessionId;
+        cursorCliChatId = fresh.cursorCliChatId;
         if (this.debug) {
           console.log(`[session] restore new slot=#${ps.slotIndex} (load unsupported) sessionId=${sessionId}`);
         }
       }
 
-      const session = this.makeSession(sessionId, cwd, chatId, userId, chatType, now);
+      const session = this.makeSession(
+        sessionId,
+        cwd,
+        chatId,
+        userId,
+        chatType,
+        now,
+        cursorCliChatId,
+      );
       restoredSlots.push({ slotIndex: ps.slotIndex, name: ps.name, session });
       this.onSessionWorkspace?.(sessionId, cwd);
     }
@@ -783,6 +855,7 @@ export class SessionManager {
       slotIndex: s.slotIndex,
       name: s.name,
       sessionId: s.session.sessionId,
+      ...(s.session.cursorCliChatId && { cursorCliChatId: s.session.cursorCliChatId }),
       workspaceRoot: s.session.workspaceRoot,
       lastActiveAt: s.session.lastActiveAt,
     }));

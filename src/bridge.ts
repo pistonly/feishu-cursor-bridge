@@ -102,6 +102,13 @@ export class Bridge {
     console.log("[bridge] Service started successfully");
   }
 
+  /** 话题群 / 话题线程内回复需传 `reply_in_thread` */
+  private threadReplyOpts(
+    msg: FeishuMessage,
+  ): { replyInThread: true } | undefined {
+    return msg.replyInThread ? { replyInThread: true } : undefined;
+  }
+
   private async handleFeishuMessage(msg: FeishuMessage): Promise<void> {
     if (msg.contentType !== "text" && msg.contentType !== "post") {
       return;
@@ -113,7 +120,7 @@ export class Bridge {
       if (!this.feishuBot.isBotMentioned(msg)) {
         return;
       }
-      content = this.feishuBot.stripBotMention(content).trim();
+      content = this.feishuBot.stripBotMention(content, msg.mentions).trim();
     }
 
     if (!content) return;
@@ -144,6 +151,7 @@ export class Bridge {
               msg.chatId,
               `✅ 已切换到上一个 session #${slot.slotIndex}${label}\n工作区：\`${slot.session.workspaceRoot}\``,
               msg.messageId,
+              this.threadReplyOpts(msg),
             );
             if (slot.lastReply) {
               const MAX_CARD_LEN = 28_000;
@@ -169,6 +177,7 @@ export class Bridge {
             msg.chatId,
             `✅ 已切换到 session #${slot.slotIndex}${label}\n工作区：\`${slot.session.workspaceRoot}\``,
             msg.messageId,
+            this.threadReplyOpts(msg),
           );
           if (slot.lastReply) {
             const MAX_CARD_LEN = 28_000;
@@ -197,6 +206,7 @@ export class Bridge {
               msg.chatId,
               "用法：`/rename <新名字>` 或 `/rename <编号或名称> <新名字>`\n\n示例：`/rename backend`、`/rename 2 backend`",
               msg.messageId,
+              this.threadReplyOpts(msg),
             );
             return;
           }
@@ -211,6 +221,7 @@ export class Bridge {
             msg.chatId,
             `✅ 已将 session #${renamed.slotIndex} 重命名为 \`${renamed.name}\``,
             msg.messageId,
+            this.threadReplyOpts(msg),
           );
           return;
         }
@@ -224,6 +235,7 @@ export class Bridge {
               msg.chatId,
               "用法：`/close <编号或名称>`\n\n发送 `/sessions` 查看当前所有 session。",
               msg.messageId,
+              this.threadReplyOpts(msg),
             );
             return;
           }
@@ -238,6 +250,7 @@ export class Bridge {
             msg.chatId,
             `✅ 已关闭 session #${closed.slotIndex}${label}`,
             msg.messageId,
+            this.threadReplyOpts(msg),
           );
           return;
         }
@@ -256,6 +269,7 @@ export class Bridge {
               msg.chatId,
               `📋 工作区快捷列表（使用 \`/new <序号>\` 新建并切换）。\n\n${lines}\n\n添加：\`/new add-list <路径>\`\n删除：\`/new remove-list <序号>\``,
               msg.messageId,
+              this.threadReplyOpts(msg),
             );
             return;
           }
@@ -265,6 +279,7 @@ export class Bridge {
                 msg.chatId,
                 "用法：`/new remove-list <序号>`（序号见 `/new list`）",
                 msg.messageId,
+                this.threadReplyOpts(msg),
               );
               return;
             }
@@ -279,6 +294,7 @@ export class Bridge {
                 ? `✅ 已删除序号 ${newConv.index}。\n\n${list.length ? lines : "（列表已空）"}`
                 : `❌ 无序号 ${newConv.index}。请先 \`/new list\` 查看当前列表。`,
               msg.messageId,
+              this.threadReplyOpts(msg),
             );
             return;
           }
@@ -288,6 +304,7 @@ export class Bridge {
                 msg.chatId,
                 "用法：`/new add-list <目录路径>`",
                 msg.messageId,
+                this.threadReplyOpts(msg),
               );
               return;
             }
@@ -304,6 +321,7 @@ export class Bridge {
                 ? `✅ 已加入列表。\n\n${lines}`
                 : `ℹ️ 该路径已在列表中，未重复添加。\n\n${lines}`,
               msg.messageId,
+              this.threadReplyOpts(msg),
             );
             return;
           }
@@ -341,6 +359,7 @@ export class Bridge {
                   msg.chatId,
                   "❌ 序号须为 ≥1 的整数。",
                   msg.messageId,
+                  this.threadReplyOpts(msg),
                 );
                 return;
               }
@@ -350,6 +369,7 @@ export class Bridge {
                   msg.chatId,
                   `❌ 列表中无序号 ${idx}。请先发送 \`/new list\` 查看。`,
                   msg.messageId,
+                  this.threadReplyOpts(msg),
                 );
                 return;
               }
@@ -373,6 +393,7 @@ export class Bridge {
             msg.chatId,
             `✅ 当前 session 已重置，工作区：\n\`${cwdLine}\``,
             msg.messageId,
+            this.threadReplyOpts(msg),
           );
         } else {
           // /new — create a new slot and auto-switch
@@ -388,6 +409,7 @@ export class Bridge {
             msg.chatId,
             `✅ 已新建并切换到 session #${result.slotIndex}${nameLabel}\n工作区：\`${result.workspaceRoot}\`\n\n发送 \`/sessions\` 查看所有 session。`,
             msg.messageId,
+            this.threadReplyOpts(msg),
           );
         }
       } catch (e) {
@@ -395,6 +417,7 @@ export class Bridge {
           msg.chatId,
           `❌ ${e instanceof Error ? e.message : String(e)}`,
           msg.messageId,
+          this.threadReplyOpts(msg),
         );
       }
       return;
@@ -402,13 +425,17 @@ export class Bridge {
 
     if (content === "/status" || content === "/状态") {
       const stats = this.sessionManager.getStats();
+      const snap = this.sessionManager.getSessionSnapshot(
+        msg.chatId,
+        msg.senderId,
+        msg.chatType,
+      );
+      const cliResume = snap?.activeSlot.session.cursorCliChatId;
       let body = `📊 活跃/内存 slot: ${stats.active}/${stats.total}`;
+      body += cliResume
+        ? `\n• CLI resume ID：\`${cliResume}\`\n  （与本机 \`cursor-agent\` 的 \`--resume\` 参数一致，便于 PC 接手同一对话）`
+        : `\n• CLI resume ID：暂无（尚无活跃会话、或适配器未返回 / create-chat 失败）`;
       if (this.config.bridgeDebug) {
-        const snap = this.sessionManager.getSessionSnapshot(
-          msg.chatId,
-          msg.senderId,
-          msg.chatType,
-        );
         const idleLabel = snap
           ? snap.idleExpiresInMs === null
             ? "永不过期"
@@ -417,7 +444,7 @@ export class Bridge {
         const slot = snap?.activeSlot;
         body += `\n\n[调试 BRIDGE_DEBUG]\n• sessionKey: ${snap?.sessionKey ?? "(尚无)"}\n• 活跃 slot: #${slot?.slotIndex ?? "—"}${slot?.name ? ` (${slot.name})` : ""}\n• ACP sessionId: ${slot?.session.sessionId ?? "—"}\n• 会话 cwd: ${slot?.session.workspaceRoot ?? "—"}\n• 空闲过期约: ${idleLabel}\n• 默认工作区 (CURSOR_WORK_DIR): ${this.config.acp.workspaceRoot}\n• 允许根 (CURSOR_WORK_ALLOWLIST): ${this.config.acp.allowedWorkspaceRoots.join(", ")}\n• 适配器会话目录: ${this.config.acp.adapterSessionDir}\n• 映射文件: ${this.config.bridge.sessionStorePath}\n• loadSession: ${this.acpRuntime.supportsLoadSession}\n• LOG_LEVEL: ${this.config.logLevel}`;
       }
-      await this.feishuBot.sendText(msg.chatId, body, msg.messageId);
+      await this.feishuBot.sendText(msg.chatId, body, msg.messageId, this.threadReplyOpts(msg));
       return;
     }
 
@@ -431,6 +458,7 @@ export class Bridge {
           msg.chatId,
           "用法：`/model <模型ID>`\n\n可在本机终端执行 `cursor-agent models` 查看可用 ID。",
           msg.messageId,
+          this.threadReplyOpts(msg),
         );
         return;
       }
@@ -445,12 +473,14 @@ export class Bridge {
           msg.chatId,
           `✅ 已切换模型为 \`${modelId}\`（后续对话将使用该模型）。`,
           msg.messageId,
+          this.threadReplyOpts(msg),
         );
       } catch (err) {
         await this.feishuBot.sendText(
           msg.chatId,
           `❌ 切换模型失败:\n${formatJsonRpcLikeError(err)}`,
           msg.messageId,
+          this.threadReplyOpts(msg),
         );
       }
       return;
@@ -478,6 +508,7 @@ export class Bridge {
         msg.chatId,
         "⏳ 上一个请求还在处理中，请稍候...",
         msg.messageId,
+        this.threadReplyOpts(msg),
       );
       return;
     }
@@ -516,6 +547,7 @@ export class Bridge {
           msg.chatId,
           `❌ 处理出错: ${err instanceof Error ? err.message : String(err)}`,
           msg.messageId,
+          this.threadReplyOpts(msg),
         )
         .catch(() => {});
     } finally {
@@ -534,6 +566,7 @@ export class Bridge {
         msg.chatId,
         "当前没有任何 session。发送任意消息自动创建。",
         msg.messageId,
+        this.threadReplyOpts(msg),
       );
       return;
     }
@@ -546,6 +579,7 @@ export class Bridge {
       msg.chatId,
       `📋 当前所有 session（共 ${slots.length} 个）：\n\n${lines.join("\n\n")}\n\n• \`/new\` — 新建 session\n• \`/switch <编号或名称>\` — 切换\n• \`/rename <新名字>\` — 重命名当前 session\n• \`/rename <编号或名称> <新名字>\` — 重命名指定 session\n• \`/close <编号或名称>\` — 关闭\n• \`/reset\` — 重置当前 session`,
       msg.messageId,
+      this.threadReplyOpts(msg),
     );
   }
 

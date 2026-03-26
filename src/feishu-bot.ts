@@ -15,11 +15,18 @@ export interface FeishuMessage {
   contentType: string;
   mentions?: Array<{
     key: string;
-    id: { open_id?: string; user_id?: string };
+    id: { open_id?: string; user_id?: string; union_id?: string };
     name: string;
   }>;
   rootId?: string;
   parentId?: string;
+  threadId?: string;
+  /**
+   * 国内版话题群为 `topic_group`；回复此类或话题线程内消息时，im.message.reply 需 `reply_in_thread: true`。
+   */
+  replyInThread?: boolean;
+  /** 富文本 post 里 @ 的用户 id（部分场景下 message.mentions 不完整） */
+  inlineMentionIds?: string[];
 }
 
 export interface FeishuBotConfig {
@@ -33,6 +40,15 @@ export interface FeishuBotConfig {
 // ---------------------------------------------------------------------------
 
 const TEXT_CHUNK_LIMIT = 4000;
+
+/** 飞书群聊、话题群等均需按「群」处理 @ 与会话维度 */
+function isGroupLikeChatType(raw: string | undefined): boolean {
+  return raw === "group" || raw === "topic_group";
+}
+
+export type FeishuSendReplyOptions = {
+  replyInThread?: boolean;
+};
 
 function resolveDomain(
   domain: string | undefined,
@@ -60,6 +76,10 @@ function splitTextChunks(text: string, limit = TEXT_CHUNK_LIMIT): string[] {
   return chunks;
 }
 
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 // ---------------------------------------------------------------------------
 // FeishuBot
 // ---------------------------------------------------------------------------
@@ -75,6 +95,7 @@ export class FeishuBot extends EventEmitter {
   private wsClient: Lark.WSClient | null = null;
   private eventDispatcher: Lark.EventDispatcher;
   private botOpenId?: string;
+  private botUserId?: string;
   private config: FeishuBotConfig;
 
   constructor(config: FeishuBotConfig) {
@@ -113,6 +134,18 @@ export class FeishuBot extends EventEmitter {
   async start(): Promise<void> {
     const domain = resolveDomain(this.config.domain);
 
+    // 必须先解析 bot open_id：否则 WS 抢先收到群消息时 isBotMentioned 会为 false（话题群 @ 也不响）
+    try {
+      const resp = (await (this.client as any).request({
+        method: "GET",
+        url: "/bot/v3/info",
+      })) as { bot?: { open_id?: string; user_id?: string } };
+      this.botOpenId = resp?.bot?.open_id;
+      this.botUserId = resp?.bot?.user_id;
+    } catch {
+      // Non-critical — isBotMentioned will degrade gracefully
+    }
+
     this.wsClient = new Lark.WSClient({
       appId: this.config.appId,
       appSecret: this.config.appSecret,
@@ -121,16 +154,6 @@ export class FeishuBot extends EventEmitter {
     });
 
     await this.wsClient.start({ eventDispatcher: this.eventDispatcher });
-
-    try {
-      const resp = (await (this.client as any).request({
-        method: "GET",
-        url: "/bot/v3/info",
-      })) as { bot?: { open_id?: string } };
-      this.botOpenId = resp?.bot?.open_id;
-    } catch {
-      // Non-critical — isBotMentioned will degrade gracefully
-    }
 
     this.emit("ready");
   }
@@ -149,9 +172,11 @@ export class FeishuBot extends EventEmitter {
     chatId: string,
     text: string,
     replyToMessageId?: string,
+    opts?: FeishuSendReplyOptions,
   ): Promise<string> {
     const chunks = splitTextChunks(text);
     let lastMessageId = "";
+    const replyInThread = opts?.replyInThread === true;
 
     for (const chunk of chunks) {
       const content = JSON.stringify({ text: chunk });
@@ -159,7 +184,11 @@ export class FeishuBot extends EventEmitter {
       if (replyToMessageId && lastMessageId === "") {
         const res = await this.client.im.message.reply({
           path: { message_id: replyToMessageId },
-          data: { msg_type: "text", content },
+          data: {
+            msg_type: "text",
+            content,
+            ...(replyInThread ? { reply_in_thread: true } : {}),
+          },
         });
         lastMessageId = res.data?.message_id ?? "";
       } else {
@@ -183,14 +212,20 @@ export class FeishuBot extends EventEmitter {
     title: string,
     content: string,
     replyToMessageId?: string,
+    opts?: FeishuSendReplyOptions,
   ): Promise<string> {
     const postContent = this.buildPostContent(title, content);
     const payload = JSON.stringify(postContent);
+    const replyInThread = opts?.replyInThread === true;
 
     if (replyToMessageId) {
       const res = await this.client.im.message.reply({
         path: { message_id: replyToMessageId },
-        data: { msg_type: "post", content: payload },
+        data: {
+          msg_type: "post",
+          content: payload,
+          ...(replyInThread ? { reply_in_thread: true } : {}),
+        },
       });
       return res.data?.message_id ?? "";
     }
@@ -210,6 +245,7 @@ export class FeishuBot extends EventEmitter {
     chatId: string,
     content: string,
     replyToMessageId?: string,
+    opts?: FeishuSendReplyOptions,
   ): Promise<string> {
     const card = {
       config: { wide_screen_mode: true },
@@ -221,11 +257,16 @@ export class FeishuBot extends EventEmitter {
       ],
     };
     const payload = JSON.stringify(card);
+    const replyInThread = opts?.replyInThread === true;
 
     if (replyToMessageId) {
       const res = await this.client.im.message.reply({
         path: { message_id: replyToMessageId },
-        data: { msg_type: "interactive", content: payload },
+        data: {
+          msg_type: "interactive",
+          content: payload,
+          ...(replyInThread ? { reply_in_thread: true } : {}),
+        },
       });
       return res.data?.message_id ?? "";
     }
@@ -263,14 +304,52 @@ export class FeishuBot extends EventEmitter {
   // -----------------------------------------------------------------------
 
   isBotMentioned(msg: FeishuMessage): boolean {
-    return (
-      msg.mentions?.some((m) => m.id.open_id === this.botOpenId) ?? false
-    );
+    const botOpen = this.botOpenId?.trim();
+    const botUser = this.botUserId?.trim();
+    if (!botOpen && !botUser) return false;
+
+    const mentionHit =
+      msg.mentions?.some((m) => {
+        const ids = [
+          m.id.open_id,
+          m.id.user_id,
+          m.id.union_id,
+        ]
+          .map((x) => (typeof x === "string" ? x.trim() : ""))
+          .filter(Boolean);
+        return ids.some((id) => id === botOpen || id === botUser);
+      }) ?? false;
+
+    if (mentionHit) return true;
+
+    const inline = msg.inlineMentionIds ?? [];
+    return inline.some((id) => {
+      const t = id.trim();
+      return t === botOpen || t === botUser;
+    });
   }
 
-  stripBotMention(content: string): string {
-    // Feishu mentions look like @_user_N in the text body
-    return content.replace(/@_user_\d+/g, "").trim();
+  stripBotMention(
+    content: string,
+    mentions?: FeishuMessage["mentions"],
+  ): string {
+    let result = content;
+    if (mentions && mentions.length > 0) {
+      for (const m of mentions) {
+        if (m.name) {
+          result = result.replace(new RegExp(`@${escapeRegExp(m.name)}\\s*`, "g"), "");
+        }
+        if (m.key) {
+          result = result.replace(
+            new RegExp(escapeRegExp(m.key), "g"),
+            "",
+          );
+        }
+      }
+    }
+    // 文本里常见占位：@_user_1
+    result = result.replace(/@_user_\d+/g, "");
+    return result.replace(/\s+/g, " ").trim();
   }
 
   getBotOpenId(): string | undefined {
@@ -289,25 +368,81 @@ export class FeishuBot extends EventEmitter {
 
     const rawContent: string = message.content ?? "";
     const messageType: string = message.message_type ?? "text";
+    const rawChatType: string | undefined = message.chat_type;
+    const threadId: string | undefined =
+      typeof message.thread_id === "string" && message.thread_id.length > 0
+        ? message.thread_id
+        : undefined;
+
+    const inlineMentionIds =
+      messageType === "post" ? this.extractPostAtIds(rawContent) : undefined;
+
+    const groupMessageType: string | undefined = message.group_message_type;
+    const inTopicThread =
+      threadId !== undefined || groupMessageType === "thread";
+
+    const replyInThread = rawChatType === "topic_group" || inTopicThread;
 
     const feishuMsg: FeishuMessage = {
       messageId: message.message_id,
       chatId: message.chat_id,
-      chatType: message.chat_type === "group" ? "group" : "p2p",
-      senderId: sender.sender_id?.open_id ?? "",
+      chatType: isGroupLikeChatType(rawChatType) ? "group" : "p2p",
+      senderId:
+        sender.sender_id?.open_id ??
+        sender.sender_id?.user_id ??
+        sender.sender_id?.union_id ??
+        "",
       senderType: sender.sender_type ?? "",
       content: this.parseContent(rawContent, messageType),
       contentType: messageType,
       mentions: message.mentions?.map((m: any) => ({
         key: m.key,
-        id: { open_id: m.id?.open_id, user_id: m.id?.user_id },
+        id: {
+          open_id: m.id?.open_id,
+          user_id: m.id?.user_id,
+          union_id: m.id?.union_id,
+        },
         name: m.name,
       })),
       rootId: message.root_id || undefined,
       parentId: message.parent_id || undefined,
+      threadId,
+      replyInThread: replyInThread ? true : undefined,
+      inlineMentionIds,
     };
 
     this.emit("message", feishuMsg);
+  }
+
+  private extractPostAtIds(raw: string): string[] {
+    try {
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      const ids: string[] = [];
+      for (const block of Object.values(parsed)) {
+        if (!block || typeof block !== "object") continue;
+        const content = (block as { content?: unknown }).content;
+        if (!Array.isArray(content)) continue;
+        for (const paragraph of content) {
+          if (!Array.isArray(paragraph)) continue;
+          for (const el of paragraph) {
+            if (!el || typeof el !== "object") continue;
+            const tag = (el as { tag?: string }).tag;
+            if (tag !== "at") continue;
+            const id = String(
+              (el as { open_id?: string; user_id?: string; union_id?: string })
+                .open_id ??
+                (el as { user_id?: string }).user_id ??
+                (el as { union_id?: string }).union_id ??
+                "",
+            ).trim();
+            if (id) ids.push(id);
+          }
+        }
+      }
+      return ids;
+    } catch {
+      return [];
+    }
   }
 
   private parseContent(rawContent: string, messageType: string): string {
