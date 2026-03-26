@@ -674,7 +674,7 @@ export class SessionManager {
   // Periodic cleanup
   // -------------------------------------------------------------------------
 
-  cleanupExpired(): number {
+  async cleanupExpired(): Promise<number> {
     const now = Date.now();
     let cleaned = 0;
     for (const [key, group] of this.groups) {
@@ -684,6 +684,8 @@ export class SessionManager {
       );
       for (const slot of expired) {
         this.onSessionWorkspaceRemove?.(slot.session.sessionId);
+        await this.acp.cancelSession(slot.session.sessionId);
+        await this.acp.closeSession(slot.session.sessionId);
       }
       group.slots = group.slots.filter(
         (s) => !this.isExpiredAt(s.session.lastActiveAt, now),
@@ -700,6 +702,7 @@ export class SessionManager {
             b.session.lastActiveAt > a.session.lastActiveAt ? b : a,
           );
           group.activeSlotIndex = best.slotIndex;
+          this.onSessionWorkspace?.(best.session.sessionId, best.session.workspaceRoot);
         }
         this.persistGroup(key, group);
       }

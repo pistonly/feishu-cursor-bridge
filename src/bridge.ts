@@ -94,10 +94,16 @@ export class Bridge {
     await this.feishuBot.start();
 
     this.cleanupInterval = setInterval(() => {
-      const cleaned = this.sessionManager.cleanupExpired();
-      if (cleaned > 0) {
-        console.log(`[bridge] Cleaned up ${cleaned} expired sessions`);
-      }
+      void this.sessionManager
+        .cleanupExpired()
+        .then((cleaned) => {
+          if (cleaned > 0) {
+            console.log(`[bridge] Cleaned up ${cleaned} expired sessions`);
+          }
+        })
+        .catch((err) => {
+          console.error("[bridge] cleanupExpired failed:", err);
+        });
     }, 5 * 60 * 1000);
 
     console.log("[bridge] Service started successfully");
