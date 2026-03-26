@@ -80,6 +80,63 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/** 飞书事件里 id 可能为字符串或数字，需与 clawdbot 一样做强类型归一 */
+function feishuIdString(v: unknown): string {
+  if (v === undefined || v === null) return "";
+  return String(v).trim();
+}
+
+function normalizeIncomingMentionId(raw: unknown): {
+  open_id?: string;
+  user_id?: string;
+  union_id?: string;
+} {
+  if (raw === undefined || raw === null) return {};
+  if (typeof raw === "string") {
+    const s = raw.trim();
+    return s ? { open_id: s } : {};
+  }
+  if (typeof raw !== "object") return {};
+  const o = raw as Record<string, unknown>;
+  const open_id = feishuIdString(o["open_id"]);
+  const user_id = feishuIdString(o["user_id"]);
+  const union_id = feishuIdString(o["union_id"]);
+  const out: { open_id?: string; user_id?: string; union_id?: string } = {};
+  if (open_id) out.open_id = open_id;
+  if (user_id) out.user_id = user_id;
+  if (union_id) out.union_id = union_id;
+  return out;
+}
+
+function mentionEntryIdStrings(m: {
+  id: { open_id?: string; user_id?: string; union_id?: string };
+}): string[] {
+  return [
+    feishuIdString(m.id.open_id),
+    feishuIdString(m.id.user_id),
+    feishuIdString(m.id.union_id),
+  ].filter(Boolean);
+}
+
+function collectAtIdsFromPostElements(elements: unknown, ids: string[]): void {
+  if (!Array.isArray(elements)) return;
+  for (const paragraph of elements) {
+    if (!Array.isArray(paragraph)) continue;
+    for (const el of paragraph) {
+      if (!el || typeof el !== "object") continue;
+      const tag = (el as { tag?: string }).tag;
+      if (tag !== "at") continue;
+      const id = feishuIdString(
+        (el as { open_id?: unknown }).open_id ??
+          (el as { user_id?: unknown }).user_id ??
+          (el as { union_id?: unknown }).union_id ??
+          (el as { id?: unknown }).id,
+      );
+      if (id) ids.push(id);
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // FeishuBot
 // ---------------------------------------------------------------------------
@@ -96,6 +153,7 @@ export class FeishuBot extends EventEmitter {
   private eventDispatcher: Lark.EventDispatcher;
   private botOpenId?: string;
   private botUserId?: string;
+  private botUnionId?: string;
   private config: FeishuBotConfig;
 
   constructor(config: FeishuBotConfig) {
@@ -135,15 +193,38 @@ export class FeishuBot extends EventEmitter {
     const domain = resolveDomain(this.config.domain);
 
     // 必须先解析 bot open_id：否则 WS 抢先收到群消息时 isBotMentioned 会为 false（话题群 @ 也不响）
+    // SDK 的 domain 仅为 https://open.feishu.cn，路径必须含 open-apis/（与 clawdbot probe 一致），勿写 /bot/v3/info
     try {
       const resp = (await (this.client as any).request({
         method: "GET",
-        url: "/bot/v3/info",
-      })) as { bot?: { open_id?: string; user_id?: string } };
-      this.botOpenId = resp?.bot?.open_id;
-      this.botUserId = resp?.bot?.user_id;
-    } catch {
-      // Non-critical — isBotMentioned will degrade gracefully
+        url: "/open-apis/bot/v3/info",
+        data: {},
+      })) as {
+        code?: number;
+        msg?: string;
+        data?: { bot?: { open_id?: string; user_id?: string; union_id?: string } };
+        bot?: { open_id?: string; user_id?: string; union_id?: string };
+      };
+      if (resp?.code !== undefined && resp.code !== 0) {
+        console.warn(
+          `[feishu-bot] open-apis/bot/v3/info 业务错误 code=${resp.code} msg=${resp.msg ?? ""} — 群聊 @ 将不可用`,
+        );
+      } else {
+        const bot = resp?.data?.bot ?? resp?.bot;
+        this.botOpenId = bot?.open_id;
+        this.botUserId = bot?.user_id;
+        this.botUnionId = bot?.union_id;
+        if (!this.botOpenId && !this.botUserId && !this.botUnionId) {
+          console.warn(
+            "[feishu-bot] bot/v3/info 成功但未解析到 open_id/user_id/union_id，原始响应可能非预期结构",
+          );
+        }
+      }
+    } catch (err) {
+      console.warn(
+        "[feishu-bot] GET open-apis/bot/v3/info failed — 群聊 @ 检测将不可用:",
+        err instanceof Error ? err.message : err,
+      );
     }
 
     this.wsClient = new Lark.WSClient({
@@ -306,27 +387,22 @@ export class FeishuBot extends EventEmitter {
   isBotMentioned(msg: FeishuMessage): boolean {
     const botOpen = this.botOpenId?.trim();
     const botUser = this.botUserId?.trim();
-    if (!botOpen && !botUser) return false;
+    const botUnion = this.botUnionId?.trim();
+    if (!botOpen && !botUser && !botUnion) return false;
+
+    const matchesBotId = (id: string): boolean =>
+      id === botOpen || id === botUser || (!!botUnion && id === botUnion);
 
     const mentionHit =
       msg.mentions?.some((m) => {
-        const ids = [
-          m.id.open_id,
-          m.id.user_id,
-          m.id.union_id,
-        ]
-          .map((x) => (typeof x === "string" ? x.trim() : ""))
-          .filter(Boolean);
-        return ids.some((id) => id === botOpen || id === botUser);
+        const ids = mentionEntryIdStrings(m);
+        return ids.some(matchesBotId);
       }) ?? false;
 
     if (mentionHit) return true;
 
     const inline = msg.inlineMentionIds ?? [];
-    return inline.some((id) => {
-      const t = id.trim();
-      return t === botOpen || t === botUser;
-    });
+    return inline.some((id) => matchesBotId(id.trim()));
   }
 
   stripBotMention(
@@ -349,11 +425,23 @@ export class FeishuBot extends EventEmitter {
     }
     // 文本里常见占位：@_user_1
     result = result.replace(/@_user_\d+/g, "");
+    // 文本消息里的 <at user_id="ou_xxx">…</at>（user_id 实为 open_id）
+    result = result.replace(/<at\b[^>]*>[\s\S]*?<\/at>/gi, "");
+    result = result.replace(/<at\b[^>]*\/>/gi, "");
     return result.replace(/\s+/g, " ").trim();
   }
 
   getBotOpenId(): string | undefined {
     return this.botOpenId;
+  }
+
+  /** 仅用于调试日志，勿依赖其稳定性 */
+  getBotIdSnapshot(): { openId?: string; userId?: string; unionId?: string } {
+    return {
+      openId: this.botOpenId,
+      userId: this.botUserId,
+      unionId: this.botUnionId,
+    };
   }
 
   // -----------------------------------------------------------------------
@@ -374,8 +462,11 @@ export class FeishuBot extends EventEmitter {
         ? message.thread_id
         : undefined;
 
-    const inlineMentionIds =
-      messageType === "post" ? this.extractPostAtIds(rawContent) : undefined;
+    const fromPost =
+      messageType === "post" ? this.extractPostAtIds(rawContent) : [];
+    const fromText =
+      messageType === "text" ? this.extractTextAtIds(rawContent) : [];
+    const inlineMentionIds = this.mergeAtIdLists(fromPost, fromText);
 
     const groupMessageType: string | undefined = message.group_message_type;
     const inTopicThread =
@@ -395,20 +486,19 @@ export class FeishuBot extends EventEmitter {
       senderType: sender.sender_type ?? "",
       content: this.parseContent(rawContent, messageType),
       contentType: messageType,
-      mentions: message.mentions?.map((m: any) => ({
-        key: m.key,
-        id: {
-          open_id: m.id?.open_id,
-          user_id: m.id?.user_id,
-          union_id: m.id?.union_id,
-        },
-        name: m.name,
-      })),
+      mentions: message.mentions?.map((m: any) => {
+        const idNorm = normalizeIncomingMentionId(m?.id);
+        return {
+          key: m.key,
+          id: idNorm,
+          name: m.name,
+        };
+      }),
       rootId: message.root_id || undefined,
       parentId: message.parent_id || undefined,
       threadId,
       replyInThread: replyInThread ? true : undefined,
-      inlineMentionIds,
+      inlineMentionIds: inlineMentionIds.length ? inlineMentionIds : undefined,
     };
 
     this.emit("message", feishuMsg);
@@ -421,28 +511,54 @@ export class FeishuBot extends EventEmitter {
       for (const block of Object.values(parsed)) {
         if (!block || typeof block !== "object") continue;
         const content = (block as { content?: unknown }).content;
-        if (!Array.isArray(content)) continue;
-        for (const paragraph of content) {
-          if (!Array.isArray(paragraph)) continue;
-          for (const el of paragraph) {
-            if (!el || typeof el !== "object") continue;
-            const tag = (el as { tag?: string }).tag;
-            if (tag !== "at") continue;
-            const id = String(
-              (el as { open_id?: string; user_id?: string; union_id?: string })
-                .open_id ??
-                (el as { user_id?: string }).user_id ??
-                (el as { union_id?: string }).union_id ??
-                "",
-            ).trim();
-            if (id) ids.push(id);
-          }
-        }
+        collectAtIdsFromPostElements(content, ids);
+      }
+      // clawdbot 测试中扁平结构：{ title, content: [[{ tag: "at", ... }]] }
+      if (ids.length === 0 && Array.isArray(parsed.content)) {
+        collectAtIdsFromPostElements(parsed.content, ids);
       }
       return ids;
     } catch {
       return [];
     }
+  }
+
+  /** 文本消息里 @ 常写在 JSON.text 的 `<at user_id="ou_xxx">`（属性名虽为 user_id，值为 open_id） */
+  private extractTextAtIds(raw: string): string[] {
+    try {
+      const parsed = JSON.parse(raw) as { text?: string };
+      const text = typeof parsed.text === "string" ? parsed.text : "";
+      const ids = new Set<string>();
+      const reNamed =
+        /<at[^>]+?(?:user_id|open_id|union_id)\s*=\s*["']([^"']+)["'][^>]*>/gi;
+      let m: RegExpExecArray | null;
+      while ((m = reNamed.exec(text)) !== null) {
+        const id = m[1]?.trim();
+        if (id && id !== "all") ids.add(id);
+      }
+      // clawdbot mention.ts: formatMentionForCard 使用 <at id=openId></at>（可无引号）
+      const reBareId = /<at\b[^>]*?\bid\s*=\s*["']?([^"'>\s/]+)["']?[^>]*>/gi;
+      while ((m = reBareId.exec(text)) !== null) {
+        const id = m[1]?.trim();
+        if (id && id !== "all") ids.add(id);
+      }
+      return [...ids];
+    } catch {
+      return [];
+    }
+  }
+
+  private mergeAtIdLists(a: string[], b: string[]): string[] {
+    const s = new Set<string>();
+    for (const x of a) {
+      const t = x.trim();
+      if (t) s.add(t);
+    }
+    for (const x of b) {
+      const t = x.trim();
+      if (t) s.add(t);
+    }
+    return [...s];
   }
 
   private parseContent(rawContent: string, messageType: string): string {

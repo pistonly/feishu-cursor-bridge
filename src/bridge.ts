@@ -118,6 +118,17 @@ export class Bridge {
 
     if (msg.chatType === "group") {
       if (!this.feishuBot.isBotMentioned(msg)) {
+        if (this.config.bridgeDebug) {
+          const first = msg.mentions?.[0];
+          console.log("[bridge:debug] 群消息已收到但未判定为 @ 机器人，已忽略", {
+            messageId: msg.messageId,
+            contentType: msg.contentType,
+            mentionCount: msg.mentions?.length ?? 0,
+            firstMentionIds: first?.id,
+            inlineMentionIds: msg.inlineMentionIds,
+            botIdsFromApi: this.feishuBot.getBotIdSnapshot(),
+          });
+        }
         return;
       }
       content = this.feishuBot.stripBotMention(content, msg.mentions).trim();
