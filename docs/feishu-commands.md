@@ -183,7 +183,7 @@
 
 - 当前 `sessionKey`、活跃 slot 编号与名称、ACP `sessionId`
 - 当前 session **cwd**（工作区绝对路径）
-- 空闲过期时间、默认 `CURSOR_WORK_DIR`、允许的 `CURSOR_WORK_ALLOWLIST` 根列表
+- 空闲过期时间（若 `SESSION_IDLE_TIMEOUT_MS=0` 或 `infinity` 则显示为“永不过期”）、默认 `CURSOR_WORK_DIR`、允许的 `CURSOR_WORK_ALLOWLIST` 根列表
 - 适配器会话目录、映射文件路径、`loadSession` 能力、日志级别等
 
 ---
@@ -238,6 +238,7 @@
 | `CURSOR_WORK_ALLOWLIST` | 可选；指定允许作为工作区的根路径列表（逗号分隔），用于 `/reset /某路径`、`/new /某路径` 等。 |
 | `CURSOR_WORK_PRESETS_FILE` | 可选；`/new list` 使用的快捷列表 JSON 路径。 |
 | `CURSOR_WORK_PRESETS` | 可选；列表文件为空时用于首次写入的初始路径（逗号分隔）。 |
+| `SESSION_IDLE_TIMEOUT_MS` | 可选；控制 session 空闲多久后视为过期。设为 `0` 或 `infinity` 表示永不过期。 |
 | `BRIDGE_DEBUG` | 为 `true` 时 `/status` 输出调试详情。 |
 
 更多变量见项目根目录 `.env.example`。

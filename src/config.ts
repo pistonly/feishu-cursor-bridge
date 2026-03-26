@@ -92,6 +92,20 @@ function parseExtraArgs(raw: string | undefined): string[] {
   return parseShellLikeArgs(raw.trim());
 }
 
+function parseSessionIdleTimeoutMs(raw: string | undefined): number {
+  const trimmed = raw?.trim();
+  if (!trimmed) return 30 * 60_000;
+  if (trimmed === "0" || /^infinity$/i.test(trimmed) || /^inf$/i.test(trimmed)) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return 30 * 60_000;
+  }
+  return Math.max(60_000, parsed);
+}
+
 export function loadConfig(): Config {
   const logLevel = process.env["LOG_LEVEL"] ?? "info";
   if (!LOG_LEVELS.has(logLevel)) {
@@ -156,9 +170,8 @@ export function loadConfig(): Config {
         .filter((p) => p.length > 0)
     : [];
 
-  const sessionIdleTimeoutMs = Math.max(
-    60_000,
-    Number(process.env["SESSION_IDLE_TIMEOUT_MS"] ?? 30 * 60_000) || 30 * 60_000,
+  const sessionIdleTimeoutMs = parseSessionIdleTimeoutMs(
+    process.env["SESSION_IDLE_TIMEOUT_MS"],
   );
 
   const cardUpdateThrottleMs = Math.max(

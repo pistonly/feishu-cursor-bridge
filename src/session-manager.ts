@@ -36,7 +36,7 @@ export interface SessionSnapshot {
   sessionKey: string;
   group: UserSessionGroup;
   activeSlot: SessionSlot;
-  idleExpiresInMs: number;
+  idleExpiresInMs: number | null;
 }
 
 export interface SlotListItem {
@@ -101,7 +101,7 @@ export class SessionManager {
       const group = this.store.get(key);
       if (!group) continue;
       // Drop groups where all slots have expired
-      const hasLive = group.slots.some((s) => now - s.lastActiveAt < this.idleMs);
+      const hasLive = group.slots.some((s) => !this.isExpiredAt(s.lastActiveAt, now));
       if (!hasLive) {
         this.store.delete(key);
       }
@@ -139,7 +139,7 @@ export class SessionManager {
 
     if (group) {
       const slot = this.findSlot(group, group.activeSlotIndex);
-      if (slot && now - slot.session.lastActiveAt < this.idleMs) {
+      if (slot && !this.isExpiredAt(slot.session.lastActiveAt, now)) {
         slot.session.lastActiveAt = now;
         this.persistGroup(key, group);
         if (this.debug) {
@@ -529,7 +529,7 @@ export class SessionManager {
     for (const group of this.groups.values()) {
       for (const slot of group.slots) {
         total++;
-        if (now - slot.session.lastActiveAt < this.idleMs) {
+        if (!this.isExpiredAt(slot.session.lastActiveAt, now)) {
           active++;
         }
       }
@@ -548,13 +548,13 @@ export class SessionManager {
     if (!group) return null;
     const slot = this.findSlot(group, group.activeSlotIndex);
     if (!slot) return null;
-    const idleFor = Date.now() - slot.session.lastActiveAt;
-    if (idleFor >= this.idleMs) return null;
+    const now = Date.now();
+    if (this.isExpiredAt(slot.session.lastActiveAt, now)) return null;
     return {
       sessionKey: key,
       group,
       activeSlot: slot,
-      idleExpiresInMs: this.idleMs - idleFor,
+      idleExpiresInMs: this.getIdleExpiresInMs(slot.session.lastActiveAt, now),
     };
   }
 
@@ -567,11 +567,15 @@ export class SessionManager {
     let cleaned = 0;
     for (const [key, group] of this.groups) {
       const before = group.slots.length;
-      const expired = group.slots.filter((s) => now - s.session.lastActiveAt >= this.idleMs);
+      const expired = group.slots.filter((s) =>
+        this.isExpiredAt(s.session.lastActiveAt, now),
+      );
       for (const slot of expired) {
         this.onSessionWorkspaceRemove?.(slot.session.sessionId);
       }
-      group.slots = group.slots.filter((s) => now - s.session.lastActiveAt < this.idleMs);
+      group.slots = group.slots.filter(
+        (s) => !this.isExpiredAt(s.session.lastActiveAt, now),
+      );
       cleaned += before - group.slots.length;
 
       if (group.slots.length === 0) {
@@ -660,7 +664,7 @@ export class SessionManager {
       current.session.lastActiveAt = now - 1;
     }
 
-    if (now - slot.session.lastActiveAt >= this.idleMs) {
+    if (this.isExpiredAt(slot.session.lastActiveAt, now)) {
       await this.renewSlotSession(slot, slot.session.workspaceRoot, now);
     }
 
@@ -709,7 +713,9 @@ export class SessionManager {
     const persisted = this.store.get(key);
     if (!persisted) return undefined;
 
-    const liveSlots = persisted.slots.filter((s) => now - s.lastActiveAt < this.idleMs);
+    const liveSlots = persisted.slots.filter(
+      (s) => !this.isExpiredAt(s.lastActiveAt, now),
+    );
     if (liveSlots.length === 0) {
       this.store.delete(key);
       void this.store.flush().catch(() => {});
@@ -793,5 +799,19 @@ export class SessionManager {
     void this.store.flush().catch((e) => {
       console.error("[session] flush failed:", e);
     });
+  }
+
+  private isExpiredAt(lastActiveAt: number, now: number): boolean {
+    if (!Number.isFinite(this.idleMs)) {
+      return false;
+    }
+    return now - lastActiveAt >= this.idleMs;
+  }
+
+  private getIdleExpiresInMs(lastActiveAt: number, now: number): number | null {
+    if (!Number.isFinite(this.idleMs)) {
+      return null;
+    }
+    return Math.max(0, this.idleMs - (now - lastActiveAt));
   }
 }
