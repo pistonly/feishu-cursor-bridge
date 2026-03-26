@@ -11,17 +11,31 @@ const AUTH_HINT_PATTERNS = [
   "not authenticated",
   "cursor-agent login",
 ];
+const AUTH_LIKE_REPLY_PREFIXES = [
+  "unable to process your request because cursor-agent cli is not authenticated.",
+  "unable to process your request because cursor-agent cli is not authenticated.\n\n",
+];
 const MISLEADING_AUTH_TIMEOUT_MS = 110_000;
+
+function normalizeText(text: string): string {
+  return text.toLowerCase().replace(/\r/g, "").trim();
+}
+
+function isStandaloneAuthLikeReply(text: string): boolean {
+  const normalized = normalizeText(text);
+  if (!normalized) return false;
+  return AUTH_LIKE_REPLY_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+}
 
 function isLikelyTimeoutMisclassifiedAsAuth(
   text: string,
   elapsedMs: number,
-  hadThoughtOutput: boolean,
 ): boolean {
-  const normalized = text.toLowerCase();
+  const normalized = normalizeText(text);
   const hasAuthHint = AUTH_HINT_PATTERNS.some((p) => normalized.includes(p));
   if (!hasAuthHint) return false;
-  return elapsedMs >= MISLEADING_AUTH_TIMEOUT_MS || hadThoughtOutput;
+  if (!isStandaloneAuthLikeReply(normalized)) return false;
+  return elapsedMs >= MISLEADING_AUTH_TIMEOUT_MS;
 }
 
 export class ConversationService {
@@ -83,7 +97,6 @@ export class ConversationService {
         isLikelyTimeoutMisclassifiedAsAuth(
           state.getMainText(),
           elapsedMs,
-          state.hasThoughtText(),
         )
       ) {
         state.setMainText(
