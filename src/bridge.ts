@@ -110,6 +110,20 @@ export class Bridge {
     return msg.replyInThread ? { replyInThread: true } : undefined;
   }
 
+  /** 与 SessionManager.makeKey 一致：群聊有 threadId 时按话题隔离会话 */
+  private threadScope(msg: FeishuMessage): string | undefined {
+    if (msg.chatType !== "group") return undefined;
+    const t = msg.threadId?.trim();
+    return t || undefined;
+  }
+
+  private feishuSessionKey(msg: FeishuMessage): string {
+    if (msg.chatType === "p2p") return `dm:${msg.senderId}`;
+    const t = this.threadScope(msg);
+    if (t) return `${msg.chatId}:t:${t}:${msg.senderId}`;
+    return `${msg.chatId}:${msg.senderId}`;
+  }
+
   private async handleFeishuMessage(msg: FeishuMessage): Promise<void> {
     if (msg.contentType !== "text" && msg.contentType !== "post") {
       return;
@@ -123,15 +137,10 @@ export class Bridge {
         !mentioned && (await this.feishuBot.isPairUserBotGroup(msg.chatId));
       if (!mentioned && !pairUserBot) {
         if (this.config.bridgeDebug) {
-          const first = msg.mentions?.[0];
-          console.log("[bridge:debug] 群消息已收到但未判定为 @ 机器人，已忽略", {
-            messageId: msg.messageId,
-            contentType: msg.contentType,
-            mentionCount: msg.mentions?.length ?? 0,
-            firstMentionIds: first?.id,
-            inlineMentionIds: msg.inlineMentionIds,
-            botIdsFromApi: this.feishuBot.getBotIdSnapshot(),
-          });
+          console.log(
+            "[bridge:debug] 群消息已收到但未判定为 @ 机器人，已忽略",
+            this.feishuBot.getGroupMentionIgnoredDebug(msg),
+          );
         }
         return;
       }
@@ -166,6 +175,7 @@ export class Bridge {
               msg.chatId,
               msg.senderId,
               msg.chatType,
+              this.threadScope(msg),
             );
             const label = slot.name ? ` (${slot.name})` : "";
             await this.feishuBot.sendText(
@@ -192,6 +202,7 @@ export class Bridge {
             msg.senderId,
             msg.chatType,
             newConv.target,
+            this.threadScope(msg),
           );
           const label = slot.name ? ` (${slot.name})` : "";
           await this.feishuBot.sendText(
@@ -237,6 +248,7 @@ export class Bridge {
             msg.chatType,
             newConv.target,
             newConv.name,
+            this.threadScope(msg),
           );
           await this.feishuBot.sendText(
             msg.chatId,
@@ -265,6 +277,7 @@ export class Bridge {
             msg.senderId,
             msg.chatType,
             newConv.target,
+            this.threadScope(msg),
           );
           const label = closed.name ? ` (${closed.name})` : "";
           await this.feishuBot.sendText(
@@ -408,6 +421,7 @@ export class Bridge {
             msg.senderId,
             msg.chatType,
             workspaceAbs,
+            this.threadScope(msg),
           );
           const cwdLine = workspaceAbs ?? this.config.acp.workspaceRoot;
           await this.feishuBot.sendText(
@@ -424,6 +438,7 @@ export class Bridge {
             msg.chatType,
             workspaceAbs,
             slotName,
+            this.threadScope(msg),
           );
           const nameLabel = result.name ? ` (${result.name})` : "";
           await this.feishuBot.sendText(
@@ -450,6 +465,7 @@ export class Bridge {
         msg.chatId,
         msg.senderId,
         msg.chatType,
+        this.threadScope(msg),
       );
       const cliResume = snap?.activeSlot.session.cursorCliChatId;
       let body = `📊 活跃/内存 slot: ${stats.active}/${stats.total}`;
@@ -463,7 +479,7 @@ export class Bridge {
             : `${Math.round(snap.idleExpiresInMs / 60_000)} 分钟`
           : "—";
         const slot = snap?.activeSlot;
-        body += `\n\n[调试 BRIDGE_DEBUG]\n• sessionKey: ${snap?.sessionKey ?? "(尚无)"}\n• 活跃 slot: #${slot?.slotIndex ?? "—"}${slot?.name ? ` (${slot.name})` : ""}\n• ACP sessionId: ${slot?.session.sessionId ?? "—"}\n• 会话 cwd: ${slot?.session.workspaceRoot ?? "—"}\n• 空闲过期约: ${idleLabel}\n• 默认工作区 (CURSOR_WORK_DIR): ${this.config.acp.workspaceRoot}\n• 允许根 (CURSOR_WORK_ALLOWLIST): ${this.config.acp.allowedWorkspaceRoots.join(", ")}\n• 适配器会话目录: ${this.config.acp.adapterSessionDir}\n• 映射文件: ${this.config.bridge.sessionStorePath}\n• loadSession: ${this.acpRuntime.supportsLoadSession}\n• LOG_LEVEL: ${this.config.logLevel}`;
+        body += `\n\n[调试 BRIDGE_DEBUG]\n• sessionKey: ${snap?.sessionKey ?? "(尚无)"}\n• threadId: ${this.threadScope(msg) ?? "（主会话区）"}\n• 活跃 slot: #${slot?.slotIndex ?? "—"}${slot?.name ? ` (${slot.name})` : ""}\n• ACP sessionId: ${slot?.session.sessionId ?? "—"}\n• 会话 cwd: ${slot?.session.workspaceRoot ?? "—"}\n• 空闲过期约: ${idleLabel}\n• 默认工作区 (CURSOR_WORK_DIR): ${this.config.acp.workspaceRoot}\n• 允许根 (CURSOR_WORK_ALLOWLIST): ${this.config.acp.allowedWorkspaceRoots.join(", ")}\n• 适配器会话目录: ${this.config.acp.adapterSessionDir}\n• 映射文件: ${this.config.bridge.sessionStorePath}\n• loadSession: ${this.acpRuntime.supportsLoadSession}\n• LOG_LEVEL: ${this.config.logLevel}`;
       }
       await this.feishuBot.sendText(msg.chatId, body, msg.messageId, this.threadReplyOpts(msg));
       return;
@@ -488,6 +504,7 @@ export class Bridge {
           msg.chatId,
           msg.senderId,
           msg.chatType,
+          this.threadScope(msg),
         );
         await this.acpRuntime.setSessionModel(session.sessionId, modelId);
         await this.feishuBot.sendText(
@@ -509,16 +526,14 @@ export class Bridge {
 
     // Prompt key is scoped to the active slot so different slots can run in parallel,
     // but the same slot is still serialized.
-    const sessionKey =
-      msg.chatType === "p2p"
-        ? `dm:${msg.senderId}`
-        : `${msg.chatId}:${msg.senderId}`;
+    const sessionKey = this.feishuSessionKey(msg);
 
     // Peek at current active slot index for the prompt key
     const snap = this.sessionManager.getSessionSnapshot(
       msg.chatId,
       msg.senderId,
       msg.chatType,
+      this.threadScope(msg),
     );
     const promptKey = snap
       ? `${sessionKey}:${snap.activeSlot.slotIndex}`
@@ -541,6 +556,7 @@ export class Bridge {
         msg.chatId,
         msg.senderId,
         msg.chatType,
+        this.threadScope(msg),
       );
 
       const msgForPrompt: FeishuMessage = {
@@ -556,6 +572,7 @@ export class Bridge {
           msg.chatType,
           session.sessionId,
           lastReply,
+          this.threadScope(msg),
         );
       }
     } catch (err) {
@@ -581,6 +598,7 @@ export class Bridge {
       msg.chatId,
       msg.senderId,
       msg.chatType,
+      this.threadScope(msg),
     );
     if (slots.length === 0) {
       await this.feishuBot.sendText(

@@ -37,6 +37,15 @@ export interface FeishuBotConfig {
   bridgeDebug?: boolean;
 }
 
+/** 机器人身份（来自 bot/v3/info），供调试日志对照；勿用于业务分支逻辑 */
+export interface BotIdSnapshot {
+  openId?: string;
+  userId?: string;
+  unionId?: string;
+  /** 是否至少解析到任一非空 id；未解析时群聊 @ 机器人恒为无法识别 */
+  resolved: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -494,13 +503,83 @@ export class FeishuBot extends EventEmitter {
     return this.botOpenId;
   }
 
-  /** 仅用于调试日志，勿依赖其稳定性 */
-  getBotIdSnapshot(): { openId?: string; userId?: string; unionId?: string } {
+  /** 与 isBotMentioned 使用同一套 id 提取逻辑，用于调试对照 */
+  private collectMentionIdStrings(msg: FeishuMessage): string[] {
+    const set = new Set<string>();
+    for (const m of msg.mentions ?? []) {
+      for (const id of mentionEntryIdStrings(m)) {
+        if (id) set.add(id);
+      }
+    }
+    for (const raw of msg.inlineMentionIds ?? []) {
+      const id = raw.trim();
+      if (id) set.add(id);
+    }
+    return [...set];
+  }
+
+  getBotIdSnapshot(): BotIdSnapshot {
+    const openId = this.botOpenId?.trim() || undefined;
+    const userId = this.botUserId?.trim() || undefined;
+    const unionId = this.botUnionId?.trim() || undefined;
     return {
-      openId: this.botOpenId,
-      userId: this.botUserId,
-      unionId: this.botUnionId,
+      openId,
+      userId,
+      unionId,
+      resolved: !!(openId || userId || unionId),
     };
+  }
+
+  /**
+   * 群消息因「未 @ 且非 1 用户+1 机器人」被忽略时，打一条结构化调试信息（需 BRIDGE_DEBUG）。
+   */
+  getGroupMentionIgnoredDebug(msg: FeishuMessage): {
+    messageId: string;
+    chatId: string;
+    threadId?: string;
+    contentType: string;
+    mentionCount: number;
+    messageMentionIds: string[];
+    inlineMentionIds?: string[];
+    bot: BotIdSnapshot;
+    hint: string;
+  } {
+    const bot = this.getBotIdSnapshot();
+    const messageMentionIds = this.collectMentionIdStrings(msg);
+    const hint = this.hintForIgnoredGroupMention(bot, messageMentionIds);
+    return {
+      messageId: msg.messageId,
+      chatId: msg.chatId,
+      threadId: msg.threadId,
+      contentType: msg.contentType,
+      mentionCount: msg.mentions?.length ?? 0,
+      messageMentionIds,
+      inlineMentionIds: msg.inlineMentionIds,
+      bot,
+      hint,
+    };
+  }
+
+  private hintForIgnoredGroupMention(
+    bot: BotIdSnapshot,
+    messageMentionIds: string[],
+  ): string {
+    if (!bot.resolved) {
+      return "bot/v3/info 未解析到机器人 open_id/user_id/union_id，群 @ 判定恒为无效";
+    }
+    if (messageMentionIds.length === 0) {
+      return "消息中无结构化 @ id（未 @ 机器人、或仅客户端展示/非标准 mentions）";
+    }
+    const botSet = new Set(
+      [bot.openId, bot.userId, bot.unionId].filter(
+        (x): x is string => !!x,
+      ),
+    );
+    const anyMatch = messageMentionIds.some((id) => botSet.has(id));
+    if (anyMatch) {
+      return "消息中的 id 与机器人一致但 isBotMentioned 为 false，请检查事件/mentions 解析是否异常";
+    }
+    return "消息中的 @ id 与当前机器人 open/user/union 均不一致";
   }
 
   /**

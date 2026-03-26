@@ -19,6 +19,8 @@ export interface PersistedSessionGroup {
   chatId: string;
   userId: string;
   chatType: "p2p" | "group";
+  /** 话题群 thread_id，与内存 sessionKey 的话题维度一致 */
+  threadId?: string;
   activeSlotIndex: number;
   /** monotonically increasing counter for next slot number */
   nextSlotIndex: number;

@@ -17,6 +17,8 @@ export interface UserSession {
   chatId: string;
   userId: string;
   chatType: "p2p" | "group";
+  /** 话题群内某话题线程 id；与 sessionKey 中的话题维度一致 */
+  threadId?: string;
   createdAt: number;
   lastActiveAt: number;
 }
@@ -113,8 +115,16 @@ export class SessionManager {
     await this.store.flush();
   }
 
-  private makeKey(chatId: string, userId: string, chatType: string): string {
-    return chatType === "p2p" ? `dm:${userId}` : `${chatId}:${userId}`;
+  private makeKey(
+    chatId: string,
+    userId: string,
+    chatType: string,
+    threadId?: string,
+  ): string {
+    if (this.chatType(chatType) === "p2p") return `dm:${userId}`;
+    const t = threadId?.trim();
+    if (t) return `${chatId}:t:${t}:${userId}`;
+    return `${chatId}:${userId}`;
   }
 
   private chatType(t: string): "p2p" | "group" {
@@ -129,16 +139,24 @@ export class SessionManager {
     chatId: string,
     userId: string,
     chatTypeRaw: string,
+    threadId?: string,
   ): Promise<UserSession> {
     const chatType = this.chatType(chatTypeRaw);
-    const key = this.makeKey(chatId, userId, chatType);
+    const key = this.makeKey(chatId, userId, chatType, threadId);
     const now = Date.now();
 
     let group = this.groups.get(key);
 
     // Try to restore from store if not in memory
     if (!group) {
-      group = await this.restoreGroupFromStore(key, chatId, userId, chatType, now);
+      group = await this.restoreGroupFromStore(
+        key,
+        chatId,
+        userId,
+        chatType,
+        now,
+        threadId,
+      );
     }
 
     if (group) {
@@ -173,6 +191,7 @@ export class SessionManager {
       chatType,
       now,
       cursorCliChatId,
+      threadId,
     );
     const newGroup: UserSessionGroup = {
       slots: [{ slotIndex: 1, session }],
@@ -198,14 +217,22 @@ export class SessionManager {
     chatTypeRaw: string,
     workspaceRoot?: string,
     name?: string,
+    threadId?: string,
   ): Promise<{ slotIndex: number; name?: string; sessionId: string; workspaceRoot: string }> {
     const chatType = this.chatType(chatTypeRaw);
-    const key = this.makeKey(chatId, userId, chatType);
+    const key = this.makeKey(chatId, userId, chatType, threadId);
     const now = Date.now();
 
     let group = this.groups.get(key);
     if (!group) {
-      group = await this.restoreGroupFromStore(key, chatId, userId, chatType, now);
+      group = await this.restoreGroupFromStore(
+        key,
+        chatId,
+        userId,
+        chatType,
+        now,
+        threadId,
+      );
     }
     if (group && group.slots.length >= this.maxSlots) {
       throw new Error(
@@ -228,6 +255,7 @@ export class SessionManager {
       chatType,
       now,
       cursorCliChatId,
+      threadId,
     );
 
     let slotIndex: number;
@@ -262,14 +290,22 @@ export class SessionManager {
     userId: string,
     chatTypeRaw: string,
     target: number | string,
+    threadId?: string,
   ): Promise<SessionSlot> {
     const chatType = this.chatType(chatTypeRaw);
-    const key = this.makeKey(chatId, userId, chatType);
+    const key = this.makeKey(chatId, userId, chatType, threadId);
     const now = Date.now();
 
     let group = this.groups.get(key);
     if (!group) {
-      group = await this.restoreGroupFromStore(key, chatId, userId, chatType, now);
+      group = await this.restoreGroupFromStore(
+        key,
+        chatId,
+        userId,
+        chatType,
+        now,
+        threadId,
+      );
     }
     if (!group || group.slots.length === 0) {
       throw new Error("当前没有任何 session，请先发送消息创建一个。");
@@ -291,14 +327,22 @@ export class SessionManager {
     chatId: string,
     userId: string,
     chatTypeRaw: string,
+    threadId?: string,
   ): Promise<SessionSlot> {
     const chatType = this.chatType(chatTypeRaw);
-    const key = this.makeKey(chatId, userId, chatType);
+    const key = this.makeKey(chatId, userId, chatType, threadId);
     const now = Date.now();
 
     let group = this.groups.get(key);
     if (!group) {
-      group = await this.restoreGroupFromStore(key, chatId, userId, chatType, now);
+      group = await this.restoreGroupFromStore(
+        key,
+        chatId,
+        userId,
+        chatType,
+        now,
+        threadId,
+      );
     }
     if (!group || group.slots.length === 0) {
       throw new Error("当前没有任何 session，请先发送消息创建一个。");
@@ -318,14 +362,22 @@ export class SessionManager {
     chatTypeRaw: string,
     target: number | string | null,
     newName: string,
+    threadId?: string,
   ): Promise<SessionSlot> {
     const chatType = this.chatType(chatTypeRaw);
-    const key = this.makeKey(chatId, userId, chatType);
+    const key = this.makeKey(chatId, userId, chatType, threadId);
     const now = Date.now();
 
     let group = this.groups.get(key);
     if (!group) {
-      group = await this.restoreGroupFromStore(key, chatId, userId, chatType, now);
+      group = await this.restoreGroupFromStore(
+        key,
+        chatId,
+        userId,
+        chatType,
+        now,
+        threadId,
+      );
     }
     if (!group || group.slots.length === 0) {
       throw new Error("当前没有任何 session。");
@@ -371,14 +423,22 @@ export class SessionManager {
     userId: string,
     chatTypeRaw: string,
     target: number | string,
+    threadId?: string,
   ): Promise<SessionSlot> {
     const chatType = this.chatType(chatTypeRaw);
-    const key = this.makeKey(chatId, userId, chatType);
+    const key = this.makeKey(chatId, userId, chatType, threadId);
     const now = Date.now();
 
     let group = this.groups.get(key);
     if (!group) {
-      group = await this.restoreGroupFromStore(key, chatId, userId, chatType, now);
+      group = await this.restoreGroupFromStore(
+        key,
+        chatId,
+        userId,
+        chatType,
+        now,
+        threadId,
+      );
     }
     if (!group || group.slots.length === 0) {
       throw new Error("当前没有任何 session。");
@@ -427,9 +487,10 @@ export class SessionManager {
     chatId: string,
     userId: string,
     chatTypeRaw: string,
+    threadId?: string,
   ): Promise<SlotListItem[]> {
     const chatType = this.chatType(chatTypeRaw);
-    const key = this.makeKey(chatId, userId, chatType);
+    const key = this.makeKey(chatId, userId, chatType, threadId);
     let group = this.groups.get(key);
     if (!group) {
       group = await this.restoreGroupFromStore(
@@ -438,6 +499,7 @@ export class SessionManager {
         userId,
         chatType,
         Date.now(),
+        threadId,
       );
     }
     if (!group) return [];
@@ -460,9 +522,10 @@ export class SessionManager {
     chatTypeRaw: string,
     sessionId: string,
     markdown: string,
+    threadId?: string,
   ): void {
     const chatType = this.chatType(chatTypeRaw);
-    const key = this.makeKey(chatId, userId, chatType);
+    const key = this.makeKey(chatId, userId, chatType, threadId);
     const group = this.groups.get(key);
     if (!group) return;
     const slot = group.slots.find((s) => s.session.sessionId === sessionId);
@@ -480,14 +543,22 @@ export class SessionManager {
     userId: string,
     chatTypeRaw: string,
     workspaceRoot?: string,
+    threadId?: string,
   ): Promise<void> {
     const chatType = this.chatType(chatTypeRaw);
-    const key = this.makeKey(chatId, userId, chatType);
+    const key = this.makeKey(chatId, userId, chatType, threadId);
     const now = Date.now();
 
     let group = this.groups.get(key);
     if (!group) {
-      group = await this.restoreGroupFromStore(key, chatId, userId, chatType, now);
+      group = await this.restoreGroupFromStore(
+        key,
+        chatId,
+        userId,
+        chatType,
+        now,
+        threadId,
+      );
     }
 
     const cwd = workspaceRoot
@@ -505,6 +576,7 @@ export class SessionManager {
         chatType,
         now,
         cursorCliChatId,
+        threadId,
       );
       const newGroup: UserSessionGroup = {
         slots: [{ slotIndex: 1, session }],
@@ -536,6 +608,7 @@ export class SessionManager {
       chatType,
       now,
       cursorCliChatId,
+      threadId,
     );
 
     if (slot) {
@@ -579,9 +652,10 @@ export class SessionManager {
     chatId: string,
     userId: string,
     chatTypeRaw: string,
+    threadId?: string,
   ): SessionSnapshot | null {
     const chatType = this.chatType(chatTypeRaw);
-    const key = this.makeKey(chatId, userId, chatType);
+    const key = this.makeKey(chatId, userId, chatType, threadId);
     const group = this.groups.get(key);
     if (!group) return null;
     const slot = this.findSlot(group, group.activeSlotIndex);
@@ -648,6 +722,7 @@ export class SessionManager {
     chatType: "p2p" | "group",
     now: number,
     cursorCliChatId?: string,
+    threadId?: string,
   ): UserSession {
     const s: UserSession = {
       sessionId,
@@ -660,6 +735,9 @@ export class SessionManager {
     };
     if (cursorCliChatId) {
       s.cursorCliChatId = cursorCliChatId;
+    }
+    if (threadId) {
+      s.threadId = threadId;
     }
     return s;
   }
@@ -769,9 +847,12 @@ export class SessionManager {
     userId: string,
     chatType: "p2p" | "group",
     now: number,
+    threadId?: string,
   ): Promise<UserSessionGroup | undefined> {
     const persisted = this.store.get(key);
     if (!persisted) return undefined;
+
+    const tid = persisted.threadId ?? threadId;
 
     const liveSlots = persisted.slots.filter(
       (s) => !this.isExpiredAt(s.lastActiveAt, now),
@@ -823,6 +904,7 @@ export class SessionManager {
         chatType,
         now,
         cursorCliChatId,
+        tid,
       );
       restoredSlots.push({ slotIndex: ps.slotIndex, name: ps.name, session });
       this.onSessionWorkspace?.(sessionId, cwd);
@@ -864,6 +946,7 @@ export class SessionManager {
       chatId: sample.chatId,
       userId: sample.userId,
       chatType: sample.chatType,
+      ...(sample.threadId ? { threadId: sample.threadId } : {}),
       activeSlotIndex: group.activeSlotIndex,
       nextSlotIndex: group.nextSlotIndex,
       slots,

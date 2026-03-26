@@ -70,7 +70,7 @@ npm run build && npm start
 ## 使用方式
 
 - **私聊**：直接发消息
-- **群聊**：@机器人 + 内容（开发平台须为应用开通 **`im:message.group_msg`**，否则群消息事件不会投递到机器人）
+- **群聊**：@机器人 + 内容（开发平台须为应用开通 **`im:message.group_msg`**，否则群消息事件不会投递到机器人）；**话题群**内不同话题（`thread_id`）会**分别**映射 ACP 会话，与群主页会话互不共享
 - **多 session 切换**：`/new` 新建并切到该 session（旧 session 保持连接）；`/sessions` 列表；`/switch <编号或名称>` 切换活跃 session（无参数时切到上一次用过的）；`/close` 关闭指定；`/rename` 便于用名称切换。完整语法与快捷列表见 `docs/feishu-commands.md`
 - `/reset` 仅重置**当前活跃** session（同槽位换新 ACP 会话），不关闭其它 session
 - `/status` 或 `/状态`：会话统计，**并始终含当前活跃 slot 的 CLI resume ID**（若适配器未返回或 `create-chat` 失败则显示暂无）；`BRIDGE_DEBUG=true` 时额外含 ACP `sessionId`、路径等调试信息

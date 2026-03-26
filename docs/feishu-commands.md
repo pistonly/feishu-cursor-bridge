@@ -8,6 +8,8 @@
 |------|------|
 | **私聊** | 直接发送命令或消息即可。 |
 | **群聊** | 必须先 **@机器人**，再输入命令或 `@机器人 + 内容`；命令必须紧跟在 @ 之后，且整条消息以 `/` 开头才会被识别为命令（与实现一致）。 |
+| **「双人」群** | 群内仅一名普通用户且仅一名机器人时，可不 @，直接发消息（与私聊类似）。 |
+| **话题群** | 不同话题（`thread_id`）下 **session 槽位相互隔离**，与主楼消息不共享；`/sessions`、`/switch` 等仅在当前话题内生效。 |
 
 ## 多 Session 管理
 
@@ -186,6 +188,8 @@
 - 空闲过期时间（若 `SESSION_IDLE_TIMEOUT_MS=0` 或 `infinity` 则显示为“永不过期”）、默认 `CURSOR_WORK_DIR`、允许的 `CURSOR_WORK_ALLOWLIST` 根列表
 - 适配器会话目录、映射文件路径、`loadSession` 能力、日志级别等
 
+同一环境下，群聊因未 @ 被忽略时的**服务端日志**字段说明见下文「群聊 @ 与调试日志」。
+
 ---
 
 ### 8. 切换模型（`/model`）
@@ -230,6 +234,20 @@
 
 不以以上命令开头的文本，会进入正常对话流程（流式卡片、Cursor Agent 等）。若适配器在 Cursor 侧注册了 `/plan` 等斜杠命令，通常需**整段消息**以 `/命令` 开头发送；具体以 `cursor-agent-acp` 与 Cursor CLI 行为为准，本桥接不对其做单独解析。
 
+## 群聊 @ 与调试日志（`BRIDGE_DEBUG`）
+
+当 **`BRIDGE_DEBUG=true`** 时，若某条群消息**未被识别为 @ 机器人**（且不满足「双人」群免 @），桥接会在**服务端日志**中打印一条结构化信息（`getGroupMentionIgnoredDebug`），便于对照飞书事件与机器人身份：
+
+| 字段 | 含义 |
+|------|------|
+| `messageMentionIds` | 从消息里解析出的 **结构化 @ id**（与 `isBotMentioned` 判定逻辑一致，含 `mentions` 与 `inlineMentionIds`）。 |
+| `bot` | 当前进程从 **`open-apis/bot/v3/info`** 拉取的机器人 `open_id` / `user_id` / `union_id` 快照；`resolved` 为 `false` 表示未解析到任一 id，此时群聊 **@ 判定恒为无效**。 |
+| `bot.openId` / `userId` / `unionId` | 已 trim；若与 `messageMentionIds` 中任一值一致，理论上应被识别为 @ 机器人。 |
+| `hint` | 简短中文说明可能原因（未解析机器人 id、无结构化 @、id 与机器人不一致、或解析异常等）。 |
+| `chatId` / `threadId` | 所在群与话题（话题群排查时关注 `threadId`）。 |
+
+> 该日志仅用于排错，**不**出现在飞书用户可见的回复里；与 `/status` 的调试增强同属 `BRIDGE_DEBUG` 能力。
+
 ## 相关环境变量（节选）
 
 | 变量 | 与命令的关系 |
@@ -239,6 +257,6 @@
 | `CURSOR_WORK_PRESETS_FILE` | 可选；`/new list` 使用的快捷列表 JSON 路径。 |
 | `CURSOR_WORK_PRESETS` | 可选；列表文件为空时用于首次写入的初始路径（逗号分隔）。 |
 | `SESSION_IDLE_TIMEOUT_MS` | 可选；控制 session 空闲多久后视为过期。设为 `0` 或 `infinity` 表示永不过期。 |
-| `BRIDGE_DEBUG` | 为 `true` 时 `/status` 输出调试详情。 |
+| `BRIDGE_DEBUG` | 为 `true` 时：`/status` 追加调试详情；群聊「未 @ 且未命中双人群」时在**服务端日志**输出结构化对照（见上文「群聊 @ 与调试日志」）。 |
 
 更多变量见项目根目录 `.env.example`。
