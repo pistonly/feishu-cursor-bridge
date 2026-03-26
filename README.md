@@ -7,8 +7,9 @@
 - 飞书消息转发至 Cursor（经 `cursor-agent-acp`）
 - 回复流式推送到飞书（interactive 卡片，含回答、思考、工具、计划等区块）
 - 多用户会话隔离（私聊 / 群聊按用户维度映射 ACP `sessionId`）
+- **多 session**：同一用户在同一聊天中可同时持有多个 session（最多 5 个），各自独立上下文与工作区；可用 `/switch` 在它们之间切换，未活跃的 session 仍保持 ACP 连接
 - 群聊 @ 机器人触发；私聊直接对话
-- 内置命令：`/reset`、`/new`（含快捷列表 `/new list`、`/new <序号>` 等）、`/status`、`/model`（见 `docs/feishu-commands.md`）
+- 内置命令：`/new`、`/sessions`、`/switch`、`/close`、`/rename`、`/reset`（含快捷列表 `/new list`、`/new <序号>` 等）、`/status`、`/model`（详见 `docs/feishu-commands.md`）
 - 会话映射持久化：进程重启后若 Agent 声明 `loadSession`，可 `session/load` 恢复
 
 ## 架构
@@ -69,7 +70,8 @@ npm run build && npm start
 
 - **私聊**：直接发消息
 - **群聊**：@机器人 + 内容
-- `/reset` 或 `/new`：结束当前 ACP 会话并清空本地映射（可选指定工作区路径，见 `docs/feishu-commands.md`）
+- **多 session 切换**：`/new` 新建并切到该 session（旧 session 保持连接）；`/sessions` 列表；`/switch <编号或名称>` 切换活跃 session（无参数时切到上一次用过的）；`/close` 关闭指定；`/rename` 便于用名称切换。完整语法与快捷列表见 `docs/feishu-commands.md`
+- `/reset` 仅重置**当前活跃** session（同槽位换新 ACP 会话），不关闭其它 session
 - `/status` 或 `/状态`：会话统计；`BRIDGE_DEBUG=true` 时含 sessionId、路径等
 
 ## 最小验证清单（手工）
@@ -77,7 +79,7 @@ npm run build && npm start
 1. `npm run build` 通过
 2. 私聊发送一条消息，卡片出现「回答」区块
 3. 连续多轮对话，确认复用同一会话（`BRIDGE_DEBUG` 下 sessionId 不变）
-4. `/reset` 后再次提问，sessionId 变化
+4. `/reset` 后再次提问，当前活跃 slot 的 ACP sessionId 变化；若已用 `/new` 建多个 session，可用 `/switch` 在编号间切换且各 session 独立
 5. 触发工具调用时，卡片「工具」列表有更新（视 Agent 输出而定）
 
 ## 技术栈
