@@ -50,6 +50,7 @@ export class Bridge {
       appId: config.feishu.appId,
       appSecret: config.feishu.appSecret,
       domain: config.feishu.domain,
+      bridgeDebug: config.bridgeDebug,
     });
     this.conversation = new ConversationService(
       config,
@@ -117,7 +118,10 @@ export class Bridge {
     let content = msg.content.trim();
 
     if (msg.chatType === "group") {
-      if (!this.feishuBot.isBotMentioned(msg)) {
+      const mentioned = this.feishuBot.isBotMentioned(msg);
+      const pairUserBot =
+        !mentioned && (await this.feishuBot.isPairUserBotGroup(msg.chatId));
+      if (!mentioned && !pairUserBot) {
         if (this.config.bridgeDebug) {
           const first = msg.mentions?.[0];
           console.log("[bridge:debug] 群消息已收到但未判定为 @ 机器人，已忽略", {
@@ -130,6 +134,12 @@ export class Bridge {
           });
         }
         return;
+      }
+      if (this.config.bridgeDebug && pairUserBot) {
+        console.log(
+          "[bridge:debug] 群为 1 用户 + 1 机器人，免 @ 处理",
+          msg.messageId,
+        );
       }
       content = this.feishuBot.stripBotMention(content, msg.mentions).trim();
     }

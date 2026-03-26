@@ -33,6 +33,8 @@ export interface FeishuBotConfig {
   appId: string;
   appSecret: string;
   domain?: string;
+  /** 与 Bridge 一致，用于群「免 @」判定失败时的调试日志 */
+  bridgeDebug?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -118,6 +120,58 @@ function mentionEntryIdStrings(m: {
   ].filter(Boolean);
 }
 
+/** 飞书 chat.get 的 user_count / bot_count 常为字符串 */
+function parseFeishuNumericField(v: unknown): number | undefined {
+  if (v === undefined || v === null) return undefined;
+  const n =
+    typeof v === "string"
+      ? parseInt(v.trim(), 10)
+      : typeof v === "number"
+        ? v
+        : parseInt(String(v), 10);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+function isFeishuBizSuccess(code: unknown): boolean {
+  return code === undefined || code === 0 || code === "0";
+}
+
+function pickNumericField(
+  obj: Record<string, unknown>,
+  keys: string[],
+): number | undefined {
+  for (const k of keys) {
+    if (Object.prototype.hasOwnProperty.call(obj, k)) {
+      const n = parseFeishuNumericField(obj[k]);
+      if (n !== undefined) return n;
+    }
+  }
+  return undefined;
+}
+
+/** 解析 im/v1/chats/:id 返回体（data 可能扁平或包在 chat 下） */
+function resolveChatGetPayload(res: unknown): Record<string, unknown> | undefined {
+  if (!res || typeof res !== "object") return undefined;
+  const r = res as Record<string, unknown>;
+  const d = r["data"];
+  if (d && typeof d === "object") {
+    const data = d as Record<string, unknown>;
+    if (data["chat"] && typeof data["chat"] === "object") {
+      return data["chat"] as Record<string, unknown>;
+    }
+    return data;
+  }
+  if (
+    "user_count" in r ||
+    "bot_count" in r ||
+    "member_count" in r ||
+    "name" in r
+  ) {
+    return r;
+  }
+  return undefined;
+}
+
 function collectAtIdsFromPostElements(elements: unknown, ids: string[]): void {
   if (!Array.isArray(elements)) return;
   for (const paragraph of elements) {
@@ -155,10 +209,15 @@ export class FeishuBot extends EventEmitter {
   private botUserId?: string;
   private botUnionId?: string;
   private config: FeishuBotConfig;
+  private readonly bridgeDebug: boolean;
+  /** 群「1 用户 + 1 机器人」免 @ 判定缓存（chatId -> 结果） */
+  private pairGroupCache = new Map<string, { v: boolean; exp: number }>();
+  private readonly pairGroupCacheTtlMs = 60_000;
 
   constructor(config: FeishuBotConfig) {
     super();
     this.config = config;
+    this.bridgeDebug = config.bridgeDebug === true;
 
     const domain = resolveDomain(config.domain);
 
@@ -442,6 +501,139 @@ export class FeishuBot extends EventEmitter {
       userId: this.botUserId,
       unionId: this.botUnionId,
     };
+  }
+
+  /**
+   * 群聊中仅有一名「用户」且仅有一名「机器人」时，与私聊类似可不 @。
+   * 优先用 chat.get 的 user_count/bot_count；若缺失则用 member_count 与成员列表（不含机器人）交叉判断。
+   */
+  async isPairUserBotGroup(chatId: string): Promise<boolean> {
+    const now = Date.now();
+    const cached = this.pairGroupCache.get(chatId);
+    if (cached && cached.exp > now) return cached.v;
+    if (!chatId.trim()) {
+      this.pairGroupCache.set(chatId, { v: false, exp: now + 30_000 });
+      return false;
+    }
+
+    const cacheSet = (v: boolean, ttl: number) => {
+      this.pairGroupCache.set(chatId, { v, exp: now + ttl });
+    };
+
+    try {
+      const resUnknown: unknown = await this.client.im.chat.get({
+        path: { chat_id: chatId },
+      });
+      const res = resUnknown as Record<string, unknown>;
+      if (!isFeishuBizSuccess(res["code"])) {
+        if (this.bridgeDebug) {
+          console.log("[feishu-bot:debug] pair 群: chat.get 失败", {
+            chatId,
+            code: res["code"],
+            msg: res["msg"],
+          });
+        }
+        cacheSet(false, 30_000);
+        return false;
+      }
+
+      const inner = resolveChatGetPayload(resUnknown);
+      if (!inner) {
+        if (this.bridgeDebug) {
+          console.log("[feishu-bot:debug] pair 群: 无法解析 chat.get 结构", {
+            chatId,
+            keys: res && typeof res === "object" ? Object.keys(res) : [],
+          });
+        }
+        cacheSet(false, 30_000);
+        return false;
+      }
+
+      const u = pickNumericField(inner, ["user_count", "userCount"]);
+      const b = pickNumericField(inner, ["bot_count", "botCount"]);
+      const memberCap = pickNumericField(inner, [
+        "member_count",
+        "member_total",
+        "memberCount",
+      ]);
+
+      if (u === 1 && b === 1) {
+        cacheSet(true, this.pairGroupCacheTtlMs);
+        return true;
+      }
+
+      const humans = await this.countGroupHumanMembers(chatId);
+      if (humans < 0) {
+        if (this.bridgeDebug) {
+          console.log(
+            "[feishu-bot:debug] pair 群: chatMembers.get 失败（需 im 群成员权限）",
+            { chatId },
+          );
+        }
+        cacheSet(false, 30_000);
+        return false;
+      }
+
+      const sumUb =
+        u !== undefined && b !== undefined ? u + b : undefined;
+      const totalHint =
+        memberCap ?? (sumUb !== undefined && sumUb >= 0 ? sumUb : undefined);
+
+      const pairFallback = humans === 1 && totalHint === 2;
+
+      if (this.bridgeDebug) {
+        console.log("[feishu-bot:debug] pair 群判定", {
+          chatId,
+          user_count: u,
+          bot_count: b,
+          member_count_or_total: memberCap,
+          humans_ex_bots: humans,
+          totalHint,
+          pairFallback,
+        });
+      }
+
+      const v = pairFallback;
+      cacheSet(v, this.pairGroupCacheTtlMs);
+      return v;
+    } catch (e) {
+      if (this.bridgeDebug) {
+        console.log("[feishu-bot:debug] pair 群异常", chatId, e);
+      }
+      cacheSet(false, 30_000);
+      return false;
+    }
+  }
+
+  /** chatMembers 列表不含机器人，分页累加为「真人」数量 */
+  private async countGroupHumanMembers(chatId: string): Promise<number> {
+    let total = 0;
+    let pageToken: string | undefined;
+    for (let guard = 0; guard < 50; guard++) {
+      const resUnknown: unknown = await this.client.im.chatMembers.get({
+        path: { chat_id: chatId },
+        params: {
+          page_size: 100,
+          ...(pageToken ? { page_token: pageToken } : {}),
+        },
+      });
+      const res = resUnknown as {
+        code?: unknown;
+        data?: {
+          items?: unknown[];
+          has_more?: boolean;
+          page_token?: string;
+        };
+      };
+      if (!isFeishuBizSuccess(res.code)) return -1;
+      const items = res.data?.items ?? [];
+      total += items.length;
+      if (total > 1) return total;
+      if (!res.data?.has_more) break;
+      pageToken = res.data?.page_token;
+      if (!pageToken) break;
+    }
+    return total;
   }
 
   // -----------------------------------------------------------------------

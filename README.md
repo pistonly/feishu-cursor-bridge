@@ -8,7 +8,7 @@
 - 回复流式推送到飞书（interactive 卡片，含回答、思考、工具、计划等区块）
 - 多用户会话隔离（私聊 / 群聊按用户维度映射 ACP `sessionId`）
 - **多 session**：同一用户在同一聊天中可同时持有多个 session（最多 5 个），各自独立上下文与工作区；可用 `/switch` 在它们之间切换，未活跃的 session 仍保持 ACP 连接
-- 群聊 @ 机器人触发；私聊直接对话
+- 群聊 @ 机器人触发（或满足「仅 1 用户 + 1 机器人」时可免 @）；私聊直接对话
 - 内置命令：`/new`、`/sessions`、`/switch`、`/close`、`/rename`、`/reset`（含快捷列表 `/new list`、`/new <序号>` 等）、`/status`、`/model`（详见 `docs/feishu-commands.md`）
 - **CLI resume ID（PC 续聊）**：`/status` 会展示当前活跃 session 对应的 **CLI chat id**，与本机 `cursor-agent` 的 **`--resume`** 参数一致，便于在手机飞书聊完后到 PC 终端接手同一会话；该 id 与 ACP `sessionId` 不同，由适配器在 `create-chat` 时生成。上游包默认不在 `session/new` 回包中暴露此字段，本项目通过 **`patches/` + `patch-package`**（`npm install` 后自动打补丁）写入 `session/new` 的 `_meta.cursorChatId`。
 - 会话映射持久化：进程重启后若 Agent 声明 `loadSession`，可 `session/load` 恢复；**CLI resume ID** 同时写入 `BRIDGE_SESSION_STORE`，与 ACP 会话一并恢复（旧的无该字段的持久化记录在 `/reset` 或新建会话后才会出现 id）
@@ -34,7 +34,7 @@
 
 1. **Node.js 18+**
 2. 已安装 **Cursor CLI**（`cursor-agent` 在 PATH 中，并完成 `cursor-agent login` 等认证方式）
-3. 飞书企业自建应用：机器人、`im:message`、`im:message:send_as_bot`、`im:chat`
+3. 飞书企业自建应用：机器人、`im:message`、**`im:message.group_msg`**（群聊收消息必需）、`im:message:send_as_bot`、`im:chat`；若使用「仅 1 用户 + 1 机器人」免 @ 等需拉群信息的逻辑，还需按需开通 `im:chat` 相关只读权限（如查看群成员）
 
 ## 快速开始
 
@@ -70,7 +70,7 @@ npm run build && npm start
 ## 使用方式
 
 - **私聊**：直接发消息
-- **群聊**：@机器人 + 内容
+- **群聊**：@机器人 + 内容（开发平台须为应用开通 **`im:message.group_msg`**，否则群消息事件不会投递到机器人）
 - **多 session 切换**：`/new` 新建并切到该 session（旧 session 保持连接）；`/sessions` 列表；`/switch <编号或名称>` 切换活跃 session（无参数时切到上一次用过的）；`/close` 关闭指定；`/rename` 便于用名称切换。完整语法与快捷列表见 `docs/feishu-commands.md`
 - `/reset` 仅重置**当前活跃** session（同槽位换新 ACP 会话），不关闭其它 session
 - `/status` 或 `/状态`：会话统计，**并始终含当前活跃 slot 的 CLI resume ID**（若适配器未返回或 `create-chat` 失败则显示暂无）；`BRIDGE_DEBUG=true` 时额外含 ACP `sessionId`、路径等调试信息
