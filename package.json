@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
+    "dev:restart": "bash scripts/bridge-dev.sh",
     "postinstall": "patch-package"
   },
   "dependencies": {

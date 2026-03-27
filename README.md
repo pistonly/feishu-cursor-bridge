@@ -8,6 +8,7 @@
 - 回复流式推送到飞书（interactive 卡片，含回答、思考、工具、计划等区块）
 - 多用户会话隔离（私聊 / 群聊按用户维度映射 ACP `sessionId`）
 - **多 session**：同一用户在同一聊天中可同时持有多个 session（最多 5 个），各自独立上下文与工作区；可用 `/switch` 在它们之间切换，未活跃的 session 仍保持 ACP 连接
+- **每用户存活 session 上限**：同一飞书用户跨所有私聊/群/话题的存活 session 总数默认最多 **10**（可用 `BRIDGE_MAX_SESSIONS_PER_USER` 调整；`0` 表示不限制），避免将空闲过期设为无限时进程堆积过多 ACP 连接
 - 群聊 @ 机器人触发（或满足「仅 1 用户 + 1 机器人」时可免 @）；私聊直接对话
 - 内置命令：`/new`、`/sessions`、`/switch`、`/close`、`/rename`、`/reset`（含快捷列表 `/new list`、`/new <序号>` 等）、`/status`、`/model`（详见 `docs/feishu-commands.md`）
 - **CLI resume ID（PC 续聊）**：`/status` 会展示当前活跃 session 对应的 **CLI chat id**，与本机 `cursor-agent` 的 **`--resume`** 参数一致，便于在手机飞书聊完后到 PC 终端接手同一会话；该 id 与 ACP `sessionId` 不同，由适配器在 `create-chat` 时生成。上游包默认不在 `session/new` 回包中暴露此字段，本项目通过 **`patches/` + `patch-package`**（`npm install` 后自动打补丁）写入 `session/new` 的 `_meta.cursorChatId`。
@@ -46,6 +47,10 @@ cp .env.example .env
 npm run dev
 # 或
 npm run build && npm start
+
+# 调试：先结束已有实例再起 dev（与单实例锁配合，避免多进程）
+# ./scripts/bridge-dev.sh
+# npm run dev:restart
 ```
 
 ## 环境变量
@@ -62,6 +67,9 @@ npm run build && npm start
 | `CURSOR_ACP_EXTRA_ARGS` | 透传适配器 CLI（空格分隔） | 空 |
 | `BRIDGE_SESSION_STORE` | 飞书↔ACP 映射 JSON 路径 | `~/.feishu-cursor-bridge/.feishu-bridge-sessions.json` |
 | `SESSION_IDLE_TIMEOUT_MS` | 空闲多久新建会话；`0` / `infinity` 表示永不过期 | `604800000`（7 天） |
+| `BRIDGE_MAX_SESSIONS_PER_USER` | 同一用户存活 session 总数上限（跨聊天）；`0` 不限制 | `10` |
+| `BRIDGE_SINGLE_INSTANCE_LOCK` | 单实例锁文件路径（已存在且 PID 存活则拒绝启动） | `~/.feishu-cursor-bridge/bridge.lock` |
+| `BRIDGE_ALLOW_MULTIPLE_INSTANCES` | `true` 时禁用单实例锁（仅调试） | `false` |
 | `FEISHU_CARD_THROTTLE_MS` | 卡片更新节流 | `800` |
 | `AUTO_APPROVE_PERMISSIONS` | 自动选择允许类权限选项 | `true` |
 | `LOG_LEVEL` | `debug` / `info` / `warn` / `error` | `info` |

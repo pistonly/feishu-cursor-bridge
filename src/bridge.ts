@@ -38,6 +38,7 @@ export class Bridge {
       {
         debug: config.bridgeDebug,
         defaultWorkspaceRoot: config.acp.workspaceRoot,
+        maxSessionsPerUser: config.bridge.maxSessionsPerUser,
         onSessionWorkspace: (sessionId, root) => {
           this.bridgeClient.setSessionWorkspace(sessionId, root);
         },
@@ -465,7 +466,11 @@ export class Bridge {
       return;
     }
 
-    if (content === "/status" || content === "/状态") {
+    const statusTrim = content.trim();
+    if (
+      statusTrim === "/状态" ||
+      statusTrim.toLowerCase() === "/status"
+    ) {
       const stats = this.sessionManager.getStats();
       const snap = this.sessionManager.getSessionSnapshot(
         msg.chatId,
@@ -493,7 +498,7 @@ export class Bridge {
 
     // cursor-agent-acp 在 prompt 里识别 /model 后仍会把整句发给 CLI，导致大模型「解释命令」。
     // 这里直接走 session/set_model，不触发 prompt。
-    const modelMatch = content.match(/^\/model(?:\s+(\S+))?$/);
+    const modelMatch = content.trim().match(/^\/model(?:\s+(\S+))?$/i);
     if (modelMatch) {
       const modelId = modelMatch[1]?.trim();
       if (!modelId) {
@@ -622,7 +627,7 @@ export class Bridge {
     });
     await this.feishuBot.sendText(
       msg.chatId,
-      `📋 当前所有 session（共 ${slots.length} 个）：\n\n${lines.join("\n\n")}\n\n• \`/new\` — 新建 session\n• \`/switch <编号或名称>\` — 切换\n• \`/rename <新名字>\` — 重命名当前 session\n• \`/rename <编号或名称> <新名字>\` — 重命名指定 session\n• \`/close <编号或名称>\` — 关闭\n• \`/reset\` — 重置当前 session`,
+      `📋 当前所有 session（共 ${slots.length} 个；# 为槽位编号，关闭后不会复用，故可能与数量连续不一致）：\n\n${lines.join("\n\n")}\n\n• \`/new\` — 新建 session\n• \`/switch <编号或名称>\` — 切换\n• \`/rename <新名字>\` — 重命名当前 session\n• \`/rename <编号或名称> <新名字>\` — 重命名指定 session\n• \`/close <编号或名称>\` — 关闭\n• \`/reset\` — 重置当前 session`,
       msg.messageId,
       this.threadReplyOpts(msg),
     );

@@ -25,6 +25,11 @@ export interface Config {
     adapterSessionDir: string;
   };
   bridge: {
+    /**
+     * 同一飞书用户存活 session（非空闲过期）总数上限；`0` 表示不限制。
+     * @default 10
+     */
+    maxSessionsPerUser: number;
     sessionIdleTimeoutMs: number;
     sessionStorePath: string;
     cardUpdateThrottleMs: number;
@@ -32,6 +37,10 @@ export interface Config {
     workspacePresetsPath: string;
     /** 列表文件为空时，用环境变量种子初始化（绝对路径） */
     workspacePresetsSeed: string[];
+    /** 单实例锁文件路径（`BRIDGE_SINGLE_INSTANCE_LOCK`） */
+    singleInstanceLockPath: string;
+    /** 为 true 时不创建锁，允许多进程（仅调试用） */
+    allowMultipleInstances: boolean;
   };
   autoApprovePermissions: boolean;
   bridgeDebug: boolean;
@@ -94,6 +103,18 @@ function parseExtraArgs(raw: string | undefined): string[] {
 
 const DEFAULT_SESSION_IDLE_TIMEOUT_MS = 7 * 24 * 60 * 60_000;
 
+const DEFAULT_MAX_SESSIONS_PER_USER = 10;
+
+/** `0` 或负数表示不限制 */
+function parseMaxSessionsPerUser(raw: string | undefined): number {
+  const trimmed = raw?.trim();
+  if (!trimmed) return DEFAULT_MAX_SESSIONS_PER_USER;
+  const n = Number(trimmed);
+  if (!Number.isFinite(n)) return DEFAULT_MAX_SESSIONS_PER_USER;
+  if (n <= 0) return 0;
+  return Math.max(1, Math.floor(n));
+}
+
 function parseSessionIdleTimeoutMs(raw: string | undefined): number {
   const trimmed = raw?.trim();
   if (!trimmed) return DEFAULT_SESSION_IDLE_TIMEOUT_MS;
@@ -153,6 +174,21 @@ export function loadConfig(): Config {
     ),
   );
 
+  const defaultSingleInstanceLock = path.join(
+    os.homedir(),
+    ".feishu-cursor-bridge",
+    "bridge.lock",
+  );
+  const singleInstanceLockPath = path.resolve(
+    expandHome(
+      process.env["BRIDGE_SINGLE_INSTANCE_LOCK"]?.trim() ||
+        defaultSingleInstanceLock,
+    ),
+  );
+  const allowMultipleInstances =
+    (process.env["BRIDGE_ALLOW_MULTIPLE_INSTANCES"] ?? "false").toLowerCase() ===
+    "true";
+
   const defaultPresetsFile = path.join(
     os.homedir(),
     ".feishu-cursor-bridge",
@@ -174,6 +210,10 @@ export function loadConfig(): Config {
 
   const sessionIdleTimeoutMs = parseSessionIdleTimeoutMs(
     process.env["SESSION_IDLE_TIMEOUT_MS"],
+  );
+
+  const maxSessionsPerUser = parseMaxSessionsPerUser(
+    process.env["BRIDGE_MAX_SESSIONS_PER_USER"],
   );
 
   const cardUpdateThrottleMs = Math.max(
@@ -205,11 +245,14 @@ export function loadConfig(): Config {
       adapterSessionDir,
     },
     bridge: {
+      maxSessionsPerUser,
       sessionIdleTimeoutMs,
       sessionStorePath,
       cardUpdateThrottleMs,
       workspacePresetsPath,
       workspacePresetsSeed,
+      singleInstanceLockPath,
+      allowMultipleInstances,
     },
     autoApprovePermissions:
       (process.env["AUTO_APPROVE_PERMISSIONS"] ?? "true").toLowerCase() ===

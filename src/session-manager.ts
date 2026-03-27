@@ -59,6 +59,11 @@ export interface SessionManagerOptions {
   defaultWorkspaceRoot: string;
   /** 每个 key 最多保留的 slot 数量 */
   maxSlotsPerKey?: number;
+  /**
+   * 同一飞书用户存活 session 总数上限（跨所有私聊/群/话题）；`0` 表示不限制。
+   * @default 10
+   */
+  maxSessionsPerUser?: number;
   onSessionWorkspace?: (sessionId: string, workspaceRoot: string) => void;
   onSessionWorkspaceRemove?: (sessionId: string) => void;
 }
@@ -79,6 +84,8 @@ export class SessionManager {
   private debug: boolean;
   private readonly defaultWorkspaceRoot: string;
   private readonly maxSlots: number;
+  /** `0` 表示不限制 */
+  private readonly maxSessionsPerUser: number;
   private readonly onSessionWorkspace?: (sessionId: string, workspaceRoot: string) => void;
   private readonly onSessionWorkspaceRemove?: (sessionId: string) => void;
 
@@ -96,6 +103,7 @@ export class SessionManager {
       options?.defaultWorkspaceRoot ?? process.cwd(),
     );
     this.maxSlots = options?.maxSlotsPerKey ?? 5;
+    this.maxSessionsPerUser = options?.maxSessionsPerUser ?? 10;
     this.onSessionWorkspace = options?.onSessionWorkspace;
     this.onSessionWorkspaceRemove = options?.onSessionWorkspaceRemove;
   }
@@ -180,6 +188,7 @@ export class SessionManager {
     }
 
     // No group or no valid slot — create fresh group with slot #1
+    this.assertCanAddUserSession(userId, now);
     const { sessionId, cursorCliChatId } = await this.acp.newSession(
       this.defaultWorkspaceRoot,
     );
@@ -234,6 +243,7 @@ export class SessionManager {
         threadId,
       );
     }
+    this.assertCanAddUserSession(userId, now);
     if (group && group.slots.length >= this.maxSlots) {
       throw new Error(
         `已达到最多 ${this.maxSlots} 个 session 的上限，请先用 /close <编号> 关闭一个。`,
@@ -503,7 +513,8 @@ export class SessionManager {
       );
     }
     if (!group) return [];
-    return group.slots.map((s) => ({
+    const ordered = [...group.slots].sort((a, b) => a.slotIndex - b.slotIndex);
+    return ordered.map((s) => ({
       slotIndex: s.slotIndex,
       name: s.name,
       workspaceRoot: s.session.workspaceRoot,
@@ -567,6 +578,7 @@ export class SessionManager {
 
     if (!group) {
       // Bootstrap fresh
+      this.assertCanAddUserSession(userId, now);
       const { sessionId, cursorCliChatId } = await this.acp.newSession(cwd);
       const session = this.makeSession(
         sessionId,
@@ -958,6 +970,33 @@ export class SessionManager {
     void this.store.flush().catch((e) => {
       console.error("[session] flush failed:", e);
     });
+  }
+
+  /**
+   * 统计同一用户在持久化存储中的存活 slot 数（含尚未加载到内存的会话），
+   * 与 `SESSION_IDLE_TIMEOUT_MS` 的过期判定一致。
+   */
+  private countAliveSlotsForUser(userId: string, now: number): number {
+    let n = 0;
+    for (const key of this.store.allKeys()) {
+      const g = this.store.get(key);
+      if (!g || g.userId !== userId) continue;
+      for (const ps of g.slots) {
+        if (!this.isExpiredAt(ps.lastActiveAt, now)) n++;
+      }
+    }
+    return n;
+  }
+
+  /** 在新增一个 slot（多出一个存活 session）之前调用 */
+  private assertCanAddUserSession(userId: string, now: number): void {
+    if (this.maxSessionsPerUser <= 0) return;
+    const n = this.countAliveSlotsForUser(userId, now);
+    if (n >= this.maxSessionsPerUser) {
+      throw new Error(
+        `已达到同一用户最多 ${this.maxSessionsPerUser} 个存活 session 的上限，请先在其它会话中执行 /close 或等待空闲过期后再试。`,
+      );
+    }
   }
 
   private isExpiredAt(lastActiveAt: number, now: number): boolean {

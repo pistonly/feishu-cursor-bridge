@@ -31,14 +31,23 @@ export function parseNewConversationCommand(
   if (!body) return null;
   const tokens = parseShellLikeArgs(body);
   if (tokens.length === 0) return null;
-  const cmd = tokens[0];
+  /** 首 token 一律按小写识别，避免飞书端自动大写首字母导致命令失效 */
+  const cmd = tokens[0].toLowerCase();
 
-  if (cmd !== "reset" && cmd !== "new" && cmd !== "switch" && cmd !== "rename" && cmd !== "close" && cmd !== "sessions") {
+  if (
+    cmd !== "reset" &&
+    cmd !== "new" &&
+    cmd !== "switch" &&
+    cmd !== "rename" &&
+    cmd !== "close" &&
+    cmd !== "sessions" &&
+    cmd !== "session"
+  ) {
     return null;
   }
 
-  // /sessions — list all slots
-  if (cmd === "sessions") {
+  // /sessions — list all slots（/session 为别名）
+  if (cmd === "sessions" || cmd === "session") {
     return { kind: "sessions" };
   }
 
@@ -98,15 +107,16 @@ export function parseNewConversationCommand(
   }
 
   const sub = remainingTokens[0];
+  const subLc = sub.toLowerCase();
 
-  if (sub === "list") {
+  if (subLc === "list") {
     return { kind: "new", variant: "list" };
   }
-  if (sub === "add-list") {
+  if (subLc === "add-list") {
     const rest = remainingTokens.slice(1).join(" ").trim();
     return { kind: "new", variant: "add-list", path: rest };
   }
-  if (sub === "remove-list") {
+  if (subLc === "remove-list") {
     const idxTok = remainingTokens[1];
     if (!idxTok || !/^\d+$/.test(idxTok)) {
       return { kind: "new", variant: "remove-list", index: 0 };
@@ -138,11 +148,13 @@ function extractNameFlag(tokens: string[]): { name: string | undefined; remainin
   let i = 0;
   while (i < tokens.length) {
     const tok = tokens[i];
-    if (tok === "--name" && i + 1 < tokens.length) {
+    const tokLc = tok.toLowerCase();
+    if (tokLc === "--name" && i + 1 < tokens.length) {
       name = tokens[i + 1];
       i += 2;
-    } else if (tok.startsWith("--name=")) {
-      name = tok.slice("--name=".length);
+    } else if (tokLc.startsWith("--name=")) {
+      const eq = tok.indexOf("=");
+      name = eq >= 0 ? tok.slice(eq + 1) : "";
       i++;
     } else {
       remaining.push(tok);
