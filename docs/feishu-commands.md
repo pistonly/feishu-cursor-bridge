@@ -1,6 +1,6 @@
 # 飞书端支持的命令
 
-本文说明由 **飞书-Cursor 桥接服务**（`src/bridge.ts`）直接识别并处理的命令。其它以 `/` 开头的文本若未命中下表，会作为普通对话交给 Cursor Agent（`cursor-agent-acp`），行为与 Cursor 客户端内类似。
+本文说明由 **飞书-Cursor 桥接服务**（`src/bridge.ts`）直接识别并处理的命令。其它以 `/` 开头的文本若未命中下表，会作为普通对话交给 Cursor Agent（`cursor-agent-acp`），行为与 Cursor 客户端内类似。**例外**：首条非空行以 `/topic` 开头的消息会被桥接直接忽略，不交给 Agent（见下文）。
 
 ## 私聊与群聊
 
@@ -24,6 +24,21 @@
 ---
 
 ## 桥接内置命令
+
+### 话题标题（`/topic`）
+
+这是**普通文本命令**（与 `/sessions`、`/new` 一样由用户手打），格式为：
+
+```text
+/topic
+/topic <话题内容>
+```
+
+示例：`/topic 后端 API 重构`、`/topic`。`/topic` 后须为**词边界**（空格、行尾等），避免与 `/topics` 等混淆。
+
+桥接行为：对 **msg 原文按行拆分**（保留换行），每行单独去掉 @ / `<at>` 后，若**任意一行**以 `/topic` 开头（命令），则**整条消息**不发给 Cursor Agent、不回复；消息仍显示在飞书里。命中时进程日志会出现 `[bridge] /topic ignored — no session, no ACP prompt`。
+
+---
 
 ### 1. 新建 session（`/new`）
 

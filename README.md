@@ -10,7 +10,7 @@
 - **多 session**：同一用户在同一聊天中可同时持有多个 session（最多 5 个），各自独立上下文与工作区；可用 `/switch` 在它们之间切换，未活跃的 session 仍保持 ACP 连接
 - **每用户存活 session 上限**：同一飞书用户跨所有私聊/群/话题的存活 session 总数默认最多 **10**（可用 `BRIDGE_MAX_SESSIONS_PER_USER` 调整；`0` 表示不限制），避免将空闲过期设为无限时进程堆积过多 ACP 连接
 - 群聊 @ 机器人触发（或满足「仅 1 用户 + 1 机器人」时可免 @）；私聊直接对话
-- 内置命令：`/new`、`/sessions`、`/switch`、`/close`（含 `/close all`）、`/rename`、`/reset`（含快捷列表 `/new list`、`/new <序号>` 等）、`/status`、`/model`（详见 `docs/feishu-commands.md`）
+- 内置命令：`/new`、`/sessions`、`/switch`、`/close`（含 `/close all`）、`/rename`、`/reset`（含快捷列表 `/new list`、`/new <序号>` 等）、`/status`、`/model`；另有 **`/topic` + 话题内容** 的纯展示命令（不发给 Agent，见 `docs/feishu-commands.md`）
 - **CLI resume ID（PC 续聊）**：`/status` 会展示当前活跃 session 对应的 **CLI chat id**，与本机 `cursor-agent` 的 **`--resume`** 参数一致，便于在手机飞书聊完后到 PC 终端接手同一会话；该 id 与 ACP `sessionId` 不同，由适配器在 `create-chat` 时生成。上游包默认不在 `session/new` 回包中暴露此字段，本项目通过 **`patches/` + `patch-package`**（`npm install` 后自动打补丁）写入 `session/new` 的 `_meta.cursorChatId`。
 - 会话映射持久化：进程重启后若 Agent 声明 `loadSession`，可 `session/load` 恢复；**CLI resume ID** 同时写入 `BRIDGE_SESSION_STORE`，与 ACP 会话一并恢复（旧的无该字段的持久化记录在 `/reset` 或新建会话后才会出现 id）
 

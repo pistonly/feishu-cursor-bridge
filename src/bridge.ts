@@ -131,8 +131,65 @@ export class Bridge {
     return `${msg.chatId}:${msg.senderId}`;
   }
 
+  /**
+   * `/topic …` 普通命令：整条消息直接丢弃，不调 SessionManager、不连 ACP、不建 session。
+   * 飞书富文本常把 `/topic` 包在 **、`` ` `` 里，行首不是 `/`，需额外判断。
+   */
+  private shouldIgnoreTopicMessage(msg: FeishuMessage): boolean {
+    const raw = msg.content.replace(/\r\n/g, "\n").trim();
+    const mentions = msg.mentions;
+    for (const lineRaw of raw.split("\n")) {
+      const line = this.feishuBot
+        .stripBotMentionKeepLines(lineRaw.trim(), mentions)
+        .trim();
+      if (!line) continue;
+
+      let head = line
+        .replace(/^[\uFEFF\u200b-\u200d\u3000\s]+/, "")
+        .replace(/^／/, "/")
+        .trimStart();
+      for (let i = 0; i < 24; i++) {
+        const n = head.replace(/^(\*{1,2}|`{1,3}|_{1,2}|~{1,2}|>+|\s)+/, "");
+        if (n === head) break;
+        head = n.trimStart();
+      }
+      head = head.replace(/^／/, "/").trimStart();
+      if (/^\/topic\b/i.test(head)) {
+        console.log("[bridge] /topic ignored — no session, no ACP prompt");
+        return true;
+      }
+
+      const m = line.match(/\/topic\b/i);
+      if (m && m.index !== undefined) {
+        const before = line.slice(0, m.index);
+        if (
+          !/[\u4e00-\u9fff]/.test(before) &&
+          /^[\s`*_~>"'（）【】\[\]\\\-+/=|.,:;!?]*$/.test(before)
+        ) {
+          console.log(
+            "[bridge] /topic ignored (wrapped in markdown, no text before /topic) — no session, no ACP prompt",
+          );
+          return true;
+        }
+      }
+    }
+    // 极短消息：飞书可能把整段包成一句说明 + `` `/topic` ``，上面规则仍够不着
+    if (raw.length <= 120 && /\/topic\b/i.test(raw)) {
+      console.log(
+        "[bridge] /topic ignored (short message, contains /topic) — no session, no ACP prompt",
+      );
+      return true;
+    }
+    return false;
+  }
+
   private async handleFeishuMessage(msg: FeishuMessage): Promise<void> {
     if (msg.contentType !== "text" && msg.contentType !== "post") {
+      return;
+    }
+
+    // 在任何 await、群成员校验、SessionManager、ACP 之前丢弃（整条消息当没看见）
+    if (this.shouldIgnoreTopicMessage(msg)) {
       return;
     }
 
@@ -651,7 +708,7 @@ export class Bridge {
     });
     await this.feishuBot.sendText(
       msg.chatId,
-      `📋 当前所有 session（共 ${slots.length} 个；# 为槽位编号，关闭后不会复用，故可能与数量连续不一致）：\n\n${lines.join("\n\n")}\n\n• \`/new\` — 新建 session\n• \`/switch <编号或名称>\` — 切换\n• \`/rename <新名字>\` — 重命名当前 session\n• \`/rename <编号或名称> <新名字>\` — 重命名指定 session\n• \`/close <编号或名称>\` — 关闭\n• \`/close all\` — 关闭本组全部\n• \`/reset\` — 重置当前 session`,
+      `📋 当前所有 session（共 ${slots.length} 个；# 为槽位编号，关闭后不会复用，故可能与数量连续不一致）：\n\n${lines.join("\n\n")}\n\n• \`/new\` — 新建 session\n• \`/switch <编号或名称>\` — 切换\n• \`/rename <新名字>\` — 重命名当前 session\n• \`/rename <编号或名称> <新名字>\` — 重命名指定 session\n• \`/close <编号或名称>\` — 关闭\n• \`/close all\` — 关闭本组全部\n• \`/reset\` — 重置当前 session\n• \`/topic …\` — 仅发飞书、不发给 Agent（便于话题内写标题）`,
       msg.messageId,
       this.threadReplyOpts(msg),
     );

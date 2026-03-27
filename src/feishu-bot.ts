@@ -477,6 +477,16 @@ export class FeishuBot extends EventEmitter {
     content: string,
     mentions?: FeishuMessage["mentions"],
   ): string {
+    return this.stripBotMentionKeepLines(content, mentions).replace(/\s+/g, " ").trim();
+  }
+
+  /**
+   * 去掉 @ 与 `<at>`，**保留换行**（`stripBotMention` 会把整段压成一行，破坏按行判断如 `/topic`）。
+   */
+  stripBotMentionKeepLines(
+    content: string,
+    mentions?: FeishuMessage["mentions"],
+  ): string {
     let result = content;
     if (mentions && mentions.length > 0) {
       for (const m of mentions) {
@@ -491,12 +501,10 @@ export class FeishuBot extends EventEmitter {
         }
       }
     }
-    // 文本里常见占位：@_user_1
     result = result.replace(/@_user_\d+/g, "");
-    // 文本消息里的 <at user_id="ou_xxx">…</at>（user_id 实为 open_id）
     result = result.replace(/<at\b[^>]*>[\s\S]*?<\/at>/gi, "");
     result = result.replace(/<at\b[^>]*\/>/gi, "");
-    return result.replace(/\s+/g, " ").trim();
+    return result.trim();
   }
 
   getBotOpenId(): string | undefined {
