@@ -11,6 +11,17 @@ import {
 import type { Config } from "../config.js";
 import { FeishuBridgeClient } from "./feishu-bridge-client.js";
 
+/** 调试打印 env 时对疑似敏感变量名脱敏 */
+function redactEnvForLog(env: NodeJS.ProcessEnv): Record<string, string | undefined> {
+  const sensitive = /secret|password|token|credential|authorization|api_?key|private/i;
+  const out: Record<string, string | undefined> = {};
+  for (const key of Object.keys(env).sort()) {
+    const v = env[key];
+    out[key] = sensitive.test(key) && v ? "***" : v;
+  }
+  return out;
+}
+
 /**
  * 子进程运行 @blowmage/cursor-agent-acp，通过官方 SDK ClientSideConnection 对接标准 ACP stdio。
  */
@@ -58,10 +69,21 @@ export class AcpRuntime {
 
     args.push("--session-dir", adapterSessionDir);
 
+    const acpEnv = { ...process.env };
+    if (this.config.bridgeDebug || this.config.logLevel === "debug") {
+      console.log(
+        `[acp] spawn cwd=${workspaceRoot} node=${nodePath} args=${JSON.stringify(args)}`,
+      );
+      console.log(
+        "[acp] spawn env (敏感键名已脱敏，需完整明文可临时改 redactEnvForLog):",
+        JSON.stringify(redactEnvForLog(acpEnv), null, 2),
+      );
+    }
+
     const child = spawn(nodePath, args, {
       cwd: workspaceRoot,
       stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env },
+      env: acpEnv,
     });
 
     this.child = child;
