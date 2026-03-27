@@ -92,16 +92,18 @@ function parseExtraArgs(raw: string | undefined): string[] {
   return parseShellLikeArgs(raw.trim());
 }
 
+const DEFAULT_SESSION_IDLE_TIMEOUT_MS = 7 * 24 * 60 * 60_000;
+
 function parseSessionIdleTimeoutMs(raw: string | undefined): number {
   const trimmed = raw?.trim();
-  if (!trimmed) return 30 * 60_000;
+  if (!trimmed) return DEFAULT_SESSION_IDLE_TIMEOUT_MS;
   if (trimmed === "0" || /^infinity$/i.test(trimmed) || /^inf$/i.test(trimmed)) {
     return Number.POSITIVE_INFINITY;
   }
 
   const parsed = Number(trimmed);
   if (!Number.isFinite(parsed) || parsed <= 0) {
-    return 30 * 60_000;
+    return DEFAULT_SESSION_IDLE_TIMEOUT_MS;
   }
   return Math.max(60_000, parsed);
 }
