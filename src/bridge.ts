@@ -273,13 +273,34 @@ export class Bridge {
           if (typeof newConv.target === "number" && isNaN(newConv.target as number)) {
             await this.feishuBot.sendText(
               msg.chatId,
-              "用法：`/close <编号或名称>`\n\n发送 `/sessions` 查看当前所有 session。",
+              "用法：`/close <编号或名称>` 或 `/close all`\n\n发送 `/sessions` 查看当前所有 session。",
               msg.messageId,
               this.threadReplyOpts(msg),
             );
             return;
           }
-          const closed = await this.sessionManager.closeSlot(
+          if (newConv.target === "all") {
+            const { closed } = await this.sessionManager.closeAllSlots(
+              msg.chatId,
+              msg.senderId,
+              msg.chatType,
+              this.threadScope(msg),
+            );
+            const summary = closed
+              .map((s) => {
+                const lab = s.name ? ` (${s.name})` : "";
+                return `#${s.slotIndex}${lab}`;
+              })
+              .join("、");
+            await this.feishuBot.sendText(
+              msg.chatId,
+              `✅ 已关闭本组全部 ${closed.length} 个 session：${summary}\n\n已释放全局配额；下次发消息会新建 session。`,
+              msg.messageId,
+              this.threadReplyOpts(msg),
+            );
+            return;
+          }
+          const { closed, removedEntireGroup } = await this.sessionManager.closeSlot(
             msg.chatId,
             msg.senderId,
             msg.chatType,
@@ -287,9 +308,12 @@ export class Bridge {
             this.threadScope(msg),
           );
           const label = closed.name ? ` (${closed.name})` : "";
+          const tail = removedEntireGroup
+            ? "\n\n该聊天/话题下已无 session，已释放全局配额；下次发消息会新建 session。"
+            : "";
           await this.feishuBot.sendText(
             msg.chatId,
-            `✅ 已关闭 session #${closed.slotIndex}${label}`,
+            `✅ 已关闭 session #${closed.slotIndex}${label}${tail}`,
             msg.messageId,
             this.threadReplyOpts(msg),
           );
@@ -627,7 +651,7 @@ export class Bridge {
     });
     await this.feishuBot.sendText(
       msg.chatId,
-      `📋 当前所有 session（共 ${slots.length} 个；# 为槽位编号，关闭后不会复用，故可能与数量连续不一致）：\n\n${lines.join("\n\n")}\n\n• \`/new\` — 新建 session\n• \`/switch <编号或名称>\` — 切换\n• \`/rename <新名字>\` — 重命名当前 session\n• \`/rename <编号或名称> <新名字>\` — 重命名指定 session\n• \`/close <编号或名称>\` — 关闭\n• \`/reset\` — 重置当前 session`,
+      `📋 当前所有 session（共 ${slots.length} 个；# 为槽位编号，关闭后不会复用，故可能与数量连续不一致）：\n\n${lines.join("\n\n")}\n\n• \`/new\` — 新建 session\n• \`/switch <编号或名称>\` — 切换\n• \`/rename <新名字>\` — 重命名当前 session\n• \`/rename <编号或名称> <新名字>\` — 重命名指定 session\n• \`/close <编号或名称>\` — 关闭\n• \`/close all\` — 关闭本组全部\n• \`/reset\` — 重置当前 session`,
       msg.messageId,
       this.threadReplyOpts(msg),
     );

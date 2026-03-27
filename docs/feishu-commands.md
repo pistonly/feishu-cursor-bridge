@@ -114,15 +114,19 @@
 
 ```text
 /close <编号或名称>
+/close all
 ```
 
-关闭并移除指定的 session（发送 ACP cancel + close），释放资源。**不能关闭唯一剩余的 session**（需用 `/reset` 代替）。
+关闭并移除指定的 session（发送 ACP cancel + close），释放资源。若关闭后该聊天/话题下已无任何 session，会从持久化中移除该 topic，**释放同一用户全局 session 配额**；之后在该处发消息会新建 session。多槽时仅移除指定槽；只剩一个槽时关闭即整 topic 清空（与闲置过期清理后效果类似）。
+
+`/close all` 会一次性关闭**当前聊天/话题组内**的全部 slot，效果等同于对该组内每个 session 逐个执行 `/close`，便于快速腾出全局配额。关键字 `all` 为保留用法；若某 slot 的显示名称恰好为 `all`，请用编号关闭（如 `/close 2`）。
 
 **示例**：
 
 ```text
 /close 3
 /close frontend
+/close all
 ```
 
 ---

@@ -434,7 +434,7 @@ export class SessionManager {
     chatTypeRaw: string,
     target: number | string,
     threadId?: string,
-  ): Promise<SessionSlot> {
+  ): Promise<{ closed: SessionSlot; removedEntireGroup: boolean }> {
     const chatType = this.chatType(chatTypeRaw);
     const key = this.makeKey(chatId, userId, chatType, threadId);
     const now = Date.now();
@@ -453,9 +453,6 @@ export class SessionManager {
     if (!group || group.slots.length === 0) {
       throw new Error("当前没有任何 session。");
     }
-    if (group.slots.length === 1) {
-      throw new Error("不能关闭唯一的 session。如需重置，请使用 /reset。");
-    }
 
     const slot = this.resolveSlot(group, target);
     if (!slot) {
@@ -472,6 +469,16 @@ export class SessionManager {
 
     group.slots = group.slots.filter((s) => s.slotIndex !== slot.slotIndex);
 
+    if (group.slots.length === 0) {
+      this.groups.delete(key);
+      this.store.delete(key);
+      void this.store.flush().catch(() => {});
+      if (this.debug) {
+        console.log(`[session] close slot (last, group removed) key=${key} slot=#${slot.slotIndex}`);
+      }
+      return { closed: slot, removedEntireGroup: true };
+    }
+
     // If we closed the active slot, switch to the most recently active remaining slot
     if (group.activeSlotIndex === slot.slotIndex) {
       const best = group.slots.reduce((a, b) =>
@@ -486,7 +493,51 @@ export class SessionManager {
     if (this.debug) {
       console.log(`[session] close slot key=${key} slot=#${slot.slotIndex}`);
     }
-    return slot;
+    return { closed: slot, removedEntireGroup: false };
+  }
+
+  /**
+   * 关闭当前 sessionKey 下全部 slot（cancel + close ACP），并移除持久化，释放全局配额。
+   */
+  async closeAllSlots(
+    chatId: string,
+    userId: string,
+    chatTypeRaw: string,
+    threadId?: string,
+  ): Promise<{ closed: SessionSlot[] }> {
+    const chatType = this.chatType(chatTypeRaw);
+    const key = this.makeKey(chatId, userId, chatType, threadId);
+    const now = Date.now();
+
+    let group = this.groups.get(key);
+    if (!group) {
+      group = await this.restoreGroupFromStore(
+        key,
+        chatId,
+        userId,
+        chatType,
+        now,
+        threadId,
+      );
+    }
+    if (!group || group.slots.length === 0) {
+      throw new Error("当前没有任何 session。");
+    }
+
+    const toClose = [...group.slots];
+    for (const slot of toClose) {
+      this.onSessionWorkspaceRemove?.(slot.session.sessionId);
+      await this.acp.cancelSession(slot.session.sessionId);
+      await this.acp.closeSession(slot.session.sessionId);
+    }
+
+    this.groups.delete(key);
+    this.store.delete(key);
+    void this.store.flush().catch(() => {});
+    if (this.debug) {
+      console.log(`[session] close all slots key=${key} count=${toClose.length}`);
+    }
+    return { closed: toClose };
   }
 
   // -------------------------------------------------------------------------

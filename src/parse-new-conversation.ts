@@ -19,7 +19,7 @@ export type NewConversationCommand =
  * - `/reset`、`/new`（含 `/new 1`、`/new list`、`/new add-list`、`/new remove-list`、`/new --name`）
  * - `/switch [编号或名称]`
  * - `/rename <新名字>`、`/rename <编号或名称> <新名字>`
- * - `/close <编号或名称>`
+ * - `/close <编号或名称>`、`/close all`
  * - `/sessions`
  */
 export function parseNewConversationCommand(
@@ -79,13 +79,16 @@ export function parseNewConversationCommand(
     };
   }
 
-  // /close <target>
+  // /close <target> | /close all
   if (cmd === "close") {
     if (tokens.length < 2) {
       // Return a sentinel that bridge.ts will handle as missing-arg error
       return { kind: "close", target: NaN as unknown as number };
     }
     const arg = tokens[1];
+    if (arg.toLowerCase() === "all") {
+      return { kind: "close", target: "all" };
+    }
     const num = parseInt(arg, 10);
     return { kind: "close", target: isNaN(num) ? arg : num };
   }
