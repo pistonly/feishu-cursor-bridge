@@ -9,6 +9,7 @@ import { SessionStore } from "./session-store.js";
 import { ConversationService } from "./conversation-service.js";
 import { resolveAllowedWorkspaceDir } from "./workspace-policy.js";
 import { WorkspacePresetsStore } from "./workspace-presets-store.js";
+import { captureAcpReplayDuring } from "./acp/replay-capture.js";
 
 export class Bridge {
   private config: Config;
@@ -227,6 +228,72 @@ export class Bridge {
         // ----------------------------------------------------------------
         if (newConv.kind === "sessions") {
           await this.handleSessionsList(msg);
+          return;
+        }
+
+        // ----------------------------------------------------------------
+        // /resume — ACP session/load
+        // ----------------------------------------------------------------
+        if (newConv.kind === "resume") {
+          const session = await this.sessionManager.getOrCreateSession(
+            msg.chatId,
+            msg.senderId,
+            msg.chatType,
+            this.threadScope(msg),
+          );
+          if (!this.acpRuntime.supportsLoadSession) {
+            await this.feishuBot.sendText(
+              msg.chatId,
+              "❌ 当前 Agent 未宣告 `loadSession`，无法执行 `/resume`。",
+              msg.messageId,
+              this.threadReplyOpts(msg),
+            );
+            return;
+          }
+          try {
+            const replayMd = await captureAcpReplayDuring(
+              this.bridgeClient,
+              session.sessionId,
+              () =>
+                this.acpRuntime.loadSession(
+                  session.sessionId,
+                  session.workspaceRoot,
+                ),
+            );
+
+            const header =
+              `✅ 已对当前 session 执行 ACP \`session/load\`。\n` +
+              `• sessionId：\`${session.sessionId}\`\n` +
+              `• 工作区：\`${session.workspaceRoot}\`\n\n` +
+              `---\n\n` +
+              `**会话历史回放（适配器推送）**\n\n`;
+
+            const emptyHint =
+              "_（未收到可展示的文本回放：可能历史为空、或仅有非 text 内容块；可设 `ACP_RELOAD_TRACE_LOG=true` 查看入站 `session/update`）_";
+
+            let body = replayMd.trim() ? replayMd.trim() : emptyHint;
+
+            const MAX_TOTAL = 28_000;
+            if (header.length + body.length > MAX_TOTAL) {
+              body =
+                body.slice(0, Math.max(0, MAX_TOTAL - header.length - 120)) +
+                "\n\n_（回放过长，已截断）_";
+            }
+
+            await this.feishuBot.sendText(
+              msg.chatId,
+              header + body,
+              msg.messageId,
+              this.threadReplyOpts(msg),
+            );
+          } catch (err) {
+            await this.feishuBot.sendText(
+              msg.chatId,
+              `❌ /resume 失败:\n${formatJsonRpcLikeError(err)}`,
+              msg.messageId,
+              this.threadReplyOpts(msg),
+            );
+          }
           return;
         }
 
@@ -708,7 +775,7 @@ export class Bridge {
     });
     await this.feishuBot.sendText(
       msg.chatId,
-      `📋 当前所有 session（共 ${slots.length} 个；# 为槽位编号，关闭后不会复用，故可能与数量连续不一致）：\n\n${lines.join("\n\n")}\n\n• \`/new\` — 新建 session\n• \`/switch <编号或名称>\` — 切换\n• \`/rename <新名字>\` — 重命名当前 session\n• \`/rename <编号或名称> <新名字>\` — 重命名指定 session\n• \`/close <编号或名称>\` — 关闭\n• \`/close all\` — 关闭本组全部\n• \`/reset\` — 重置当前 session\n• \`/topic …\` — 仅发飞书、不发给 Agent（便于话题内写标题）`,
+      `📋 当前所有 session（共 ${slots.length} 个；# 为槽位编号，关闭后不会复用，故可能与数量连续不一致）：\n\n${lines.join("\n\n")}\n\n• \`/new\` — 新建 session\n• \`/switch <编号或名称>\` — 切换\n• \`/resume\` — 对当前 session 执行 ACP \`session/load\`（测试/恢复）\n• \`/rename <新名字>\` — 重命名当前 session\n• \`/rename <编号或名称> <新名字>\` — 重命名指定 session\n• \`/close <编号或名称>\` — 关闭\n• \`/close all\` — 关闭本组全部\n• \`/reset\` — 重置当前 session\n• \`/topic …\` — 仅发飞书、不发给 Agent（便于话题内写标题）`,
       msg.messageId,
       this.threadReplyOpts(msg),
     );

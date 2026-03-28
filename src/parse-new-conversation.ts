@@ -12,7 +12,9 @@ export type NewConversationCommand =
   | { kind: "switch"; target: number | string | null }
   | { kind: "rename"; target: number | string | null; name: string }
   | { kind: "close"; target: number | string }
-  | { kind: "sessions" };
+  | { kind: "sessions" }
+  /** 对当前活跃 slot 调用 ACP `session/load`（测试/恢复用） */
+  | { kind: "resume" };
 
 /**
  * 解析重置/会话类命令：
@@ -21,6 +23,7 @@ export type NewConversationCommand =
  * - `/rename <新名字>`、`/rename <编号或名称> <新名字>`
  * - `/close <编号或名称>`、`/close all`
  * - `/sessions`
+ * - `/resume`
  */
 export function parseNewConversationCommand(
   content: string,
@@ -41,7 +44,8 @@ export function parseNewConversationCommand(
     cmd !== "rename" &&
     cmd !== "close" &&
     cmd !== "sessions" &&
-    cmd !== "session"
+    cmd !== "session" &&
+    cmd !== "resume"
   ) {
     return null;
   }
@@ -49,6 +53,11 @@ export function parseNewConversationCommand(
   // /sessions — list all slots（/session 为别名）
   if (cmd === "sessions" || cmd === "session") {
     return { kind: "sessions" };
+  }
+
+  // /resume — ACP session/load 当前活跃 session
+  if (cmd === "resume") {
+    return { kind: "resume" };
   }
 
   // /switch [target]

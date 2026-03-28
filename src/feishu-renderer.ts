@@ -16,6 +16,8 @@ export class FeishuCardState {
 
   apply(ev: BridgeAcpEvent): void {
     switch (ev.type) {
+      case "user_message_chunk":
+        break;
       case "agent_message_chunk":
         this.main += ev.text;
         break;

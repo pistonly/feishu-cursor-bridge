@@ -54,6 +54,52 @@ export class AcpRuntime {
     return c != null && typeof c === "object";
   }
 
+  /** Agent 在 initialize 中宣告 `session/list` 时，可调用 `session/list` 对照 sessionId 是否仍在 Agent 侧 */
+  get supportsListSessions(): boolean {
+    const list = this.initResult?.agentCapabilities?.sessionCapabilities?.list;
+    return list != null && typeof list === "object";
+  }
+
+  /**
+   * `prompt` 返回 null 时协议未给出 stopReason；记录连接/子进程/（若支持）session/list 等可观测状态。
+   * 说明：这仍不是 Agent 内部完整状态，但能区分「连接已断」「目标 session 不在 list」等情况。
+   */
+  private async logPromptNullDiagnostics(
+    sessionId: string,
+    conn: ClientSideConnection,
+  ): Promise<void> {
+    const snap: Record<string, unknown> = {
+      sessionId,
+      connectionAborted: conn.signal.aborted,
+      adapterChildMissing: this.child == null,
+      adapterPid: this.child?.pid,
+      adapterKilled: this.child?.killed === true,
+      agentAdvertisesListSessions: this.supportsListSessions,
+      agentAdvertisesLoadSession: this.supportsLoadSession,
+    };
+    if (this.child) {
+      snap.adapterExitCode = this.child.exitCode;
+      snap.adapterSignal = this.child.signalCode;
+    }
+    if (this.supportsListSessions) {
+      try {
+        const listed = await conn.listSessions({});
+        const ids = listed.sessions.map((s: { sessionId: string }) => s.sessionId);
+        snap.listSessionsCount = listed.sessions.length;
+        snap.promptSessionIdInAgentList = ids.includes(sessionId);
+        snap.agentSessionIdsSample = ids.slice(0, 12);
+      } catch (e) {
+        snap.listSessionsError = e instanceof Error ? e.message : String(e);
+      }
+    } else {
+      snap.listSessions = "agent_did_not_advertise_session_list";
+    }
+    console.warn(
+      "[acp] session/prompt 返回 null（无 stopReason，可观测快照）:",
+      JSON.stringify(snap),
+    );
+  }
+
   async start(): Promise<void> {
     if (this.child) {
       throw new Error("ACP adapter already running");
@@ -175,11 +221,32 @@ export class AcpRuntime {
       throw new Error("Agent does not advertise loadSession");
     }
     const dir = path.resolve(cwd);
-    await conn.loadSession({
-      sessionId,
-      cwd: dir,
-      mcpServers: [],
-    });
+    if (this.config.acpReloadTraceLog) {
+      console.log(
+        `[acp reload-trace] session/load begin sessionId=${sessionId} cwd=${dir}`,
+      );
+    }
+    const t0 = this.config.acpReloadTraceLog ? Date.now() : 0;
+    try {
+      await conn.loadSession({
+        sessionId,
+        cwd: dir,
+        mcpServers: [],
+      });
+      if (this.config.acpReloadTraceLog) {
+        console.log(
+          `[acp reload-trace] session/load ok sessionId=${sessionId} elapsedMs=${Date.now() - t0}`,
+        );
+      }
+    } catch (e) {
+      if (this.config.acpReloadTraceLog) {
+        console.warn(
+          `[acp reload-trace] session/load FAILED sessionId=${sessionId} elapsedMs=${Date.now() - t0}`,
+          e instanceof Error ? e.message : e,
+        );
+      }
+      throw e;
+    }
   }
 
   async prompt(sessionId: string, text: string): Promise<{ stopReason: string }> {
@@ -189,6 +256,10 @@ export class AcpRuntime {
       sessionId,
       prompt: [{ type: "text", text }],
     });
+    if (res == null) {
+      await this.logPromptNullDiagnostics(sessionId, conn);
+      return { stopReason: "unknown" };
+    }
     return { stopReason: String(res.stopReason) };
   }
 

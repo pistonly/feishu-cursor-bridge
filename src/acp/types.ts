@@ -3,6 +3,11 @@
  */
 export type BridgeAcpEvent =
   | {
+      type: "user_message_chunk";
+      sessionId: string;
+      text: string;
+    }
+  | {
       type: "agent_message_chunk";
       sessionId: string;
       text: string;

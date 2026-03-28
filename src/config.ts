@@ -41,9 +41,18 @@ export interface Config {
     singleInstanceLockPath: string;
     /** 为 true 时不创建锁，允许多进程（仅调试用） */
     allowMultipleInstances: boolean;
+    /** 实验参数：将 console.* 镜像写入日志文件 */
+    experimentalLogToFile: boolean;
+    /** 实验参数：日志文件路径 */
+    experimentalLogFilePath: string;
   };
   autoApprovePermissions: boolean;
   bridgeDebug: boolean;
+  /**
+   * 为 true 时打印 `[acp reload-trace]`：`session/load` 前后与每条 `session/update` 入站摘要，便于观察 reload 时 bridge 收到什么。
+   * 环境变量：`ACP_RELOAD_TRACE_LOG=true`
+   */
+  acpReloadTraceLog: boolean;
   logLevel: "debug" | "info" | "warn" | "error";
 }
 
@@ -189,6 +198,20 @@ export function loadConfig(): Config {
     (process.env["BRIDGE_ALLOW_MULTIPLE_INSTANCES"] ?? "false").toLowerCase() ===
     "true";
 
+  const defaultExperimentalLogFile = path.join(
+    os.homedir(),
+    ".feishu-cursor-bridge",
+    "logs",
+    "bridge.log",
+  );
+  const experimentalLogToFile =
+    (process.env["EXPERIMENT_LOG_TO_FILE"] ?? "false").toLowerCase() === "true";
+  const experimentalLogFilePath = path.resolve(
+    expandHome(
+      process.env["EXPERIMENT_LOG_FILE"]?.trim() || defaultExperimentalLogFile,
+    ),
+  );
+
   const defaultPresetsFile = path.join(
     os.homedir(),
     ".feishu-cursor-bridge",
@@ -253,12 +276,16 @@ export function loadConfig(): Config {
       workspacePresetsSeed,
       singleInstanceLockPath,
       allowMultipleInstances,
+      experimentalLogToFile,
+      experimentalLogFilePath,
     },
     autoApprovePermissions:
       (process.env["AUTO_APPROVE_PERMISSIONS"] ?? "true").toLowerCase() ===
       "true",
     bridgeDebug:
       (process.env["BRIDGE_DEBUG"] ?? "false").toLowerCase() === "true",
+    acpReloadTraceLog:
+      (process.env["ACP_RELOAD_TRACE_LOG"] ?? "false").toLowerCase() === "true",
     logLevel: logLevel as Config["logLevel"],
   };
 }

@@ -31,8 +31,13 @@ export function mapSessionUpdateToBridgeEvents(
 ): BridgeAcpEvent[] {
   const out: BridgeAcpEvent[] = [];
   switch (update.sessionUpdate) {
-    case "user_message_chunk":
+    case "user_message_chunk": {
+      const c = update.content;
+      if (c?.type === "text" && typeof c.text === "string") {
+        out.push({ type: "user_message_chunk", sessionId, text: c.text });
+      }
       break;
+    }
     case "agent_message_chunk":
     case "agent_thought_chunk": {
       const c = update.content;

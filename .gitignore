@@ -38,4 +38,4 @@ scripts/.venv/
 *.seed
 
 # 本地参考源码（体积大，不纳入版本库）
-reference/
+# reference/

@@ -74,6 +74,8 @@ npm run build && npm start
 | `AUTO_APPROVE_PERMISSIONS` | 自动选择允许类权限选项 | `true` |
 | `LOG_LEVEL` | `debug` / `info` / `warn` / `error` | `info` |
 | `BRIDGE_DEBUG` | 调试日志与 `/status` 详情 | `false` |
+| `EXPERIMENT_LOG_TO_FILE` | 实验参数：是否把 `console.*` 追加写入日志文件 | `false` |
+| `EXPERIMENT_LOG_FILE` | 实验参数：日志文件路径 | `~/.feishu-cursor-bridge/logs/bridge.log` |
 
 ## 使用方式
 

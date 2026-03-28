@@ -66,7 +66,14 @@ export class ConversationService {
       if (!force && now - lastFlush < throttleMs) return;
       lastFlush = now;
       if (cardMessageId) {
-        await this.feishu.updateCard(cardMessageId, state.toMarkdown());
+        try {
+          await this.feishu.updateCard(cardMessageId, state.toMarkdown());
+        } catch (err) {
+          console.warn(
+            `[conversation] updateCard failed sessionId=${session.sessionId}`,
+            err instanceof Error ? err.message : err,
+          );
+        }
       }
     };
 
@@ -113,7 +120,14 @@ export class ConversationService {
       await flush(true);
 
       if (cardMessageId && !state.hasContent()) {
-        await this.feishu.updateCard(cardMessageId, "（无响应内容）");
+        try {
+          await this.feishu.updateCard(cardMessageId, "（无响应内容）");
+        } catch (err) {
+          console.warn(
+            `[conversation] updateCard empty-state failed sessionId=${session.sessionId}`,
+            err instanceof Error ? err.message : err,
+          );
+        }
       }
 
       return state.hasContent() ? state.toMarkdown() : undefined;
