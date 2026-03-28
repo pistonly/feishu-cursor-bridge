@@ -1,7 +1,32 @@
 diff --git a/node_modules/@blowmage/cursor-agent-acp/dist/adapter/cursor-agent-adapter.js b/node_modules/@blowmage/cursor-agent-acp/dist/adapter/cursor-agent-adapter.js
-index 686283b..e45887b 100644
+index 686283b..57b0bc9 100644
 --- a/node_modules/@blowmage/cursor-agent-acp/dist/adapter/cursor-agent-adapter.js
 +++ b/node_modules/@blowmage/cursor-agent-acp/dist/adapter/cursor-agent-adapter.js
+@@ -644,9 +644,24 @@ class CursorAgentAdapter {
+-        let cursorChatId;
+-        if (this.cursorBridge) {
++        const metaCursorChatId = typeof params._meta?.cursorChatId === 'string' && params._meta.cursorChatId.length > 0
++            ? params._meta.cursorChatId
++            : undefined;
++        let cursorChatId = typeof metadata.cursorChatId === 'string' && metadata.cursorChatId.length > 0
++            ? metadata.cursorChatId
++            : metaCursorChatId;
++        if (metaCursorChatId && !metadata.cursorChatId) {
++            this.logger.debug('Using cursor-agent chat from ACP _meta for session', {
++                chatId: metaCursorChatId,
++            });
++        }
++        if (cursorChatId) {
++            this.logger.debug('Using provided cursor-agent chat for session', {
++                chatId: cursorChatId,
++            });
++        }
++        else if (this.cursorBridge) {
+             try {
+                 cursorChatId = await this.cursorBridge.createChat();
+                 this.logger.debug('Created cursor-agent chat for session', {
+                     chatId: cursorChatId,
+                 });
 @@ -689,6 +689,7 @@ class CursorAgentAdapter {
                  createdAt: sessionData.createdAt.toISOString(),
                  cwd,

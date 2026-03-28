@@ -80,6 +80,7 @@ export interface SessionManagerOptions {
  */
 export class SessionManager {
   private groups = new Map<string, UserSessionGroup>();
+  private pendingNotices = new Map<string, string[]>();
   private acp: AcpRuntime;
   private store: SessionStore;
   private idleMs: number;
@@ -183,7 +184,7 @@ export class SessionManager {
       }
       // Active slot expired — create a new ACP session in its place
       if (slot) {
-        await this.renewSlotSession(slot, slot.session.workspaceRoot, now);
+        await this.renewSlotSession(slot, slot.session.workspaceRoot, now, key);
         this.persistGroup(key, group);
         return slot.session;
       }
@@ -602,6 +603,19 @@ export class SessionManager {
     }
   }
 
+  consumePendingNotices(
+    chatId: string,
+    userId: string,
+    chatTypeRaw: string,
+    threadId?: string,
+  ): string[] {
+    const chatType = this.chatType(chatTypeRaw);
+    const key = this.makeKey(chatId, userId, chatType, threadId);
+    const notices = this.pendingNotices.get(key) ?? [];
+    this.pendingNotices.delete(key);
+    return notices;
+  }
+
   // -------------------------------------------------------------------------
   // Reset active slot (replaces old resetSession behaviour)
   // -------------------------------------------------------------------------
@@ -866,7 +880,7 @@ export class SessionManager {
     }
 
     if (this.isExpiredAt(slot.session.lastActiveAt, now)) {
-      await this.renewSlotSession(slot, slot.session.workspaceRoot, now);
+      await this.renewSlotSession(slot, slot.session.workspaceRoot, now, key);
     }
 
     slot.session.lastActiveAt = now;
@@ -881,7 +895,67 @@ export class SessionManager {
     return slot;
   }
 
-  private async renewSlotSession(slot: SessionSlot, cwd: string, now: number): Promise<void> {
+  private pushPendingNotice(key: string, message: string): void {
+    const list = this.pendingNotices.get(key) ?? [];
+    list.push(message);
+    this.pendingNotices.set(key, list);
+  }
+
+  private formatCliBindingChangedNotice(
+    slotIndex: number,
+    workspaceRoot: string,
+    previousCursorCliChatId: string,
+    nextCursorCliChatId?: string,
+  ): string {
+    return (
+      "⚠️ 检测到后台 ACP 会话已失效，虽然已自动重建连接，但当前飞书会话绑定的 CLI 会话发生了变化。\n" +
+      `• Session：#${slotIndex}\n` +
+      `• 工作区：\`${workspaceRoot}\`\n` +
+      `• 旧 CLI resume ID：\`${previousCursorCliChatId}\`\n` +
+      `• 新 CLI resume ID：${nextCursorCliChatId ? `\`${nextCursorCliChatId}\`` : "（无）"}\n\n` +
+      "后续消息将继续写入上面显示的新绑定；如需继续原本的 CLI 对话，请在本机确认 Cursor 会话目录与适配器恢复状态。"
+    );
+  }
+
+  private async createSessionPreservingCliBinding(
+    cwd: string,
+    previousCursorCliChatId: string | undefined,
+    slotIndex: number,
+    noticeKey?: string,
+  ): Promise<{ sessionId: string; cursorCliChatId?: string }> {
+    const normalizedPrevious = previousCursorCliChatId?.trim() || undefined;
+    const fresh = await this.acp.newSession(
+      cwd,
+      normalizedPrevious ? { cursorCliChatId: normalizedPrevious } : undefined,
+    );
+    const normalizedNext = fresh.cursorCliChatId?.trim() || undefined;
+    if (
+      noticeKey &&
+      normalizedPrevious &&
+      normalizedNext !== normalizedPrevious
+    ) {
+      this.pushPendingNotice(
+        noticeKey,
+        this.formatCliBindingChangedNotice(
+          slotIndex,
+          cwd,
+          normalizedPrevious,
+          normalizedNext,
+        ),
+      );
+    }
+    return {
+      sessionId: fresh.sessionId,
+      cursorCliChatId: normalizedNext,
+    };
+  }
+
+  private async renewSlotSession(
+    slot: SessionSlot,
+    cwd: string,
+    now: number,
+    noticeKey?: string,
+  ): Promise<void> {
     const oldId = slot.session.sessionId;
     // Try loadSession first (if supported)
     if (this.acp.supportsLoadSession) {
@@ -896,7 +970,16 @@ export class SessionManager {
         // Fall through to new session
       }
     }
-    const { sessionId, cursorCliChatId } = await this.acp.newSession(cwd);
+    const { sessionId, cursorCliChatId } =
+      await this.createSessionPreservingCliBinding(
+        cwd,
+        slot.session.cursorCliChatId,
+        slot.slotIndex,
+        noticeKey,
+      );
+    if (sessionId !== oldId) {
+      this.onSessionWorkspaceRemove?.(oldId);
+    }
     slot.session = {
       ...slot.session,
       sessionId,
@@ -952,7 +1035,12 @@ export class SessionManager {
             console.log(`[session] restore load slot=#${ps.slotIndex} sessionId=${ps.sessionId}`);
           }
         } catch {
-          const fresh = await this.acp.newSession(cwd);
+          const fresh = await this.createSessionPreservingCliBinding(
+            cwd,
+            ps.cursorCliChatId,
+            ps.slotIndex,
+            key,
+          );
           sessionId = fresh.sessionId;
           cursorCliChatId = fresh.cursorCliChatId;
           if (this.debug) {
@@ -960,7 +1048,12 @@ export class SessionManager {
           }
         }
       } else {
-        const fresh = await this.acp.newSession(cwd);
+        const fresh = await this.createSessionPreservingCliBinding(
+          cwd,
+          ps.cursorCliChatId,
+          ps.slotIndex,
+          key,
+        );
         sessionId = fresh.sessionId;
         cursorCliChatId = fresh.cursorCliChatId;
         if (this.debug) {

@@ -61,6 +61,7 @@ interface StoreFileV2 {
 export class SessionStore {
   private readonly filePath: string;
   private data: StoreFileV2;
+  private flushSeq = 0;
 
   constructor(filePath: string) {
     this.filePath = path.resolve(filePath);
@@ -104,7 +105,7 @@ export class SessionStore {
   async flush(): Promise<void> {
     const dir = path.dirname(this.filePath);
     await fs.mkdir(dir, { recursive: true });
-    const tmp = `${this.filePath}.${process.pid}.tmp`;
+    const tmp = `${this.filePath}.${process.pid}.${++this.flushSeq}.tmp`;
     await fs.writeFile(tmp, JSON.stringify(this.data, null, 2), "utf8");
     await fs.rename(tmp, this.filePath);
   }

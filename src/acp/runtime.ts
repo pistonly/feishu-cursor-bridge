@@ -195,22 +195,44 @@ export class AcpRuntime {
 
   /**
    * @param cwd 会话工作目录（ACP cwd）；缺省为 `CURSOR_WORK_DIR`
+   * @param options.cursorCliChatId 若提供，则请求适配器把新 ACP 会话绑定到该 CLI chat
    * @returns `cursorCliChatId` 为 `cursor-agent create-chat` 返回的 id，可与终端 `cursor-agent ... --resume` 对齐（由适配器放在 session/new 的 _meta.cursorChatId）
    */
-  async newSession(cwd?: string): Promise<{
+  async newSession(
+    cwd?: string,
+    options?: {
+      cursorCliChatId?: string;
+    },
+  ): Promise<{
     sessionId: string;
     cursorCliChatId?: string;
   }> {
     const conn = this.connection;
     if (!conn) throw new Error("ACP not started");
     const dir = path.resolve(cwd ?? this.config.acp.workspaceRoot);
+    const preferredCursorCliChatId = options?.cursorCliChatId?.trim() || undefined;
+    if (preferredCursorCliChatId && this.config.bridgeDebug) {
+      console.log(
+        `[acp] session/new prefer cursorChatId=${preferredCursorCliChatId} cwd=${dir}`,
+      );
+    }
     const res = await conn.newSession({
       cwd: dir,
       mcpServers: [],
-    });
+      ...(preferredCursorCliChatId
+        ? {
+            _meta: {
+              cursorChatId: preferredCursorCliChatId,
+            },
+          }
+        : {}),
+    } as Parameters<ClientSideConnection["newSession"]>[0]);
     const meta = res._meta as { cursorChatId?: unknown } | null | undefined;
     const c = meta?.cursorChatId;
-    const cursorCliChatId = typeof c === "string" && c.length > 0 ? c : undefined;
+    const cursorCliChatId =
+      typeof c === "string" && c.length > 0
+        ? c
+        : preferredCursorCliChatId;
     return { sessionId: res.sessionId, cursorCliChatId };
   }
 

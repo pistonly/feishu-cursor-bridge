@@ -125,6 +125,23 @@ export class Bridge {
     return t || undefined;
   }
 
+  private async flushPendingSessionNotices(msg: FeishuMessage): Promise<void> {
+    const notices = this.sessionManager.consumePendingNotices(
+      msg.chatId,
+      msg.senderId,
+      msg.chatType,
+      this.threadScope(msg),
+    );
+    for (const notice of notices) {
+      await this.feishuBot.sendText(
+        msg.chatId,
+        notice,
+        msg.messageId,
+        this.threadReplyOpts(msg),
+      );
+    }
+  }
+
   /** `/switch` 后展示的「上一轮」卡片：提问 + 回复（旧数据可能仅有回复） */
   private buildSwitchLastTurnCardContent(slot: SessionSlot): string | null {
     const hasPrompt = !!slot.lastPrompt?.trim();
@@ -262,6 +279,7 @@ export class Bridge {
             msg.chatType,
             this.threadScope(msg),
           );
+          await this.flushPendingSessionNotices(msg);
           if (!this.acpRuntime.supportsLoadSession) {
             await this.feishuBot.sendText(
               msg.chatId,
@@ -329,6 +347,7 @@ export class Bridge {
               msg.chatType,
               this.threadScope(msg),
             );
+            await this.flushPendingSessionNotices(msg);
             const label = slot.name ? ` (${slot.name})` : "";
             await this.feishuBot.sendText(
               msg.chatId,
@@ -354,6 +373,7 @@ export class Bridge {
             newConv.target,
             this.threadScope(msg),
           );
+          await this.flushPendingSessionNotices(msg);
           const label = slot.name ? ` (${slot.name})` : "";
           await this.feishuBot.sendText(
             msg.chatId,
@@ -398,6 +418,7 @@ export class Bridge {
             newConv.name,
             this.threadScope(msg),
           );
+          await this.flushPendingSessionNotices(msg);
           await this.feishuBot.sendText(
             msg.chatId,
             `✅ 已将 session #${renamed.slotIndex} 重命名为 \`${renamed.name}\``,
@@ -427,6 +448,7 @@ export class Bridge {
               msg.chatType,
               this.threadScope(msg),
             );
+            await this.flushPendingSessionNotices(msg);
             const summary = closed
               .map((s) => {
                 const lab = s.name ? ` (${s.name})` : "";
@@ -448,6 +470,7 @@ export class Bridge {
             newConv.target,
             this.threadScope(msg),
           );
+          await this.flushPendingSessionNotices(msg);
           const label = closed.name ? ` (${closed.name})` : "";
           const tail = removedEntireGroup
             ? "\n\n该聊天/话题下已无 session，已释放全局配额；下次发消息会新建 session。"
@@ -595,6 +618,7 @@ export class Bridge {
             workspaceAbs,
             this.threadScope(msg),
           );
+          await this.flushPendingSessionNotices(msg);
           const cwdLine = workspaceAbs ?? this.config.acp.workspaceRoot;
           await this.feishuBot.sendText(
             msg.chatId,
@@ -612,6 +636,7 @@ export class Bridge {
             slotName,
             this.threadScope(msg),
           );
+          await this.flushPendingSessionNotices(msg);
           const nameLabel = result.name ? ` (${result.name})` : "";
           await this.feishuBot.sendText(
             msg.chatId,
@@ -682,6 +707,7 @@ export class Bridge {
           msg.chatType,
           this.threadScope(msg),
         );
+        await this.flushPendingSessionNotices(msg);
         await this.acpRuntime.setSessionModel(session.sessionId, modelId);
         await this.feishuBot.sendText(
           msg.chatId,
@@ -734,6 +760,7 @@ export class Bridge {
         msg.chatType,
         this.threadScope(msg),
       );
+      await this.flushPendingSessionNotices(msg);
 
       const msgForPrompt: FeishuMessage = {
         ...msg,
@@ -777,6 +804,7 @@ export class Bridge {
       msg.chatType,
       this.threadScope(msg),
     );
+    await this.flushPendingSessionNotices(msg);
     if (slots.length === 0) {
       await this.feishuBot.sendText(
         msg.chatId,
