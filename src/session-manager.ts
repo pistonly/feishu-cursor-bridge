@@ -27,6 +27,8 @@ export interface SessionSlot {
   slotIndex: number;
   name?: string;
   session: UserSession;
+  /** 上一轮用户侧输入（与 lastReply 成对），仅内存缓存，重启后丢失 */
+  lastPrompt?: string;
   /** 上一轮对话的最终 markdown 输出，仅内存缓存，重启后丢失 */
   lastReply?: string;
 }
@@ -578,12 +580,13 @@ export class SessionManager {
   // Cache last reply for active slot
   // -------------------------------------------------------------------------
 
-  setSlotLastReply(
+  setSlotLastTurn(
     chatId: string,
     userId: string,
     chatTypeRaw: string,
     sessionId: string,
-    markdown: string,
+    userPrompt: string,
+    assistantMarkdown: string,
     threadId?: string,
   ): void {
     const chatType = this.chatType(chatTypeRaw);
@@ -592,7 +595,10 @@ export class SessionManager {
     if (!group) return;
     const slot = group.slots.find((s) => s.session.sessionId === sessionId);
     if (slot) {
-      slot.lastReply = markdown;
+      const p = userPrompt.trim();
+      const r = assistantMarkdown.trim();
+      slot.lastPrompt = p ? p : undefined;
+      slot.lastReply = r ? r : undefined;
     }
   }
 

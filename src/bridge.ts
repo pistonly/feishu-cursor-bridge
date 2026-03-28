@@ -4,7 +4,7 @@ import { FeishuBridgeClient } from "./acp/feishu-bridge-client.js";
 import { formatJsonRpcLikeError } from "./format-json-rpc-error.js";
 import { FeishuBot, type FeishuMessage } from "./feishu-bot.js";
 import { parseNewConversationCommand } from "./parse-new-conversation.js";
-import { SessionManager } from "./session-manager.js";
+import { SessionManager, type SessionSlot } from "./session-manager.js";
 import { SessionStore } from "./session-store.js";
 import { ConversationService } from "./conversation-service.js";
 import { resolveAllowedWorkspaceDir } from "./workspace-policy.js";
@@ -123,6 +123,27 @@ export class Bridge {
     if (msg.chatType !== "group") return undefined;
     const t = msg.threadId?.trim();
     return t || undefined;
+  }
+
+  /** `/switch` 后展示的「上一轮」卡片：提问 + 回复（旧数据可能仅有回复） */
+  private buildSwitchLastTurnCardContent(slot: SessionSlot): string | null {
+    const hasPrompt = !!slot.lastPrompt?.trim();
+    const hasReply = !!slot.lastReply?.trim();
+    if (!hasPrompt && !hasReply) return null;
+
+    const nameLabel = slot.name ? ` (${slot.name})` : "";
+    const MAX_CARD_LEN = 28_000;
+    const title = `**↩️ Session #${slot.slotIndex}${nameLabel} 上一轮对话：**\n\n`;
+    const chunks: string[] = [];
+    if (hasPrompt) chunks.push(`**提问：**\n\n${slot.lastPrompt!.trim()}`);
+    if (hasReply) chunks.push(`**回复：**\n\n${slot.lastReply!.trim()}`);
+    let body = title + chunks.join("\n\n");
+    let truncated = false;
+    if (body.length > MAX_CARD_LEN) {
+      body = body.slice(0, MAX_CARD_LEN);
+      truncated = true;
+    }
+    return body + (truncated ? "\n\n_（内容过长，已截断）_" : "");
   }
 
   private feishuSessionKey(msg: FeishuMessage): string {
@@ -315,18 +336,11 @@ export class Bridge {
               msg.messageId,
               this.threadReplyOpts(msg),
             );
-            if (slot.lastReply) {
-              const MAX_CARD_LEN = 28_000;
-              let preview = slot.lastReply;
-              let truncated = false;
-              if (preview.length > MAX_CARD_LEN) {
-                preview = preview.slice(0, MAX_CARD_LEN);
-                truncated = true;
-              }
-              const cardContent = `**↩️ Session #${slot.slotIndex}${label} 上一轮回复：**\n\n${preview}${truncated ? "\n\n_（内容过长，已截断）_" : ""}`;
+            const lastTurnCard = this.buildSwitchLastTurnCardContent(slot);
+            if (lastTurnCard) {
               await this.feishuBot.sendCard(
                 msg.chatId,
-                cardContent,
+                lastTurnCard,
                 msg.messageId,
                 this.threadReplyOpts(msg),
               );
@@ -347,18 +361,11 @@ export class Bridge {
             msg.messageId,
             this.threadReplyOpts(msg),
           );
-          if (slot.lastReply) {
-            const MAX_CARD_LEN = 28_000;
-            let preview = slot.lastReply;
-            let truncated = false;
-            if (preview.length > MAX_CARD_LEN) {
-              preview = preview.slice(0, MAX_CARD_LEN);
-              truncated = true;
-            }
-            const cardContent = `**↩️ Session #${slot.slotIndex}${label} 上一轮回复：**\n\n${preview}${truncated ? "\n\n_（内容过长，已截断）_" : ""}`;
+          const lastTurnCard = this.buildSwitchLastTurnCardContent(slot);
+          if (lastTurnCard) {
             await this.feishuBot.sendCard(
               msg.chatId,
-              cardContent,
+              lastTurnCard,
               msg.messageId,
               this.threadReplyOpts(msg),
             );
@@ -735,11 +742,12 @@ export class Bridge {
 
       const lastReply = await this.conversation.handleUserPrompt(msgForPrompt, session);
       if (lastReply) {
-        this.sessionManager.setSlotLastReply(
+        this.sessionManager.setSlotLastTurn(
           msg.chatId,
           msg.senderId,
           msg.chatType,
           session.sessionId,
+          content,
           lastReply,
           this.threadScope(msg),
         );
