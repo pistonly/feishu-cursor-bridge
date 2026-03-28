@@ -324,7 +324,12 @@ export class Bridge {
                 truncated = true;
               }
               const cardContent = `**↩️ Session #${slot.slotIndex}${label} 上一轮回复：**\n\n${preview}${truncated ? "\n\n_（内容过长，已截断）_" : ""}`;
-              await this.feishuBot.sendCard(msg.chatId, cardContent);
+              await this.feishuBot.sendCard(
+                msg.chatId,
+                cardContent,
+                msg.messageId,
+                this.threadReplyOpts(msg),
+              );
             }
             return;
           }
@@ -351,7 +356,12 @@ export class Bridge {
               truncated = true;
             }
             const cardContent = `**↩️ Session #${slot.slotIndex}${label} 上一轮回复：**\n\n${preview}${truncated ? "\n\n_（内容过长，已截断）_" : ""}`;
-            await this.feishuBot.sendCard(msg.chatId, cardContent);
+            await this.feishuBot.sendCard(
+              msg.chatId,
+              cardContent,
+              msg.messageId,
+              this.threadReplyOpts(msg),
+            );
           }
           return;
         }
