@@ -66,8 +66,11 @@ export function parseNewConversationCommand(
       return { kind: "switch", target: null };
     }
     const arg = tokens[1];
-    const num = parseInt(arg, 10);
-    return { kind: "switch", target: isNaN(num) ? arg : num };
+    // 仅整串为数字时按槽位编号解析，避免 parseInt("12abc") === 12 误切到 #12
+    return {
+      kind: "switch",
+      target: /^\d+$/.test(arg) ? parseInt(arg, 10) : arg,
+    };
   }
 
   // /rename <name>
