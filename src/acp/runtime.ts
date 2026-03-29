@@ -11,6 +11,14 @@ import {
 import type { Config } from "../config.js";
 import { FeishuBridgeClient } from "./feishu-bridge-client.js";
 
+/**
+ * 上游 @blowmage/cursor-agent-acp 在 JSON-RPC params 中支持 `stream`，走 cursor-agent
+ * `stream-json` + `--stream-partial-output`；官方 SDK 的 PromptRequest 类型尚未包含该字段。
+ */
+type SessionPromptParams = Parameters<ClientSideConnection["prompt"]>[0] & {
+  stream?: boolean;
+};
+
 /** 调试打印 env 时对疑似敏感变量名脱敏 */
 function redactEnvForLog(env: NodeJS.ProcessEnv): Record<string, string | undefined> {
   const sensitive = /secret|password|token|credential|authorization|api_?key|private/i;
@@ -274,10 +282,14 @@ export class AcpRuntime {
   async prompt(sessionId: string, text: string): Promise<{ stopReason: string }> {
     const conn = this.connection;
     if (!conn) throw new Error("ACP not started");
-    const res = await conn.prompt({
+    const params: SessionPromptParams = {
       sessionId,
       prompt: [{ type: "text", text }],
-    });
+      stream: true,
+    };
+    const res = await conn.prompt(
+      params as Parameters<ClientSideConnection["prompt"]>[0],
+    );
     if (res == null) {
       await this.logPromptNullDiagnostics(sessionId, conn);
       return { stopReason: "unknown" };
