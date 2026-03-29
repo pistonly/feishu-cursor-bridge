@@ -157,6 +157,7 @@ export class SessionManager {
     const now = Date.now();
 
     let group = this.groups.get(key);
+    let restoredFromStore = false;
 
     // Try to restore from store if not in memory
     if (!group) {
@@ -168,11 +169,15 @@ export class SessionManager {
         now,
         threadId,
       );
+      restoredFromStore = group != null;
     }
 
     if (group) {
       const slot = this.findSlot(group, group.activeSlotIndex);
       if (slot && !this.isExpiredAt(slot.session.lastActiveAt, now)) {
+        if (!restoredFromStore) {
+          await this.ensureSlotSessionAvailable(slot, now, key);
+        }
         slot.session.lastActiveAt = now;
         this.persistGroup(key, group);
         if (this.debug) {
@@ -310,6 +315,7 @@ export class SessionManager {
     const now = Date.now();
 
     let group = this.groups.get(key);
+    let restoredFromStore = false;
     if (!group) {
       group = await this.restoreGroupFromStore(
         key,
@@ -319,6 +325,7 @@ export class SessionManager {
         now,
         threadId,
       );
+      restoredFromStore = group != null;
     }
     if (!group || group.slots.length === 0) {
       throw new Error("当前没有任何 session，请先发送消息创建一个。");
@@ -333,7 +340,9 @@ export class SessionManager {
       );
     }
 
-    return this.activateSlot(key, group, slot);
+    return this.activateSlot(key, group, slot, {
+      probeAvailability: !restoredFromStore,
+    });
   }
 
   async switchToPreviousSlot(
@@ -347,6 +356,7 @@ export class SessionManager {
     const now = Date.now();
 
     let group = this.groups.get(key);
+    let restoredFromStore = false;
     if (!group) {
       group = await this.restoreGroupFromStore(
         key,
@@ -356,6 +366,7 @@ export class SessionManager {
         now,
         threadId,
       );
+      restoredFromStore = group != null;
     }
     if (!group || group.slots.length === 0) {
       throw new Error("当前没有任何 session，请先发送消息创建一个。");
@@ -366,7 +377,9 @@ export class SessionManager {
       throw new Error("当前没有上一个可切换的 session。发送 /sessions 查看所有 session。");
     }
 
-    return this.activateSlot(key, group, slot);
+    return this.activateSlot(key, group, slot, {
+      probeAvailability: !restoredFromStore,
+    });
   }
 
   async renameSlot(
@@ -871,6 +884,9 @@ export class SessionManager {
     key: string,
     group: UserSessionGroup,
     slot: SessionSlot,
+    options?: {
+      probeAvailability?: boolean;
+    },
   ): Promise<SessionSlot> {
     const now = Date.now();
     const current = this.findSlot(group, group.activeSlotIndex);
@@ -881,6 +897,8 @@ export class SessionManager {
 
     if (this.isExpiredAt(slot.session.lastActiveAt, now)) {
       await this.renewSlotSession(slot, slot.session.workspaceRoot, now, key);
+    } else if (options?.probeAvailability !== false) {
+      await this.ensureSlotSessionAvailable(slot, now, key);
     }
 
     slot.session.lastActiveAt = now;
@@ -955,10 +973,13 @@ export class SessionManager {
     cwd: string,
     now: number,
     noticeKey?: string,
+    options?: {
+      skipLoadSessionProbe?: boolean;
+    },
   ): Promise<void> {
     const oldId = slot.session.sessionId;
     // Try loadSession first (if supported)
-    if (this.acp.supportsLoadSession) {
+    if (this.acp.supportsLoadSession && !options?.skipLoadSessionProbe) {
       try {
         await this.acp.loadSession(oldId, cwd);
         slot.session.lastActiveAt = now;
@@ -993,6 +1014,29 @@ export class SessionManager {
     this.onSessionWorkspace?.(sessionId, cwd);
     if (this.debug) {
       console.log(`[session] renew slot=#${slot.slotIndex} old=${oldId} new=${sessionId}`);
+    }
+  }
+
+  private async ensureSlotSessionAvailable(
+    slot: SessionSlot,
+    now: number,
+    noticeKey?: string,
+  ): Promise<void> {
+    if (!this.acp.supportsLoadSession) {
+      return;
+    }
+    const { sessionId, workspaceRoot } = slot.session;
+    try {
+      await this.acp.loadSession(sessionId, workspaceRoot);
+      if (this.debug) {
+        console.log(
+          `[session] probe load slot=#${slot.slotIndex} sessionId=${sessionId}`,
+        );
+      }
+    } catch {
+      await this.renewSlotSession(slot, workspaceRoot, now, noticeKey, {
+        skipLoadSessionProbe: true,
+      });
     }
   }
 

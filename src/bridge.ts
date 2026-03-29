@@ -1,5 +1,5 @@
 import type { Config } from "./config.js";
-import { AcpRuntime } from "./acp/runtime.js";
+import { AcpRuntime, resolveAdapterSessionTimeoutMs } from "./acp/runtime.js";
 import { FeishuBridgeClient } from "./acp/feishu-bridge-client.js";
 import { formatJsonRpcLikeError } from "./format-json-rpc-error.js";
 import { FeishuBot, type FeishuMessage } from "./feishu-bot.js";
@@ -10,6 +10,19 @@ import { ConversationService } from "./conversation-service.js";
 import { resolveAllowedWorkspaceDir } from "./workspace-policy.js";
 import { WorkspacePresetsStore } from "./workspace-presets-store.js";
 import { captureAcpReplayDuring } from "./acp/replay-capture.js";
+
+function formatDurationMs(ms: number): string {
+  if (!Number.isFinite(ms)) {
+    return "永不过期";
+  }
+  if (ms % (24 * 60 * 60_000) === 0) {
+    return `${ms / (24 * 60 * 60_000)} 天`;
+  }
+  if (ms % (60 * 60_000) === 0) {
+    return `${ms / (60 * 60_000)} 小时`;
+  }
+  return `${Math.round(ms / 60_000)} 分钟`;
+}
 
 export class Bridge {
   private config: Config;
@@ -679,8 +692,14 @@ export class Bridge {
             ? "永不过期"
             : `${Math.round(snap.idleExpiresInMs / 60_000)} 分钟`
           : "—";
+        const bridgeIdlePolicy = formatDurationMs(
+          this.config.bridge.sessionIdleTimeoutMs,
+        );
+        const adapterSessionTimeout = formatDurationMs(
+          Number(resolveAdapterSessionTimeoutMs(this.config)),
+        );
         const slot = snap?.activeSlot;
-        body += `\n\n[调试 BRIDGE_DEBUG]\n• sessionKey: ${snap?.sessionKey ?? "(尚无)"}\n• threadId: ${this.threadScope(msg) ?? "（主会话区）"}\n• 活跃 slot: #${slot?.slotIndex ?? "—"}${slot?.name ? ` (${slot.name})` : ""}\n• ACP sessionId: ${slot?.session.sessionId ?? "—"}\n• 会话 cwd: ${slot?.session.workspaceRoot ?? "—"}\n• 空闲过期约: ${idleLabel}\n• 默认工作区 (CURSOR_WORK_DIR): ${this.config.acp.workspaceRoot}\n• 允许根 (CURSOR_WORK_ALLOWLIST): ${this.config.acp.allowedWorkspaceRoots.join(", ")}\n• 适配器会话目录: ${this.config.acp.adapterSessionDir}\n• 映射文件: ${this.config.bridge.sessionStorePath}\n• loadSession: ${this.acpRuntime.supportsLoadSession}\n• LOG_LEVEL: ${this.config.logLevel}`;
+        body += `\n\n[调试 BRIDGE_DEBUG]\n• sessionKey: ${snap?.sessionKey ?? "(尚无)"}\n• threadId: ${this.threadScope(msg) ?? "（主会话区）"}\n• 活跃 slot: #${slot?.slotIndex ?? "—"}${slot?.name ? ` (${slot.name})` : ""}\n• ACP sessionId: ${slot?.session.sessionId ?? "—"}\n• 会话 cwd: ${slot?.session.workspaceRoot ?? "—"}\n• 空闲过期约: ${idleLabel}\n• 会话策略: bridge=${bridgeIdlePolicy} / adapter=${adapterSessionTimeout}\n• 默认工作区 (CURSOR_WORK_DIR): ${this.config.acp.workspaceRoot}\n• 允许根 (CURSOR_WORK_ALLOWLIST): ${this.config.acp.allowedWorkspaceRoots.join(", ")}\n• 适配器会话目录: ${this.config.acp.adapterSessionDir}\n• 映射文件: ${this.config.bridge.sessionStorePath}\n• loadSession: ${this.acpRuntime.supportsLoadSession}\n• LOG_LEVEL: ${this.config.logLevel}`;
       }
       await this.feishuBot.sendText(msg.chatId, body, msg.messageId, this.threadReplyOpts(msg));
       return;

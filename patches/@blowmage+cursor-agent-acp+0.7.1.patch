@@ -37,7 +37,7 @@ index 686283b..68f8cc9 100644
                      mcpStatus: 'not-implemented',
                      mcpServers: mcpServers.map((s) => ({
 diff --git a/node_modules/@blowmage/cursor-agent-acp/dist/cursor/cli-bridge.js b/node_modules/@blowmage/cursor-agent-acp/dist/cursor/cli-bridge.js
-index 2926b57..cd75833 100644
+index 2926b57..bcb0e0c 100644
 --- a/node_modules/@blowmage/cursor-agent-acp/dist/cursor/cli-bridge.js
 +++ b/node_modules/@blowmage/cursor-agent-acp/dist/cursor/cli-bridge.js
 @@ -442,6 +442,54 @@ class CursorCliBridge {
@@ -95,7 +95,7 @@ index 2926b57..cd75833 100644
      /**
       * Send a prompt to Cursor CLI
       */
-@@ -607,45 +655,70 @@ class CursorCliBridge {
+@@ -607,45 +655,74 @@ class CursorCliBridge {
              }
              let responseContent = '';
              let processedChunks = 0;
@@ -108,15 +108,6 @@ index 2926b57..cd75833 100644
 -                    // Try to parse as JSON stream
 -                    try {
 -                        const jsonChunk = JSON.parse(chunk);
--                        if (onChunk) {
--                            await onChunk({
--                                type: 'content',
--                                data: jsonChunk,
--                            });
--                        }
--                    }
--                    catch {
--                        // If not JSON, send as plain text
 -                        if (onChunk) {
 +            let streamBuffer = '';
 +            const streamState = {
@@ -135,10 +126,28 @@ index 2926b57..cd75833 100644
 +                        for (const contentBlock of contentBlocks) {
                              await onChunk({
                                  type: 'content',
--                                data: chunk,
+-                                data: jsonChunk,
 +                                data: contentBlock,
                              });
                          }
+                     }
+-                    catch {
+-                        // If not JSON, send as plain text
+-                        if (onChunk) {
+-                            await onChunk({
+-                                type: 'content',
+-                                data: chunk,
+-                            });
+-                        }
++                }
++                catch (error) {
++                    this.logger.debug('Failed to parse stream-json line, forwarding as text', {
++                        error: error instanceof Error ? error.message : String(error),
++                        linePreview: line.substring(0, 160),
++                    });
++                    const text = this.normalizeStreamingAssistantText(line, streamState);
++                    if (!text) {
++                        return;
                      }
 -                    if (onProgress) {
 -                        onProgress({
@@ -146,16 +155,10 @@ index 2926b57..cd75833 100644
 -                            current: processedChunks,
 -                            progress: processedChunks,
 -                            message: `Received chunk ${processedChunks}`,
-+                }
-+                catch (error) {
-+                    this.logger.debug('Failed to parse stream-json line, forwarding as text', {
-+                        error: error instanceof Error ? error.message : String(error),
-+                        linePreview: line.substring(0, 160),
-+                    });
 +                    if (onChunk) {
 +                        await onChunk({
 +                            type: 'content',
-+                            data: line,
++                            data: text,
                          });
                      }
 +                }

@@ -24,6 +24,9 @@ type SessionPromptParams = Parameters<ClientSideConnection["prompt"]>[0] & {
   };
 };
 
+const MIN_ADAPTER_SESSION_TIMEOUT_MS = 60_000;
+export const MAX_ADAPTER_SESSION_TIMEOUT_MS = 24 * 60 * 60_000;
+
 /** 调试打印 env 时对疑似敏感变量名脱敏 */
 function redactEnvForLog(env: NodeJS.ProcessEnv): Record<string, string | undefined> {
   const sensitive = /secret|password|token|credential|authorization|api_?key|private/i;
@@ -33,6 +36,26 @@ function redactEnvForLog(env: NodeJS.ProcessEnv): Record<string, string | undefi
     out[key] = sensitive.test(key) && v ? "***" : v;
   }
   return out;
+}
+
+/**
+ * 同步适配器自己的 session 清理窗口，避免桥侧仍认为 session 存活时，
+ * 上游 cursor-agent-acp 先按其默认 1 小时超时把底层 session 删掉。
+ *
+ * 注意：适配器自身把 `sessionTimeout` 限制在 1 分钟到 24 小时之间，
+ * 所以桥侧即便配置了更长空闲期，这里也只能截断到 24 小时，再依赖上层探活+重建兜底。
+ */
+export function resolveAdapterSessionTimeoutMs(config: Config): string {
+  const idleMs = config.bridge.sessionIdleTimeoutMs;
+  if (Number.isFinite(idleMs)) {
+    return String(
+      Math.min(
+        MAX_ADAPTER_SESSION_TIMEOUT_MS,
+        Math.max(MIN_ADAPTER_SESSION_TIMEOUT_MS, Math.floor(idleMs)),
+      ),
+    );
+  }
+  return String(MAX_ADAPTER_SESSION_TIMEOUT_MS);
 }
 
 /**
@@ -127,6 +150,7 @@ export class AcpRuntime {
     }
 
     args.push("--session-dir", adapterSessionDir);
+    args.push("--session-timeout", resolveAdapterSessionTimeoutMs(this.config));
 
     const acpEnv = { ...process.env };
     if (this.config.bridgeDebug || this.config.logLevel === "debug") {

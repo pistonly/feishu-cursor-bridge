@@ -56,6 +56,24 @@ async function createStoreFile(group: PersistedSessionGroup): Promise<string> {
   return filePath;
 }
 
+async function createEmptyStoreFile(): Promise<string> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "bridge-session-manager-"));
+  const filePath = path.join(dir, "sessions.json");
+  await fs.writeFile(
+    filePath,
+    JSON.stringify(
+      {
+        version: 2,
+        sessions: {},
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  return filePath;
+}
+
 function trackPendingFlushes(store: SessionStore): () => Promise<void> {
   const originalFlush = store.flush.bind(store);
   const pending: Array<Promise<void>> = [];
@@ -153,5 +171,67 @@ test("无法保留旧 CLI resume ID 时会生成绑定变更提醒", async () =>
   assert.equal(notices.length, 1);
   assert.match(notices[0] ?? "", /旧 CLI resume ID：`cli-old`/);
   assert.match(notices[0] ?? "", /新 CLI resume ID：`cli-new`/);
+  await waitForFlushes();
+});
+
+test("活跃 slot 的 ACP session 被上游清理后会自动重建并保留 CLI resume ID", async () => {
+  const storeFile = await createEmptyStoreFile();
+
+  const newSessionCalls: Array<{ cwd: string; cursorCliChatId?: string }> = [];
+  const loadSessionCalls: string[] = [];
+  let createCount = 0;
+  const acp: FakeAcpRuntime = {
+    supportsLoadSession: true,
+    async newSession(
+      cwd?: string,
+      options?: { cursorCliChatId?: string },
+    ): Promise<{ sessionId: string; cursorCliChatId?: string }> {
+      const resolvedCwd = path.resolve(cwd ?? WORKSPACE_ROOT);
+      newSessionCalls.push({
+        cwd: resolvedCwd,
+        cursorCliChatId: options?.cursorCliChatId,
+      });
+      createCount++;
+      return createCount === 1
+        ? {
+            sessionId: "acp-live",
+            cursorCliChatId: "cli-old",
+          }
+        : {
+            sessionId: "acp-rebound",
+            cursorCliChatId: options?.cursorCliChatId,
+          };
+    },
+    async loadSession(sessionId: string): Promise<void> {
+      loadSessionCalls.push(sessionId);
+      throw new Error(`Session not found: ${sessionId}`);
+    },
+    async cancelSession(): Promise<void> {},
+    async closeSession(): Promise<void> {},
+  };
+
+  const store = new SessionStore(storeFile);
+  const waitForFlushes = trackPendingFlushes(store);
+  const manager = new SessionManager(
+    acp as AcpRuntime,
+    store,
+    7 * 24 * 60 * 60_000,
+    { defaultWorkspaceRoot: WORKSPACE_ROOT },
+  );
+
+  await manager.init();
+  const first = await manager.getOrCreateSession(CHAT_ID, USER_ID, "p2p");
+  const second = await manager.getOrCreateSession(CHAT_ID, USER_ID, "p2p");
+
+  assert.equal(first.sessionId, "acp-live");
+  assert.equal(first.cursorCliChatId, "cli-old");
+  assert.equal(second.sessionId, "acp-rebound");
+  assert.equal(second.cursorCliChatId, "cli-old");
+  assert.deepEqual(loadSessionCalls, ["acp-live"]);
+  assert.deepEqual(newSessionCalls, [
+    { cwd: WORKSPACE_ROOT, cursorCliChatId: undefined },
+    { cwd: WORKSPACE_ROOT, cursorCliChatId: "cli-old" },
+  ]);
+  assert.deepEqual(manager.consumePendingNotices(CHAT_ID, USER_ID, "p2p"), []);
   await waitForFlushes();
 });
