@@ -12,11 +12,16 @@ import type { Config } from "../config.js";
 import { FeishuBridgeClient } from "./feishu-bridge-client.js";
 
 /**
- * 上游 @blowmage/cursor-agent-acp 在 JSON-RPC params 中支持 `stream`，走 cursor-agent
- * `stream-json` + `--stream-partial-output`；官方 SDK 的 PromptRequest 类型尚未包含该字段。
+ * 上游 @blowmage/cursor-agent-acp 在 `session/prompt` 链路里识别 `stream` 开关，走
+ * cursor-agent `stream-json` + `--stream-partial-output`。但官方 SDK 的 PromptRequest
+ * schema 不包含顶层 `stream`，Agent 侧校验会把未知键剥掉；因此桥接把该标记放进 `_meta.stream`
+ *（并保留顶层 `stream` 以兼容未做 schema 剥离的实现）。
  */
 type SessionPromptParams = Parameters<ClientSideConnection["prompt"]>[0] & {
   stream?: boolean;
+  _meta?: Parameters<ClientSideConnection["prompt"]>[0]["_meta"] & {
+    stream?: boolean;
+  };
 };
 
 /** 调试打印 env 时对疑似敏感变量名脱敏 */
@@ -286,6 +291,9 @@ export class AcpRuntime {
       sessionId,
       prompt: [{ type: "text", text }],
       stream: true,
+      _meta: {
+        stream: true,
+      },
     };
     const res = await conn.prompt(
       params as Parameters<ClientSideConnection["prompt"]>[0],
