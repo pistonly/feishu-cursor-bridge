@@ -17,6 +17,7 @@
     "@blowmage/cursor-agent-acp": "^0.7.1",
     "@larksuiteoapi/node-sdk": "^1.59.0",
     "dotenv": "^17.3.1",
+    "https-proxy-agent": "^8.0.0",
     "zod": "^3.25.0"
   },
   "devDependencies": {

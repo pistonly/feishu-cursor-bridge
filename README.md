@@ -53,6 +53,15 @@ npm run build && npm start
 # npm run dev:restart
 ```
 
+## 网络与代理
+
+- 默认情况下服务会**直接连接**飞书接口与长连接网关，不要求必须配置代理。
+- 若机器无法直接访问外网、只能通过代理访问飞书，可设置环境变量 `https_proxy` / `http_proxy` / `all_proxy`；飞书长连接也会自动复用这些代理配置。
+- 若需为 WebSocket 单独指定代理，也可设置 `wss_proxy` / `ws_proxy`；其优先级高于 `https_proxy` / `http_proxy`。
+- 检测到上述任一代理变量时，服务会自动为子进程补上 `NODE_USE_ENV_PROXY=1`，使 `cursor-agent-acp` 与 `cursor-agent` 也走环境代理；手动启动与 `systemd` 服务均适用。
+- 若未设置任何代理变量，则保持直连模式。
+- 若使用 `systemd --user` 运行服务，请把代理变量写进该服务读取的 `.env`（或 unit 的 `Environment=` / `EnvironmentFile=`），不要只写在交互式 shell 配置里；服务不会自动继承登录 shell 的环境。
+
 ## 环境变量
 
 | 变量 | 说明 | 默认值 |
@@ -76,6 +85,9 @@ npm run build && npm start
 | `BRIDGE_DEBUG` | 调试日志与 `/status` 详情 | `false` |
 | `EXPERIMENT_LOG_TO_FILE` | 实验参数：是否把 `console.*` 追加写入日志文件 | `false` |
 | `EXPERIMENT_LOG_FILE` | 实验参数：日志文件路径 | `~/.feishu-cursor-bridge/logs/bridge.log` |
+
+代理相关说明：
+`wss_proxy` / `ws_proxy` > `https_proxy` / `http_proxy` / `all_proxy`。仅在环境变量存在时才启用代理，否则默认直连。
 
 ## 使用方式
 

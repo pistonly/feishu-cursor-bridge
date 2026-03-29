@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import * as Lark from "@larksuiteoapi/node-sdk";
+import { HttpsProxyAgent } from "https-proxy-agent";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -76,6 +77,39 @@ function resolveDomain(
   if (domain === "lark") return Lark.Domain.Lark;
   if (domain === "feishu" || !domain) return Lark.Domain.Feishu;
   return domain.replace(/\/+$/, "");
+}
+
+function readFirstEnv(names: string[]): string | undefined {
+  for (const name of names) {
+    const value = process.env[name]?.trim();
+    if (value) return value;
+  }
+  return undefined;
+}
+
+function resolveFeishuWsProxyAgent(): HttpsProxyAgent<string> | undefined {
+  const proxyUrl = readFirstEnv([
+    "wss_proxy",
+    "WSS_PROXY",
+    "ws_proxy",
+    "WS_PROXY",
+    "https_proxy",
+    "HTTPS_PROXY",
+    "http_proxy",
+    "HTTP_PROXY",
+    "all_proxy",
+    "ALL_PROXY",
+  ]);
+  if (!proxyUrl) return undefined;
+  try {
+    return new HttpsProxyAgent(proxyUrl);
+  } catch (err) {
+    console.warn(
+      `[feishu-bot] 代理地址无效，WS 将尝试直连: ${proxyUrl}`,
+      err instanceof Error ? err.message : err,
+    );
+    return undefined;
+  }
 }
 
 function splitTextChunks(text: string, limit = TEXT_CHUNK_LIMIT): string[] {
@@ -241,6 +275,7 @@ export interface FeishuBotEvents {
 export class FeishuBot extends EventEmitter {
   private client: Lark.Client;
   private wsClient: Lark.WSClient | null = null;
+  private readonly wsProxyAgent = resolveFeishuWsProxyAgent();
   private eventDispatcher: Lark.EventDispatcher;
   private botOpenId?: string;
   private botUserId?: string;
@@ -287,6 +322,9 @@ export class FeishuBot extends EventEmitter {
 
   async start(): Promise<void> {
     const domain = resolveDomain(this.config.domain);
+    if (this.wsProxyAgent) {
+      console.log("[feishu-bot] WS client will use proxy from environment");
+    }
 
     // 必须先解析 bot open_id：否则 WS 抢先收到群消息时 isBotMentioned 会为 false（话题群 @ 也不响）
     // SDK 的 domain 仅为 https://open.feishu.cn，路径必须含 open-apis/（与 clawdbot probe 一致），勿写 /bot/v3/info
@@ -327,6 +365,7 @@ export class FeishuBot extends EventEmitter {
       appId: this.config.appId,
       appSecret: this.config.appSecret,
       domain,
+      agent: this.wsProxyAgent,
       loggerLevel: Lark.LoggerLevel.info,
     });
 

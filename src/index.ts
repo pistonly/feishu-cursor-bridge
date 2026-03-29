@@ -4,7 +4,28 @@ import { Bridge } from "./bridge.js";
 import { installFileLogger } from "./file-logger.js";
 import { acquireSingleInstanceLock } from "./single-instance.js";
 
+function enableNodeEnvProxyForChildren(): void {
+  if (process.env["NODE_USE_ENV_PROXY"]?.trim()) return;
+  const hasProxy = [
+    "wss_proxy",
+    "WSS_PROXY",
+    "ws_proxy",
+    "WS_PROXY",
+    "https_proxy",
+    "HTTPS_PROXY",
+    "http_proxy",
+    "HTTP_PROXY",
+    "all_proxy",
+    "ALL_PROXY",
+  ].some((name) => !!process.env[name]?.trim());
+  if (!hasProxy) return;
+  // cursor-agent-acp / cursor-agent 在受限网络下依赖 Node 的环境代理开关。
+  process.env["NODE_USE_ENV_PROXY"] = "1";
+  console.log("[main] Detected proxy environment; enabled NODE_USE_ENV_PROXY=1");
+}
+
 async function main() {
+  enableNodeEnvProxyForChildren();
   const config = loadConfig();
   const fileLogger = config.bridge.experimentalLogToFile
     ? installFileLogger(config.bridge.experimentalLogFilePath)
