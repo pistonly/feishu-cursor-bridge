@@ -60,12 +60,16 @@ export class ConversationService {
 
     const state = new FeishuCardState();
     let lastFlush = 0;
+    /** 串行化 im.message.patch，避免多次 updateCard 并发完成顺序颠倒导致飞书端长期显示旧（较短）内容 */
+    let cardPatchChain: Promise<void> = Promise.resolve();
 
     const flush = async (force: boolean) => {
       const now = Date.now();
       if (!force && now - lastFlush < throttleMs) return;
       lastFlush = now;
-      if (cardMessageId) {
+      if (!cardMessageId) return;
+
+      cardPatchChain = cardPatchChain.then(async () => {
         try {
           await this.feishu.updateCard(cardMessageId, state.toMarkdown());
         } catch (err) {
@@ -74,13 +78,17 @@ export class ConversationService {
             err instanceof Error ? err.message : err,
           );
         }
+      });
+
+      if (force) {
+        await cardPatchChain;
       }
     };
 
     const onAcp = (ev: BridgeAcpEvent) => {
       if (ev.sessionId !== session.sessionId) return;
       state.apply(ev);
-      flush(false).catch(() => {});
+      void flush(false);
     };
 
     this.acp.bridgeClient.on("acp", onAcp);
