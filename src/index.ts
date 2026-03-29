@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { loadConfig } from "./config.js";
+import { formatAcpBackendLabel } from "./acp/runtime.js";
 import { Bridge } from "./bridge.js";
 import { installFileLogger } from "./file-logger.js";
 import { acquireSingleInstanceLock } from "./single-instance.js";
@@ -51,12 +52,29 @@ async function main() {
   }
 
   console.log(`[main] Feishu domain: ${config.feishu.domain}`);
-  console.log(`[main] ACP adapter: ${config.acp.nodePath} ${config.acp.adapterEntry}`);
+  console.log(
+    `[main] ACP backend: ${config.acp.backend} (${formatAcpBackendLabel(config.acp.backend)})`,
+  );
+  if (config.acp.backend === "legacy") {
+    console.log(
+      `[main] ACP adapter: ${config.acp.nodePath} ${config.acp.adapterEntry}`,
+    );
+    console.log(`[main] Adapter session dir: ${config.acp.adapterSessionDir}`);
+  } else {
+    const authHints = [
+      config.acp.officialApiKey ? "api-key" : null,
+      config.acp.officialAuthToken ? "auth-token" : null,
+    ]
+      .filter(Boolean)
+      .join(", ");
+    console.log(
+      `[main] Official ACP command: ${config.acp.officialAgentPath} acp${authHints ? ` (${authHints})` : ""}`,
+    );
+  }
   console.log(`[main] Default workspace (CURSOR_WORK_DIR): ${config.acp.workspaceRoot}`);
   console.log(
     `[main] Allowed workspace roots: ${config.acp.allowedWorkspaceRoots.join(", ")}`,
   );
-  console.log(`[main] Adapter session dir: ${config.acp.adapterSessionDir}`);
   console.log(`[main] Bridge session store: ${config.bridge.sessionStorePath}`);
   console.log(`[main] Workspace presets file: ${config.bridge.workspacePresetsPath}`);
   console.log(`[main] Auto-approve permissions: ${config.autoApprovePermissions}`);

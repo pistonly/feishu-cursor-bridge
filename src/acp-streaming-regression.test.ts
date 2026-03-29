@@ -3,11 +3,13 @@ import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
-import type { Config } from "./config.js";
+import { loadConfig, type Config } from "./config.js";
 import type { FeishuBridgeClient } from "./acp/feishu-bridge-client.js";
+import { OfficialAcpRuntime } from "./acp/official-runtime.js";
 import {
   AcpRuntime,
   MAX_ADAPTER_SESSION_TIMEOUT_MS,
+  createAcpRuntime,
   resolveAdapterSessionTimeoutMs,
 } from "./acp/runtime.js";
 
@@ -38,9 +40,13 @@ function createTestConfig(): Config {
       domain: "feishu",
     },
     acp: {
+      backend: "legacy",
       nodePath: process.execPath,
       adapterEntry: "/tmp/cursor-agent-acp.js",
       extraArgs: [],
+      officialAgentPath: "agent",
+      officialApiKey: undefined,
+      officialAuthToken: undefined,
       workspaceRoot: tmpRoot,
       allowedWorkspaceRoots: [tmpRoot],
       adapterSessionDir: path.join(tmpRoot, "acp-sessions"),
@@ -79,6 +85,32 @@ function createMockLogger(): {
   };
 }
 
+async function withEnv<T>(
+  overrides: Record<string, string | undefined>,
+  run: () => Promise<T> | T,
+): Promise<T> {
+  const previous = new Map<string, string | undefined>();
+  for (const [key, value] of Object.entries(overrides)) {
+    previous.set(key, process.env[key]);
+    if (value == null) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+  try {
+    return await run();
+  } finally {
+    for (const [key, value] of previous) {
+      if (value == null) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
 test("AcpRuntime.prompt 会同时透传顶层 stream 与 _meta.stream", async () => {
   const runtime = new AcpRuntime(
     createTestConfig(),
@@ -108,6 +140,108 @@ test("AcpRuntime.prompt 会同时透传顶层 stream 与 _meta.stream", async ()
       stream: true,
     },
   });
+});
+
+test("OfficialAcpRuntime.prompt 使用标准 prompt 参数，不透传 legacy stream 标记", async () => {
+  const config = createTestConfig();
+  config.acp.backend = "official";
+  const runtime = new OfficialAcpRuntime(
+    config,
+    {} as FeishuBridgeClient,
+  );
+
+  let capturedParams: unknown;
+  const fakeConnection = {
+    prompt: async (params: unknown) => {
+      capturedParams = params;
+      return { stopReason: "end_turn" };
+    },
+  };
+
+  Object.assign(runtime as object, {
+    connection: fakeConnection,
+  });
+
+  const result = await runtime.prompt("session-1", "hello");
+
+  assert.equal(result.stopReason, "end_turn");
+  assert.deepEqual(capturedParams, {
+    sessionId: "session-1",
+    prompt: [{ type: "text", text: "hello" }],
+  });
+});
+
+test("createAcpRuntime 会按 ACP_BACKEND 返回对应实现", () => {
+  const legacyRuntime = createAcpRuntime(
+    createTestConfig(),
+    {} as FeishuBridgeClient,
+  );
+  const officialConfig = createTestConfig();
+  officialConfig.acp.backend = "official";
+  const officialRuntime = createAcpRuntime(
+    officialConfig,
+    {} as FeishuBridgeClient,
+  );
+
+  assert.equal(legacyRuntime.backend, "legacy");
+  assert.ok(legacyRuntime instanceof AcpRuntime);
+  assert.equal(officialRuntime.backend, "official");
+  assert.ok(officialRuntime instanceof OfficialAcpRuntime);
+});
+
+test("loadConfig 会解析官方 ACP 后端开关与命令参数", async () => {
+  const tmpRoot = path.join(os.tmpdir(), "feishu-cursor-bridge-config-tests");
+  await withEnv(
+    {
+      FEISHU_APP_ID: "app-id",
+      FEISHU_APP_SECRET: "app-secret",
+      ACP_BACKEND: "official",
+      CURSOR_AGENT_PATH: "/usr/local/bin/agent",
+      CURSOR_API_KEY: "api-key-1",
+      CURSOR_AUTH_TOKEN: "auth-token-1",
+      CURSOR_WORK_DIR: tmpRoot,
+    },
+    () => {
+      const config = loadConfig();
+      assert.equal(config.acp.backend, "official");
+      assert.equal(config.acp.officialAgentPath, "/usr/local/bin/agent");
+      assert.equal(config.acp.officialApiKey, "api-key-1");
+      assert.equal(config.acp.officialAuthToken, "auth-token-1");
+      assert.equal(config.acp.workspaceRoot, tmpRoot);
+    },
+  );
+});
+
+test("loadConfig 未设置 ACP_BACKEND 时默认走官方 ACP", async () => {
+  const tmpRoot = path.join(os.tmpdir(), "feishu-cursor-bridge-config-default-tests");
+  await withEnv(
+    {
+      FEISHU_APP_ID: "app-id",
+      FEISHU_APP_SECRET: "app-secret",
+      ACP_BACKEND: undefined,
+      CURSOR_WORK_DIR: tmpRoot,
+    },
+    () => {
+      const config = loadConfig();
+      assert.equal(config.acp.backend, "official");
+    },
+  );
+});
+
+test("loadConfig 仍允许显式切回 legacy", async () => {
+  const tmpRoot = path.join(os.tmpdir(), "feishu-cursor-bridge-config-legacy-tests");
+  await withEnv(
+    {
+      FEISHU_APP_ID: "app-id",
+      FEISHU_APP_SECRET: "app-secret",
+      ACP_BACKEND: "legacy",
+      CURSOR_WORK_DIR: tmpRoot,
+    },
+    () => {
+      const config = loadConfig();
+      assert.equal(config.acp.backend, "legacy");
+    },
+  );
 });
 
 test("适配器 session timeout 会被截断到上游允许的 24 小时上限", () => {

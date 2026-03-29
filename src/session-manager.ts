@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import type { AcpRuntime } from "./acp/runtime.js";
+import type { BridgeAcpRuntime } from "./acp/runtime-contract.js";
 import type { SessionStore, PersistedSessionGroup, PersistedSlotRecord } from "./session-store.js";
 
 // ---------------------------------------------------------------------------
@@ -81,7 +81,7 @@ export interface SessionManagerOptions {
 export class SessionManager {
   private groups = new Map<string, UserSessionGroup>();
   private pendingNotices = new Map<string, string[]>();
-  private acp: AcpRuntime;
+  private acp: BridgeAcpRuntime;
   private store: SessionStore;
   private idleMs: number;
   private debug: boolean;
@@ -93,7 +93,7 @@ export class SessionManager {
   private readonly onSessionWorkspaceRemove?: (sessionId: string) => void;
 
   constructor(
-    acp: AcpRuntime,
+    acp: BridgeAcpRuntime,
     store: SessionStore,
     idleMs: number,
     options?: SessionManagerOptions,

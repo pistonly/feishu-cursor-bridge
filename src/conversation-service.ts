@@ -1,6 +1,6 @@
 import type { Config } from "./config.js";
 import type { BridgeAcpEvent } from "./acp/types.js";
-import type { AcpRuntime } from "./acp/runtime.js";
+import type { BridgeAcpRuntime } from "./acp/runtime-contract.js";
 import { FeishuBot, type FeishuMessage } from "./feishu-bot.js";
 import { FeishuCardState } from "./feishu-renderer.js";
 import type { UserSession } from "./session-manager.js";
@@ -41,7 +41,7 @@ function isLikelyTimeoutMisclassifiedAsAuth(
 export class ConversationService {
   constructor(
     private readonly config: Config,
-    private readonly acp: AcpRuntime,
+    private readonly acp: BridgeAcpRuntime,
     private readonly feishu: FeishuBot,
   ) {}
 

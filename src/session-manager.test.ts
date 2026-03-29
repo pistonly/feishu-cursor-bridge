@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AcpRuntime } from "./acp/runtime.js";
+import type { BridgeAcpRuntime } from "./acp/runtime-contract.js";
 import { SessionManager } from "./session-manager.js";
 import { SessionStore, type PersistedSessionGroup } from "./session-store.js";
 
@@ -13,7 +13,7 @@ const SESSION_KEY = `dm:${USER_ID}`;
 const WORKSPACE_ROOT = "/tmp/bridge-session-test";
 
 type FakeAcpRuntime = Pick<
-  AcpRuntime,
+  BridgeAcpRuntime,
   "supportsLoadSession" | "newSession" | "loadSession" | "cancelSession" | "closeSession"
 >;
 
@@ -117,7 +117,7 @@ test("loadSession 失败后会优先复用已持久化的 CLI resume ID", async 
   const store = new SessionStore(storeFile);
   const waitForFlushes = trackPendingFlushes(store);
   const manager = new SessionManager(
-    acp as AcpRuntime,
+    acp as BridgeAcpRuntime,
     store,
     60_000,
     { defaultWorkspaceRoot: WORKSPACE_ROOT },
@@ -156,7 +156,7 @@ test("无法保留旧 CLI resume ID 时会生成绑定变更提醒", async () =>
   const store = new SessionStore(storeFile);
   const waitForFlushes = trackPendingFlushes(store);
   const manager = new SessionManager(
-    acp as AcpRuntime,
+    acp as BridgeAcpRuntime,
     store,
     60_000,
     { defaultWorkspaceRoot: WORKSPACE_ROOT },
@@ -213,7 +213,7 @@ test("活跃 slot 的 ACP session 被上游清理后会自动重建并保留 CLI
   const store = new SessionStore(storeFile);
   const waitForFlushes = trackPendingFlushes(store);
   const manager = new SessionManager(
-    acp as AcpRuntime,
+    acp as BridgeAcpRuntime,
     store,
     7 * 24 * 60 * 60_000,
     { defaultWorkspaceRoot: WORKSPACE_ROOT },

@@ -1,6 +1,7 @@
 import * as os from "node:os";
 import * as path from "node:path";
 import { resolveBundledAdapterEntry } from "./acp/paths.js";
+import type { AcpBackend } from "./acp/runtime-contract.js";
 
 export interface Config {
   feishu: {
@@ -10,10 +11,15 @@ export interface Config {
   };
   /** 上游 @blowmage/cursor-agent-acp 子进程与工作区 */
   acp: {
+    backend: AcpBackend;
     nodePath: string;
     adapterEntry: string;
     /** 透传给 cursor-agent-acp 的额外参数（不含 --session-dir） */
     extraArgs: string[];
+    /** Cursor 官方 ACP 命令路径（默认 `agent`） */
+    officialAgentPath: string;
+    officialApiKey?: string;
+    officialAuthToken?: string;
     /** Cursor 工作区根目录（ACP cwd / 客户端文件沙箱默认根） */
     workspaceRoot: string;
     /**
@@ -57,6 +63,7 @@ export interface Config {
 }
 
 const LOG_LEVELS = new Set(["debug", "info", "warn", "error"]);
+const ACP_BACKENDS = new Set<AcpBackend>(["legacy", "official"]);
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -110,6 +117,11 @@ function parseExtraArgs(raw: string | undefined): string[] {
   return parseShellLikeArgs(raw.trim());
 }
 
+function parseAcpBackend(raw: string | undefined): AcpBackend {
+  const normalized = (raw?.trim().toLowerCase() || "official") as AcpBackend;
+  return ACP_BACKENDS.has(normalized) ? normalized : "official";
+}
+
 const DEFAULT_SESSION_IDLE_TIMEOUT_MS = 7 * 24 * 60 * 60_000;
 
 const DEFAULT_MAX_SESSIONS_PER_USER = 10;
@@ -149,6 +161,7 @@ export function loadConfig(): Config {
   const workspaceRoot = path.resolve(
     expandHome(process.env["CURSOR_WORK_DIR"]?.trim() || process.cwd()),
   );
+  const backend = parseAcpBackend(process.env["ACP_BACKEND"]);
 
   const allowlistRaw = process.env["CURSOR_WORK_ALLOWLIST"]?.trim();
   let allowedWorkspaceRoots = allowlistRaw
@@ -246,12 +259,17 @@ export function loadConfig(): Config {
 
   const adapterEntry =
     process.env["CURSOR_ACP_ADAPTER_ENTRY"]?.trim() ||
-    resolveBundledAdapterEntry();
+    (backend === "legacy" ? resolveBundledAdapterEntry() : "");
 
   const nodePath =
     process.env["ACP_NODE_PATH"]?.trim() || process.execPath;
 
   const extraArgs = parseExtraArgs(process.env["CURSOR_ACP_EXTRA_ARGS"]);
+  const officialAgentPath =
+    process.env["CURSOR_AGENT_PATH"]?.trim() || "agent";
+  const officialApiKey = process.env["CURSOR_API_KEY"]?.trim() || undefined;
+  const officialAuthToken =
+    process.env["CURSOR_AUTH_TOKEN"]?.trim() || undefined;
 
   return {
     feishu: {
@@ -260,9 +278,13 @@ export function loadConfig(): Config {
       domain: process.env["FEISHU_DOMAIN"] ?? "feishu",
     },
     acp: {
+      backend,
       nodePath,
       adapterEntry,
       extraArgs,
+      officialAgentPath,
+      officialApiKey,
+      officialAuthToken,
       workspaceRoot,
       allowedWorkspaceRoots,
       adapterSessionDir,
