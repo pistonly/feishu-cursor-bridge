@@ -160,8 +160,8 @@ export class Bridge {
     }
   }
 
-  /** `/switch` 后展示的「上一轮」卡片：提问 + 回复（旧数据可能仅有回复） */
-  private buildSwitchLastTurnCardContent(slot: SessionSlot): string | null {
+  /** 展示某个 slot 的「上一轮」卡片：提问 + 回复（旧数据可能仅有回复） */
+  private buildSlotLastTurnCardContent(slot: SessionSlot): string | null {
     const hasPrompt = !!slot.lastPrompt?.trim();
     const hasReply = !!slot.lastReply?.trim();
     if (!hasPrompt && !hasReply) return null;
@@ -373,7 +373,7 @@ export class Bridge {
               msg.messageId,
               this.threadReplyOpts(msg),
             );
-            const lastTurnCard = this.buildSwitchLastTurnCardContent(slot);
+            const lastTurnCard = this.buildSlotLastTurnCardContent(slot);
             if (lastTurnCard) {
               await this.feishuBot.sendCard(
                 msg.chatId,
@@ -399,7 +399,7 @@ export class Bridge {
             msg.messageId,
             this.threadReplyOpts(msg),
           );
-          const lastTurnCard = this.buildSwitchLastTurnCardContent(slot);
+          const lastTurnCard = this.buildSlotLastTurnCardContent(slot);
           if (lastTurnCard) {
             await this.feishuBot.sendCard(
               msg.chatId,
@@ -408,6 +408,38 @@ export class Bridge {
               this.threadReplyOpts(msg),
             );
           }
+          return;
+        }
+
+        // ----------------------------------------------------------------
+        // /reply [target]
+        // ----------------------------------------------------------------
+        if (newConv.kind === "reply") {
+          const slot = await this.sessionManager.getSlot(
+            msg.chatId,
+            msg.senderId,
+            msg.chatType,
+            newConv.target,
+            this.threadScope(msg),
+          );
+          await this.flushPendingSessionNotices(msg);
+          const lastTurnCard = this.buildSlotLastTurnCardContent(slot);
+          if (!lastTurnCard) {
+            const label = slot.name ? ` (${slot.name})` : "";
+            await this.feishuBot.sendText(
+              msg.chatId,
+              `ℹ️ session #${slot.slotIndex}${label} 暂无缓存的上一轮对话。\n\n只有在当前桥接进程里成功完成过一次回复后，才能通过 \`/reply\` 重新发送。`,
+              msg.messageId,
+              this.threadReplyOpts(msg),
+            );
+            return;
+          }
+          await this.feishuBot.sendCard(
+            msg.chatId,
+            lastTurnCard,
+            msg.messageId,
+            this.threadReplyOpts(msg),
+          );
           return;
         }
 
@@ -856,7 +888,7 @@ export class Bridge {
     });
     await this.feishuBot.sendText(
       msg.chatId,
-      `📋 当前所有 session（共 ${slots.length} 个；# 为槽位编号，关闭后不会复用，故可能与数量连续不一致）：\n\n${lines.join("\n\n")}\n\n• \`/new\` — 新建 session\n• \`/switch <编号或名称>\` — 切换\n• \`/resume\` — 对当前 session 执行 ACP \`session/load\`（测试/恢复）\n• \`/rename <新名字>\` — 重命名当前 session\n• \`/rename <编号或名称> <新名字>\` — 重命名指定 session\n• \`/close <编号或名称>\` — 关闭\n• \`/close all\` — 关闭本组全部\n• \`/reset\` — 重置当前 session\n• \`/topic …\` — 仅发飞书、不发给 Agent（便于话题内写标题）`,
+      `📋 当前所有 session（共 ${slots.length} 个；# 为槽位编号，关闭后不会复用，故可能与数量连续不一致）：\n\n${lines.join("\n\n")}\n\n• \`/new\` — 新建 session\n• \`/switch <编号或名称>\` — 切换\n• \`/reply [编号或名称]\` — 重发上一轮缓存回复\n• \`/resume\` — 对当前 session 执行 ACP \`session/load\`（测试/恢复）\n• \`/rename <新名字>\` — 重命名当前 session\n• \`/rename <编号或名称> <新名字>\` — 重命名指定 session\n• \`/close <编号或名称>\` — 关闭\n• \`/close all\` — 关闭本组全部\n• \`/reset\` — 重置当前 session\n• \`/topic …\` — 仅发飞书、不发给 Agent（便于话题内写标题）`,
       msg.messageId,
       this.threadReplyOpts(msg),
     );

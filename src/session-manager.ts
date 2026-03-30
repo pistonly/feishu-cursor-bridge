@@ -590,6 +590,44 @@ export class SessionManager {
     }));
   }
 
+  async getSlot(
+    chatId: string,
+    userId: string,
+    chatTypeRaw: string,
+    target: number | string | null,
+    threadId?: string,
+  ): Promise<SessionSlot> {
+    const chatType = this.chatType(chatTypeRaw);
+    const key = this.makeKey(chatId, userId, chatType, threadId);
+    let group = this.groups.get(key);
+    if (!group) {
+      group = await this.restoreGroupFromStore(
+        key,
+        chatId,
+        userId,
+        chatType,
+        Date.now(),
+        threadId,
+      );
+    }
+    if (!group || group.slots.length === 0) {
+      throw new Error("当前没有任何 session。");
+    }
+
+    const slot =
+      target === null
+        ? this.findSlot(group, group.activeSlotIndex)
+        : this.resolveSlot(group, target);
+    if (!slot) {
+      throw new Error(
+        typeof target === "number"
+          ? `找不到编号 #${target} 的 session。`
+          : `找不到名称为 "${target}" 的 session。`,
+      );
+    }
+    return slot;
+  }
+
   // -------------------------------------------------------------------------
   // Cache last reply for active slot
   // -------------------------------------------------------------------------

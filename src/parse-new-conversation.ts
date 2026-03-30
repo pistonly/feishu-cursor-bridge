@@ -10,6 +10,7 @@ export type NewConversationCommand =
   | { kind: "new"; variant: "add-list"; path: string }
   | { kind: "new"; variant: "remove-list"; index: number }
   | { kind: "switch"; target: number | string | null }
+  | { kind: "reply"; target: number | string | null }
   | { kind: "rename"; target: number | string | null; name: string }
   | { kind: "close"; target: number | string }
   | { kind: "sessions" }
@@ -20,6 +21,7 @@ export type NewConversationCommand =
  * 解析重置/会话类命令：
  * - `/reset`、`/new`（含 `/new 1`、`/new list`、`/new add-list`、`/new remove-list`、`/new --name`）
  * - `/switch [编号或名称]`
+ * - `/reply [编号或名称]`
  * - `/rename <新名字>`、`/rename <编号或名称> <新名字>`
  * - `/close <编号或名称>`、`/close all`
  * - `/sessions`
@@ -41,6 +43,7 @@ export function parseNewConversationCommand(
     cmd !== "reset" &&
     cmd !== "new" &&
     cmd !== "switch" &&
+    cmd !== "reply" &&
     cmd !== "rename" &&
     cmd !== "close" &&
     cmd !== "sessions" &&
@@ -61,14 +64,15 @@ export function parseNewConversationCommand(
   }
 
   // /switch [target]
-  if (cmd === "switch") {
+  // /reply [target]
+  if (cmd === "switch" || cmd === "reply") {
     if (tokens.length === 1) {
-      return { kind: "switch", target: null };
+      return { kind: cmd, target: null };
     }
     const arg = tokens[1];
     // 仅整串为数字时按槽位编号解析，避免 parseInt("12abc") === 12 误切到 #12
     return {
-      kind: "switch",
+      kind: cmd,
       target: /^\d+$/.test(arg) ? parseInt(arg, 10) : arg,
     };
   }

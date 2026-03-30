@@ -125,7 +125,30 @@
 
 ---
 
-### 4. 关闭 session（`/close`）
+### 4. 重发上一轮回复（`/reply`）
+
+```text
+/reply
+/reply <编号或名称>
+```
+
+重发某个 session **当前桥接进程内缓存的上一轮对话**，不切换 session，也不会重新向 ACP 发起请求。
+
+- 不带参数时：重发**当前活跃 session** 的上一轮提问与回复。
+- 带编号或名称时：重发指定 session 的上一轮提问与回复。
+- 若当前进程里还没有缓存到该 slot 的上一轮结果，会提示“暂无缓存的上一轮对话”。
+
+**示例**：
+
+```text
+/reply
+/reply 2
+/reply backend
+```
+
+---
+
+### 5. 关闭 session（`/close`）
 
 ```text
 /close <编号或名称>
@@ -146,7 +169,7 @@
 
 ---
 
-### 5. 重命名 session（`/rename`）
+### 6. 重命名 session（`/rename`）
 
 ```text
 /rename <新名字>
@@ -170,7 +193,7 @@
 
 ---
 
-### 6. 重置当前 session（`/reset`）
+### 7. 重置当前 session（`/reset`）
 
 ```text
 /reset
@@ -196,7 +219,7 @@
 
 ---
 
-### 7. 状态（`/status`）
+### 8. 状态（`/status`）
 
 **等价命令**：`/status`、`/状态`
 
@@ -213,7 +236,7 @@
 
 ---
 
-### 8. 切换模型（`/model`）
+### 9. 切换模型（`/model`）
 
 **格式**：
 

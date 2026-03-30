@@ -235,3 +235,65 @@ test("活跃 slot 的 ACP session 被上游清理后会自动重建并保留 CLI
   assert.deepEqual(manager.consumePendingNotices(CHAT_ID, USER_ID, "p2p"), []);
   await waitForFlushes();
 });
+
+test("getSlot 可读取当前活跃 slot 或按名称读取指定 slot", async () => {
+  const storeFile = await createEmptyStoreFile();
+
+  let createCount = 0;
+  const acp: FakeAcpRuntime = {
+    supportsLoadSession: false,
+    async newSession(
+      cwd?: string,
+    ): Promise<{ sessionId: string; cursorCliChatId?: string }> {
+      createCount++;
+      return {
+        sessionId: `acp-${createCount}`,
+        cursorCliChatId: `cli-${createCount}`,
+      };
+    },
+    async loadSession(): Promise<void> {},
+    async cancelSession(): Promise<void> {},
+    async closeSession(): Promise<void> {},
+  };
+
+  const store = new SessionStore(storeFile);
+  const waitForFlushes = trackPendingFlushes(store);
+  const manager = new SessionManager(
+    acp as BridgeAcpRuntime,
+    store,
+    60_000,
+    { defaultWorkspaceRoot: WORKSPACE_ROOT },
+  );
+
+  await manager.init();
+  const first = await manager.getOrCreateSession(CHAT_ID, USER_ID, "p2p");
+  manager.setSlotLastTurn(
+    CHAT_ID,
+    USER_ID,
+    "p2p",
+    first.sessionId,
+    "first prompt",
+    "first reply",
+  );
+  await manager.createNewSlot(
+    CHAT_ID,
+    USER_ID,
+    "p2p",
+    WORKSPACE_ROOT,
+    "backend",
+  );
+
+  const active = await manager.getSlot(CHAT_ID, USER_ID, "p2p", null);
+  const named = await manager.getSlot(CHAT_ID, USER_ID, "p2p", "backend");
+
+  assert.equal(active.slotIndex, 2);
+  assert.equal(active.name, "backend");
+  assert.equal(named.slotIndex, 2);
+  assert.equal(named.session.sessionId, active.session.sessionId);
+  assert.equal(named.lastReply, undefined);
+
+  const firstSlot = await manager.getSlot(CHAT_ID, USER_ID, "p2p", 1);
+  assert.equal(firstSlot.lastPrompt, "first prompt");
+  assert.equal(firstSlot.lastReply, "first reply");
+  await waitForFlushes();
+});
