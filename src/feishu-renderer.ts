@@ -4,6 +4,8 @@ import type { BridgeAcpEvent } from "./acp/types.js";
  * 将多条 ACP 归一化事件折叠为一张飞书 interactive 卡片可用的 lark_md 文本。
  */
 export class FeishuCardState {
+  constructor(private readonly showAcpAvailableCommands = false) {}
+
   private main = "";
   private thought = "";
   private modeLine = "";
@@ -32,7 +34,9 @@ export class FeishuCardState {
         this.plan = ev.summary;
         break;
       case "available_commands_update":
-        this.commands = ev.summary;
+        if (this.showAcpAvailableCommands) {
+          this.commands = ev.summary;
+        }
         break;
       case "tool_call":
         this.tools.set(ev.toolCallId, { title: ev.title, status: ev.status });

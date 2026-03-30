@@ -37,6 +37,7 @@ function createTestConfig(): Config {
       allowMultipleInstances: false,
       experimentalLogToFile: false,
       experimentalLogFilePath: path.join(tmpRoot, "bridge.log"),
+      showAcpAvailableCommands: false,
     },
     autoApprovePermissions: false,
     bridgeDebug: false,

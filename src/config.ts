@@ -52,6 +52,11 @@ export interface Config {
     experimentalLogToFile: boolean;
     /** 实验参数：日志文件路径 */
     experimentalLogFilePath: string;
+    /**
+     * 为 true 时在飞书卡片与 `/resume` 回放摘要中展示 ACP `available_commands_update`（Cursor 内置 slash/skills 列表）。
+     * @default false — 环境变量未设或非 `true` 时为关闭
+     */
+    showAcpAvailableCommands: boolean;
   };
   autoApprovePermissions: boolean;
   bridgeDebug: boolean;
@@ -309,6 +314,10 @@ export function loadConfig(): Config {
     Number(process.env["FEISHU_CARD_THROTTLE_MS"] ?? 800) || 800,
   );
 
+  const showAcpAvailableCommands =
+    (process.env["BRIDGE_SHOW_ACP_AVAILABLE_COMMANDS"] ?? "false").toLowerCase() ===
+    "true";
+
   const adapterEntry =
     process.env["CURSOR_ACP_ADAPTER_ENTRY"]?.trim() ||
     (backend === "legacy" ? resolveBundledAdapterEntry() : "");
@@ -351,6 +360,7 @@ export function loadConfig(): Config {
       allowMultipleInstances,
       experimentalLogToFile,
       experimentalLogFilePath,
+      showAcpAvailableCommands,
     },
     autoApprovePermissions:
       (process.env["AUTO_APPROVE_PERMISSIONS"] ?? "true").toLowerCase() ===

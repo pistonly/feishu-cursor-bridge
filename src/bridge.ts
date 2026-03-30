@@ -317,6 +317,10 @@ export class Bridge {
                   session.sessionId,
                   session.workspaceRoot,
                 ),
+              {
+                showAvailableCommands:
+                  this.config.bridge.showAcpAvailableCommands,
+              },
             );
 
             const header =

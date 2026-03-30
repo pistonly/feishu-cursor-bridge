@@ -58,7 +58,9 @@ export class ConversationService {
       msg.replyInThread ? { replyInThread: true } : undefined,
     );
 
-    const state = new FeishuCardState();
+    const state = new FeishuCardState(
+      this.config.bridge.showAcpAvailableCommands,
+    );
     let lastFlush = 0;
     /** 串行化 im.message.patch，避免多次 updateCard 并发完成顺序颠倒导致飞书端长期显示旧（较短）内容 */
     let cardPatchChain: Promise<void> = Promise.resolve();

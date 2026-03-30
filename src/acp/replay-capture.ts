@@ -11,7 +11,9 @@ export async function captureAcpReplayDuring(
   client: FeishuBridgeClient,
   sessionId: string,
   run: () => Promise<void>,
+  options?: { showAvailableCommands?: boolean },
 ): Promise<string> {
+  const showAvailableCommands = options?.showAvailableCommands === true;
   let cur: LabelBuf = null;
   const blocks: string[] = [];
   const extras: string[] = [];
@@ -58,8 +60,10 @@ export async function captureAcpReplayDuring(
         );
         break;
       case "available_commands_update":
-        flush();
-        extras.push(`**可用命令**\n\`\`\`\n${ev.summary}\n\`\`\``);
+        if (showAvailableCommands) {
+          flush();
+          extras.push(`**可用命令**\n\`\`\`\n${ev.summary}\n\`\`\``);
+        }
         break;
       case "current_mode_update":
         flush();
