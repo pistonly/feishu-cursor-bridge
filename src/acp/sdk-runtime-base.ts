@@ -12,9 +12,11 @@ import type { Config } from "../config.js";
 import { FeishuBridgeClient } from "./feishu-bridge-client.js";
 import type {
   AcpBackend,
+  AcpModelInfo,
   AcpNewSessionOptions,
   AcpNewSessionResult,
   AcpPromptResult,
+  AcpSessionModelState,
   BridgeAcpRuntime,
 } from "./runtime-contract.js";
 
@@ -49,6 +51,7 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
   protected child: ChildProcess | null = null;
   protected connection: ClientSideConnection | null = null;
   protected initResult: InitializeResponse | null = null;
+  private readonly sessionModelStates = new Map<string, AcpSessionModelState>();
 
   protected constructor(
     config: Config,
@@ -62,6 +65,15 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
 
   get initializeResult(): InitializeResponse | null {
     return this.initResult;
+  }
+
+  getSessionModelState(sessionId: string): AcpSessionModelState | undefined {
+    const state = this.sessionModelStates.get(sessionId);
+    if (!state) return undefined;
+    return {
+      currentModelId: state.currentModelId,
+      availableModels: state.availableModels.map((model) => ({ ...model })),
+    };
   }
 
   get supportsLoadSession(): boolean {
@@ -112,6 +124,59 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
       sessionId,
       cwd,
       mcpServers: [],
+    };
+  }
+
+  protected updateSessionModelState(
+    sessionId: string,
+    rawModels: unknown,
+  ): void {
+    const next = this.normalizeSessionModelState(rawModels);
+    if (next) {
+      this.sessionModelStates.set(sessionId, next);
+    }
+  }
+
+  protected deleteSessionModelState(sessionId: string): void {
+    this.sessionModelStates.delete(sessionId);
+  }
+
+  private normalizeSessionModelState(rawModels: unknown): AcpSessionModelState | undefined {
+    if (!rawModels || typeof rawModels !== "object") {
+      return undefined;
+    }
+    const models = rawModels as {
+      currentModelId?: unknown;
+      availableModels?: unknown;
+    };
+    const availableModelsRaw = Array.isArray(models.availableModels)
+      ? models.availableModels
+      : [];
+    const availableModels: AcpModelInfo[] = [];
+    const seen = new Set<string>();
+    for (const item of availableModelsRaw) {
+      if (!item || typeof item !== "object") continue;
+      const model = item as { modelId?: unknown; name?: unknown };
+      const modelId =
+        typeof model.modelId === "string" ? model.modelId.trim() : "";
+      if (!modelId || seen.has(modelId)) continue;
+      seen.add(modelId);
+      const normalized: AcpModelInfo = { modelId };
+      if (typeof model.name === "string" && model.name.trim()) {
+        normalized.name = model.name.trim();
+      }
+      availableModels.push(normalized);
+    }
+    const currentModelId =
+      typeof models.currentModelId === "string" && models.currentModelId.trim()
+        ? models.currentModelId.trim()
+        : undefined;
+    if (!currentModelId && availableModels.length === 0) {
+      return undefined;
+    }
+    return {
+      currentModelId,
+      availableModels,
     };
   }
 
@@ -250,6 +315,7 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
     if (!conn) throw new Error("ACP not started");
     const dir = path.resolve(cwd ?? this.config.acp.workspaceRoot);
     const res = await conn.newSession(this.buildNewSessionParams(dir, options));
+    this.updateSessionModelState(res.sessionId, (res as { models?: unknown }).models);
     return this.extractNewSessionResult(res, options);
   }
 
@@ -267,7 +333,8 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
     }
     const t0 = this.config.acpReloadTraceLog ? Date.now() : 0;
     try {
-      await conn.loadSession(this.buildLoadSessionParams(sessionId, dir));
+      const res = await conn.loadSession(this.buildLoadSessionParams(sessionId, dir));
+      this.updateSessionModelState(sessionId, (res as { models?: unknown }).models);
       if (this.config.acpReloadTraceLog) {
         console.log(
           `[acp reload-trace] session/load ok backend=${this.backend} sessionId=${sessionId} elapsedMs=${Date.now() - t0}`,
@@ -299,6 +366,11 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
     const conn = this.connection;
     if (!conn) throw new Error("ACP not started");
     await conn.unstable_setSessionModel({ sessionId, modelId });
+    const current = this.sessionModelStates.get(sessionId);
+    this.sessionModelStates.set(sessionId, {
+      currentModelId: modelId,
+      availableModels: current?.availableModels.map((model) => ({ ...model })) ?? [],
+    });
   }
 
   async cancelSession(sessionId: string): Promise<void> {
@@ -313,6 +385,7 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
 
   async closeSession(sessionId: string): Promise<void> {
     const conn = this.connection;
+    this.deleteSessionModelState(sessionId);
     if (!conn || !this.supportsCloseSession()) return;
     try {
       await conn.unstable_closeSession({ sessionId });
@@ -329,5 +402,6 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
     }
     this.connection = null;
     this.initResult = null;
+    this.sessionModelStates.clear();
   }
 }

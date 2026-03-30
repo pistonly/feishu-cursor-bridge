@@ -15,6 +15,7 @@ import { ConversationService } from "./conversation-service.js";
 import { resolveAllowedWorkspaceDir } from "./workspace-policy.js";
 import { WorkspacePresetsStore } from "./workspace-presets-store.js";
 import { captureAcpReplayDuring } from "./acp/replay-capture.js";
+import { formatModelSwitchFailure, formatModelUsage } from "./model-switch.js";
 
 function formatDurationMs(ms: number): string {
   if (!Number.isFinite(ms)) {
@@ -759,14 +760,25 @@ export class Bridge {
     if (modelMatch) {
       const modelId = modelMatch[1]?.trim();
       if (!modelId) {
+        const snap = this.sessionManager.getSessionSnapshot(
+          msg.chatId,
+          msg.senderId,
+          msg.chatType,
+          this.threadScope(msg),
+        );
         await this.feishuBot.sendText(
           msg.chatId,
-          "用法：`/model <模型ID>`\n\n可在本机终端执行 `cursor-agent models` 查看可用 ID。",
+          formatModelUsage(
+            snap
+              ? this.acpRuntime.getSessionModelState(snap.activeSlot.session.sessionId)
+              : undefined,
+          ),
           msg.messageId,
           this.threadReplyOpts(msg),
         );
         return;
       }
+      let sessionId: string | undefined;
       try {
         const session = await this.sessionManager.getOrCreateSession(
           msg.chatId,
@@ -774,6 +786,7 @@ export class Bridge {
           msg.chatType,
           this.threadScope(msg),
         );
+        sessionId = session.sessionId;
         await this.flushPendingSessionNotices(msg);
         await this.acpRuntime.setSessionModel(session.sessionId, modelId);
         await this.feishuBot.sendText(
@@ -785,7 +798,12 @@ export class Bridge {
       } catch (err) {
         await this.feishuBot.sendText(
           msg.chatId,
-          `❌ 切换模型失败:\n${formatJsonRpcLikeError(err)}`,
+          formatModelSwitchFailure(
+            err,
+            sessionId
+              ? this.acpRuntime.getSessionModelState(sessionId)
+              : undefined,
+          ),
           msg.messageId,
           this.threadReplyOpts(msg),
         );

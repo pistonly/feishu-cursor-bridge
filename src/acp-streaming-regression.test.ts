@@ -171,6 +171,126 @@ test("OfficialAcpRuntime.prompt 使用标准 prompt 参数，不透传 legacy st
   });
 });
 
+test("OfficialAcpRuntime 会缓存 new/load 返回的模型状态，并在 set_model 后更新当前模型", async () => {
+  const config = createTestConfig();
+  config.acp.backend = "official";
+  const runtime = new OfficialAcpRuntime(
+    config,
+    {} as FeishuBridgeClient,
+  );
+
+  const fakeConnection = {
+    newSession: async () => ({
+      sessionId: "session-1",
+      models: {
+        currentModelId: "auto",
+        availableModels: [
+          { modelId: "auto", name: "Auto" },
+          { modelId: "gpt-5", name: "GPT-5" },
+        ],
+      },
+    }),
+    loadSession: async () => ({
+      models: {
+        currentModelId: "gpt-5",
+        availableModels: [
+          { modelId: "auto", name: "Auto" },
+          { modelId: "gpt-5", name: "GPT-5" },
+          { modelId: "claude-3.7-sonnet", name: "Claude 3.7 Sonnet" },
+        ],
+      },
+    }),
+    unstable_setSessionModel: async () => ({}),
+  };
+
+  Object.assign(runtime as object, {
+    connection: fakeConnection,
+    initResult: {
+      agentCapabilities: {
+        loadSession: true,
+      },
+    },
+  });
+
+  await runtime.newSession("/tmp/workspace");
+  assert.deepEqual(runtime.getSessionModelState("session-1"), {
+    currentModelId: "auto",
+    availableModels: [
+      { modelId: "auto", name: "Auto" },
+      { modelId: "gpt-5", name: "GPT-5" },
+    ],
+  });
+
+  await runtime.loadSession("session-1", "/tmp/workspace");
+  assert.deepEqual(runtime.getSessionModelState("session-1"), {
+    currentModelId: "gpt-5",
+    availableModels: [
+      { modelId: "auto", name: "Auto" },
+      { modelId: "gpt-5", name: "GPT-5" },
+      { modelId: "claude-3.7-sonnet", name: "Claude 3.7 Sonnet" },
+    ],
+  });
+
+  await runtime.setSessionModel("session-1", "claude-3.7-sonnet");
+  assert.deepEqual(runtime.getSessionModelState("session-1"), {
+    currentModelId: "claude-3.7-sonnet",
+    availableModels: [
+      { modelId: "auto", name: "Auto" },
+      { modelId: "gpt-5", name: "GPT-5" },
+      { modelId: "claude-3.7-sonnet", name: "Claude 3.7 Sonnet" },
+    ],
+  });
+});
+
+test("OfficialAcpRuntime.closeSession 与 stop 会清理缓存的模型状态", async () => {
+  const config = createTestConfig();
+  config.acp.backend = "official";
+  const runtime = new OfficialAcpRuntime(
+    config,
+    {} as FeishuBridgeClient,
+  );
+
+  let closeCalls = 0;
+  const fakeConnection = {
+    newSession: async () => ({
+      sessionId: "session-1",
+      models: {
+        currentModelId: "auto",
+        availableModels: [{ modelId: "auto", name: "Auto" }],
+      },
+    }),
+    unstable_closeSession: async () => {
+      closeCalls++;
+      return {};
+    },
+  };
+
+  Object.assign(runtime as object, {
+    connection: fakeConnection,
+    initResult: {
+      agentCapabilities: {
+        sessionCapabilities: {
+          close: {},
+        },
+      },
+    },
+  });
+
+  await runtime.newSession("/tmp/workspace");
+  assert.deepEqual(runtime.getSessionModelState("session-1"), {
+    currentModelId: "auto",
+    availableModels: [{ modelId: "auto", name: "Auto" }],
+  });
+
+  await runtime.closeSession("session-1");
+  assert.equal(closeCalls, 1);
+  assert.equal(runtime.getSessionModelState("session-1"), undefined);
+
+  await runtime.newSession("/tmp/workspace");
+  await runtime.stop();
+  assert.equal(runtime.getSessionModelState("session-1"), undefined);
+});
+
 test("createAcpRuntime 会按 ACP_BACKEND 返回对应实现", () => {
   const legacyRuntime = createAcpRuntime(
     createTestConfig(),
