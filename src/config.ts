@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { resolveBundledAdapterEntry } from "./acp/paths.js";
@@ -80,6 +81,33 @@ export function expandHome(p: string): string {
   return p;
 }
 
+/**
+ * 启动 cursor-agent-acp 子进程使用的 Node 可执行文件。
+ * 若 `ACP_NODE_PATH` 指向已删除或错误的路径（常见于换过 nvm 版本却仍保留旧路径），则回退为当前进程的 `process.execPath`，避免 `spawn ... ENOENT`。
+ */
+function resolveNodeExecutablePath(): string {
+  const fromEnv = process.env["ACP_NODE_PATH"]?.trim();
+  const raw = fromEnv ? expandHome(fromEnv) : process.execPath;
+  const abs = path.resolve(raw);
+  try {
+    if (fs.existsSync(abs)) {
+      const st = fs.statSync(abs);
+      if (st.isFile()) {
+        return abs;
+      }
+    }
+  } catch {
+    // ignore
+  }
+  const fallback = process.execPath;
+  if (fromEnv && path.resolve(fallback) !== abs) {
+    console.warn(
+      `[config] ACP_NODE_PATH 指向的路径不存在或不可用: ${abs}，已回退为当前进程 Node: ${fallback}`,
+    );
+  }
+  return fallback;
+}
+
 /** 空格分隔，支持引号包裹片段（简单拆分） */
 export function parseShellLikeArgs(raw: string): string[] {
   const out: string[] = [];
@@ -150,6 +178,29 @@ function parseSessionIdleTimeoutMs(raw: string | undefined): number {
   return Math.max(60_000, parsed);
 }
 
+/**
+ * ACP 子进程 `spawn(..., { cwd: workspaceRoot })` 要求 cwd 必须存在；若目录缺失，Node 会报
+ * `spawn <node 路径> ENOENT`，易误判为 Node 可执行文件丢失。
+ */
+function ensureWorkspaceRootReady(workspaceRoot: string): void {
+  try {
+    if (fs.existsSync(workspaceRoot)) {
+      if (!fs.statSync(workspaceRoot).isDirectory()) {
+        throw new Error(`CURSOR_WORK_DIR 不是目录: ${workspaceRoot}`);
+      }
+      return;
+    }
+    fs.mkdirSync(workspaceRoot, { recursive: true });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new Error(
+      `CURSOR_WORK_DIR 不可用: ${workspaceRoot}\n` +
+        `请创建该目录或修正 .env。若 cwd 不存在，子进程会启动失败（常被误报为 Node ENOENT）。\n` +
+        `底层原因: ${msg}`,
+    );
+  }
+}
+
 export function loadConfig(): Config {
   const logLevel = process.env["LOG_LEVEL"] ?? "info";
   if (!LOG_LEVELS.has(logLevel)) {
@@ -161,6 +212,7 @@ export function loadConfig(): Config {
   const workspaceRoot = path.resolve(
     expandHome(process.env["CURSOR_WORK_DIR"]?.trim() || process.cwd()),
   );
+  ensureWorkspaceRootReady(workspaceRoot);
   const backend = parseAcpBackend(process.env["ACP_BACKEND"]);
 
   const allowlistRaw = process.env["CURSOR_WORK_ALLOWLIST"]?.trim();
@@ -261,8 +313,7 @@ export function loadConfig(): Config {
     process.env["CURSOR_ACP_ADAPTER_ENTRY"]?.trim() ||
     (backend === "legacy" ? resolveBundledAdapterEntry() : "");
 
-  const nodePath =
-    process.env["ACP_NODE_PATH"]?.trim() || process.execPath;
+  const nodePath = resolveNodeExecutablePath();
 
   const extraArgs = parseExtraArgs(process.env["CURSOR_ACP_EXTRA_ARGS"]);
   const officialAgentPath =
