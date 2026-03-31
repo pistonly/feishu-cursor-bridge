@@ -219,11 +219,39 @@
 
 ---
 
-### 8. 状态（`/status`）
+### 8. 切换模式（`/mode`）
+
+```text
+/mode
+/mode <模式ID>
+```
+
+**作用**：查看或切换当前活跃 session 的 ACP mode，**不会**把整条消息再发给大模型。
+
+- 不带参数时：返回当前 session 已知的可用模式列表与当前模式。
+- 带参数时：调用 ACP `session/set_mode` 切换当前 session 模式。
+
+**示例**：
+
+```text
+/mode
+/mode plan
+/mode ask
+/mode agent
+```
+
+说明：
+
+- 当前官方 ACP 实测会返回 `agent`、`plan`、`ask` 三个核心模式；实际仍以当前 session 返回的 `availableModes` 为准。
+- 本桥接当前只提供显式 `/mode` 入口；`/plan ...`、`/ask ...` 等其它 slash 命令若未被桥接识别，仍按普通消息透传给 Agent。
+
+---
+
+### 9. 状态（`/status`）
 
 **等价命令**：`/status`、`/状态`
 
-**作用**：返回当前桥接 session 统计（活跃与内存中的 slot 总数）。
+**作用**：返回当前桥接 session 统计（活跃与内存中的 slot 总数），以及当前活跃 session 已知的 mode。
 
 **增强信息**：当服务环境 **`BRIDGE_DEBUG=true`** 时，同一条回复中会追加调试信息，包括：
 
@@ -236,12 +264,14 @@
 
 ---
 
-### 9. 切换模型（`/model`）
+### 10. 切换模型（`/model`）
 
 **格式**：
 
 ```text
+/model
 /model <模型ID>
+/model <序号>
 ```
 
 **作用**：通过 ACP `session/set_model` 切换**当前活跃 session** 使用的模型，**不会**把整条消息再发给大模型（避免仅出现「解释 /model」类回复）。
@@ -249,13 +279,19 @@
 **示例**：
 
 ```text
-/model auto
-/model gpt-5
+/model
+/model 2
+/model composer-2[fast=true]
 ```
 
-**可用模型 ID**：以本机 **`cursor-agent models`** 输出为准；若当前 ACP session 已返回模型状态，机器人会返回“显示名 -> 精确值”列表。请以**反引号中的完整值**作为 `/model` 参数，若带 `[]` 或其它参数后缀也要一并带上。
+**可用模型 ID / selector**：
 
-未带模型 ID 时，若当前 session 已拿到模型状态，机器人会直接返回可用模型 ID 与当前模型；否则回退到基础用法提示。
+- 默认 `official` 后端下，以**当前 ACP session 返回的 `availableModels`** 为准，而不是 `cursor-agent models` 的 alias 列表。
+- 机器人返回列表时，反引号中的值就是可直接提交给 ACP `session/set_model` 的**精确 selector**；若带 `[]` 或其它参数后缀，必须完整带上。
+- `official` 后端下，列表会带 `【n】` 序号，可直接使用 `/model <序号>`；桥接会按当前 session 的可用模型列表做 1-based 解析。
+- 若当前 session 尚未拿到模型状态，机器人会回退到基础用法提示；此时请先让该 slot 建立/恢复 session 并完成一轮交互，再使用序号或列表。
+
+未带参数时，若当前 session 已拿到模型状态，机器人会直接返回可用模型列表与当前模型；否则回退到基础用法提示。
 
 ---
 

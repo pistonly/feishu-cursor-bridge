@@ -1,0 +1,37 @@
+version: "3.8"
+
+services:
+  bridge-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+      args:
+        UID: "1001"
+        GID: "1001"
+    container_name: feishu-cursor-bridge-dev
+    user: "0:0"
+    working_dir: /home/liuyang/Documents/feishu-cursor-bridge
+    env_file:
+      - ../.env
+    environment:
+      HOME: /home/liuyang
+      PATH: /home/liuyang/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      CURSOR_AGENT_PATH: agent
+    volumes:
+      - /home/liuyang/Documents:/home/liuyang/Documents
+      - /home/liuyang/.feishu-cursor-bridge:/home/liuyang/.feishu-cursor-bridge
+      - /home/liuyang/.cursor:/home/liuyang/.cursor
+      - /home/liuyang/.config/Cursor:/home/liuyang/.config/Cursor
+      - /home/liuyang/.local/bin:/home/liuyang/.local/bin:ro
+      - /home/liuyang/.local/share/cursor-agent:/home/liuyang/.local/share/cursor-agent:ro
+      - bridge_node_modules:/home/liuyang/Documents/feishu-cursor-bridge/node_modules
+      - bridge_npm_cache:/home/liuyang/.npm
+    command: ["bash", "./docker/dev-entrypoint.sh", "npm", "run", "dev"]
+    restart: unless-stopped
+    stdin_open: true
+    tty: true
+    init: true
+
+volumes:
+  bridge_node_modules:
+  bridge_npm_cache:

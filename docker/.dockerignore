@@ -1,0 +1,9 @@
+.git
+.cursor
+.worktree
+node_modules
+dist
+memory
+reference
+.env
+npm-debug.log

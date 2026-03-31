@@ -1,0 +1,28 @@
+FROM node:20-bookworm-slim
+
+ARG UID=1001
+ARG GID=1001
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bash \
+    ca-certificates \
+    git \
+    g++ \
+    make \
+    python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd --gid "${GID}" liuyang \
+    && useradd --uid "${UID}" --gid "${GID}" --create-home --shell /bin/bash liuyang \
+    && mkdir -p /home/liuyang/Documents/feishu-cursor-bridge \
+    && chown -R "${UID}:${GID}" /home/liuyang
+
+WORKDIR /home/liuyang/Documents/feishu-cursor-bridge
+
+ENV HOME=/home/liuyang
+ENV PATH=/home/liuyang/.local/bin:${PATH}
+ENV npm_config_update_notifier=false
+
+USER liuyang
+
+CMD ["bash", "./docker/dev-entrypoint.sh", "npm", "run", "dev"]

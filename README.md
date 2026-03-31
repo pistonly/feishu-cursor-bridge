@@ -10,7 +10,7 @@
 - **多 session**：同一用户在同一聊天中可同时持有多个 session（最多 5 个），各自独立上下文与工作区；可用 `/switch` 在它们之间切换，未活跃的 session 仍保持 ACP 连接
 - **每用户存活 session 上限**：同一飞书用户跨所有私聊/群/话题的存活 session 总数默认最多 **10**（可用 `BRIDGE_MAX_SESSIONS_PER_USER` 调整；`0` 表示不限制），避免将空闲过期设为无限时进程堆积过多 ACP 连接
 - 群聊 @ 机器人触发（或满足「仅 1 用户 + 1 机器人」时可免 @）；私聊直接对话
-- 内置命令：`/new`、`/sessions`、`/switch`、`/close`（含 `/close all`）、`/rename`、`/reset`（含快捷列表 `/new list`、`/new <序号>` 等）、`/status`、`/model`；另有 **`/topic` + 话题内容** 的纯展示命令（不发给 Agent，见 `docs/feishu-commands.md`）
+- 内置命令：`/new`、`/sessions`、`/switch`、`/close`（含 `/close all`）、`/rename`、`/reset`（含快捷列表 `/new list`、`/new <序号>` 等）、`/status`、`/mode`、`/model`；另有 **`/topic` + 话题内容** 的纯展示命令（不发给 Agent，见 `docs/feishu-commands.md`）
 - 会话映射持久化：进程重启后若 Agent 声明 `loadSession`，可 `session/load` 恢复
 - **CLI resume ID（legacy only）**：若切到 `ACP_BACKEND=legacy`，`/status` 会展示当前活跃 session 对应的 CLI chat id；官方 ACP 当前未暴露等价字段
 
@@ -52,6 +52,42 @@ npm run build && npm start
 # ./scripts/bridge-dev.sh
 # npm run dev:restart
 ```
+
+### Docker 开发联调
+
+仓库内提供了一套**开发联调**用的 Docker 配置，集中放在 `docker/` 目录：`docker/Dockerfile.dev`、`docker/compose.yaml`、`docker/dev-entrypoint.sh`。它不会在镜像里重新安装 Cursor Agent，而是**直接复用宿主机**上的以下目录：
+
+- `/home/liuyang/.local/bin`
+- `/home/liuyang/.local/share/cursor-agent`
+- `/home/liuyang/.cursor`
+- `/home/liuyang/.config/Cursor`
+- `/home/liuyang/.feishu-cursor-bridge`
+- `/home/liuyang/Documents`
+
+这样容器里的 bridge 可以直接调用宿主机已登录的 `agent acp`，也能继续访问你的工作区与本地 session store。
+
+首次使用：
+
+```bash
+cp .env.example .env
+# 编辑 .env
+docker-compose -f docker/compose.yaml up --build
+```
+
+常用命令：
+
+```bash
+docker-compose -f docker/compose.yaml up -d
+docker-compose -f docker/compose.yaml restart
+docker-compose -f docker/compose.yaml logs -f bridge-dev
+docker-compose -f docker/compose.yaml down
+```
+
+说明：
+
+- 该 compose 面向**本机 Linux 开发联调**，当前宿主机路径按 `/home/liuyang/...` 写死；若换机器，请同步修改 `docker/compose.yaml` 中的 bind mount。
+- 容器内工作目录与宿主机保持一致：`/home/liuyang/Documents/feishu-cursor-bridge`，因此现有 `.env` 里的工作区绝对路径通常无需额外改写。
+- 依赖安装在 Docker volume `bridge_node_modules` 中；`package-lock.json` 变化后，容器启动时会自动重新执行 `npm install`。
 
 ## 网络与代理
 
@@ -99,7 +135,9 @@ npm run build && npm start
 - **群聊**：@机器人 + 内容（开发平台须为应用开通 **`im:message.group_msg`**，否则群消息事件不会投递到机器人）；**话题群**内不同话题（`thread_id`）会**分别**映射 ACP 会话，与群主页会话互不共享
 - **多 session 切换**：`/new` 新建并切到该 session（旧 session 保持连接）；`/sessions` 列表；`/switch <编号或名称>` 切换活跃 session（无参数时切到上一次用过的）；`/close` 关闭指定；`/rename` 便于用名称切换。完整语法与快捷列表见 `docs/feishu-commands.md`
 - `/reset` 仅重置**当前活跃** session（同槽位换新 ACP 会话），不关闭其它 session
-- `/status` 或 `/状态`：会话统计，始终展示当前 ACP 后端；若是 `legacy`，会额外显示当前活跃 slot 的 CLI resume ID；`BRIDGE_DEBUG=true` 时额外含 ACP `sessionId`、路径等调试信息
+- `/status` 或 `/状态`：会话统计，始终展示当前 ACP 后端与当前活跃 session 已知 mode；若是 `legacy`，会额外显示当前活跃 slot 的 CLI resume ID；`BRIDGE_DEBUG=true` 时额外含 ACP `sessionId`、路径、可用模式等调试信息
+- `/mode <模式ID>`：通过 ACP `session/set_mode` 切换当前活跃 session 的 mode；无参数时返回当前 session 已知的可用模式与当前模式
+- `/model <模型ID>`：通过 ACP `session/set_model` 切换当前活跃 session 的模型；默认 `official` 后端以下**当前 ACP session 返回的可用 selector**为准，无参数时返回当前 session 已知的可用模型与当前模型；在 `official` 下可直接用 `/model <序号>`
 
 ## 最小验证清单（手工）
 
@@ -108,7 +146,7 @@ npm run build && npm start
 3. 连续多轮对话，确认复用同一会话（`BRIDGE_DEBUG` 下 sessionId 不变）
 4. `/reset` 后再次提问，当前活跃 slot 的 ACP sessionId 变化；若已用 `/new` 建多个 session，可用 `/switch` 在编号间切换且各 session 独立
 5. 触发工具调用时，卡片「工具」列表有更新（视 Agent 输出而定）
-6. 发送 `/status`，确认出现 **CLI resume ID**；在 PC 上可用同一 id 测试 `cursor-agent` 的 `--resume` 续聊（具体子命令以本机 CLI 文档为准）
+6. 发送 `/status`，确认显示当前 ACP 后端与当前 mode；若 `BRIDGE_DEBUG=true`，再确认返回里包含 `sessionId`、工作区路径等调试信息；只有切到 `ACP_BACKEND=legacy` 时，才会额外出现 **CLI resume ID**
 
 ## 技术栈
 
