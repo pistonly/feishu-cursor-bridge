@@ -2,6 +2,7 @@ import { parseShellLikeArgs } from "./config.js";
 
 export type NewConversationCommand =
   | { kind: "reset"; path?: string }
+  | { kind: "mode"; modeId?: string }
   | { kind: "new"; variant: "default"; name?: string }
   | { kind: "new"; variant: "workspace"; path: string; name?: string }
   /** 序号从 1 开始，对应列表中的第 N 项 */
@@ -24,6 +25,7 @@ export type NewConversationCommand =
  * - `/reply [编号或名称]`
  * - `/rename <新名字>`、`/rename <编号或名称> <新名字>`
  * - `/close <编号或名称>`、`/close all`
+ * - `/mode <模式ID>`
  * - `/sessions`
  * - `/resume`
  */
@@ -46,6 +48,7 @@ export function parseNewConversationCommand(
     cmd !== "reply" &&
     cmd !== "rename" &&
     cmd !== "close" &&
+    cmd !== "mode" &&
     cmd !== "sessions" &&
     cmd !== "session" &&
     cmd !== "resume"
@@ -61,6 +64,12 @@ export function parseNewConversationCommand(
   // /resume — ACP session/load 当前活跃 session
   if (cmd === "resume") {
     return { kind: "resume" };
+  }
+
+  // /mode [modeId]
+  if (cmd === "mode") {
+    const modeId = tokens[1]?.trim();
+    return modeId ? { kind: "mode", modeId } : { kind: "mode" };
   }
 
   // /switch [target]

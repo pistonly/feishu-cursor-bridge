@@ -19,3 +19,13 @@ test("parseNewConversationCommand 支持 /reply 指定编号或名称", () => {
     target: "backend api",
   });
 });
+
+test("parseNewConversationCommand 支持 /mode 查询或切换模式", () => {
+  assert.deepEqual(parseNewConversationCommand("/mode"), {
+    kind: "mode",
+  });
+  assert.deepEqual(parseNewConversationCommand("/mode plan"), {
+    kind: "mode",
+    modeId: "plan",
+  });
+});

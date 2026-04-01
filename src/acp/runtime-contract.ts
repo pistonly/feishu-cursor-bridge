@@ -26,6 +26,17 @@ export interface AcpSessionModelState {
   availableModels: AcpModelInfo[];
 }
 
+export interface AcpModeInfo {
+  modeId: string;
+  name?: string;
+  description?: string;
+}
+
+export interface AcpSessionModeState {
+  currentModeId?: string;
+  availableModes: AcpModeInfo[];
+}
+
 export interface BridgeAcpRuntime {
   readonly backend: AcpBackend;
   readonly bridgeClient: FeishuBridgeClient;
@@ -40,6 +51,8 @@ export interface BridgeAcpRuntime {
   ): Promise<AcpNewSessionResult>;
   loadSession(sessionId: string, cwd: string): Promise<void>;
   prompt(sessionId: string, text: string): Promise<AcpPromptResult>;
+  setSessionMode(sessionId: string, modeId: string): Promise<void>;
+  getSessionModeState(sessionId: string): AcpSessionModeState | undefined;
   setSessionModel(sessionId: string, modelId: string): Promise<void>;
   getSessionModelState(sessionId: string): AcpSessionModelState | undefined;
   cancelSession(sessionId: string): Promise<void>;

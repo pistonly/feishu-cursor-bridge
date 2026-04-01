@@ -172,7 +172,7 @@ test("OfficialAcpRuntime.prompt 使用标准 prompt 参数，不透传 legacy st
   });
 });
 
-test("OfficialAcpRuntime 会缓存 new/load 返回的模型状态，并在 set_model 后更新当前模型", async () => {
+test("OfficialAcpRuntime 会缓存 new/load 返回的模式与模型状态，并在切换后更新当前值", async () => {
   const config = createTestConfig();
   config.acp.backend = "official";
   const runtime = new OfficialAcpRuntime(
@@ -183,6 +183,14 @@ test("OfficialAcpRuntime 会缓存 new/load 返回的模型状态，并在 set_m
   const fakeConnection = {
     newSession: async () => ({
       sessionId: "session-1",
+      modes: {
+        currentModeId: "agent",
+        availableModes: [
+          { id: "agent", name: "Agent" },
+          { id: "plan", name: "Plan" },
+          { id: "ask", name: "Ask" },
+        ],
+      },
       models: {
         currentModelId: "auto",
         availableModels: [
@@ -192,6 +200,14 @@ test("OfficialAcpRuntime 会缓存 new/load 返回的模型状态，并在 set_m
       },
     }),
     loadSession: async () => ({
+      modes: {
+        currentModeId: "plan",
+        availableModes: [
+          { id: "agent", name: "Agent" },
+          { id: "plan", name: "Plan" },
+          { id: "ask", name: "Ask" },
+        ],
+      },
       models: {
         currentModelId: "gpt-5",
         availableModels: [
@@ -201,6 +217,7 @@ test("OfficialAcpRuntime 会缓存 new/load 返回的模型状态，并在 set_m
         ],
       },
     }),
+    setSessionMode: async () => ({}),
     unstable_setSessionModel: async () => ({}),
   };
 
@@ -214,6 +231,14 @@ test("OfficialAcpRuntime 会缓存 new/load 返回的模型状态，并在 set_m
   });
 
   await runtime.newSession("/tmp/workspace");
+  assert.deepEqual(runtime.getSessionModeState("session-1"), {
+    currentModeId: "agent",
+    availableModes: [
+      { modeId: "agent", name: "Agent" },
+      { modeId: "plan", name: "Plan" },
+      { modeId: "ask", name: "Ask" },
+    ],
+  });
   assert.deepEqual(runtime.getSessionModelState("session-1"), {
     currentModelId: "auto",
     availableModels: [
@@ -223,12 +248,30 @@ test("OfficialAcpRuntime 会缓存 new/load 返回的模型状态，并在 set_m
   });
 
   await runtime.loadSession("session-1", "/tmp/workspace");
+  assert.deepEqual(runtime.getSessionModeState("session-1"), {
+    currentModeId: "plan",
+    availableModes: [
+      { modeId: "agent", name: "Agent" },
+      { modeId: "plan", name: "Plan" },
+      { modeId: "ask", name: "Ask" },
+    ],
+  });
   assert.deepEqual(runtime.getSessionModelState("session-1"), {
     currentModelId: "gpt-5",
     availableModels: [
       { modelId: "auto", name: "Auto" },
       { modelId: "gpt-5", name: "GPT-5" },
       { modelId: "claude-3.7-sonnet", name: "Claude 3.7 Sonnet" },
+    ],
+  });
+
+  await runtime.setSessionMode("session-1", "ask");
+  assert.deepEqual(runtime.getSessionModeState("session-1"), {
+    currentModeId: "ask",
+    availableModes: [
+      { modeId: "agent", name: "Agent" },
+      { modeId: "plan", name: "Plan" },
+      { modeId: "ask", name: "Ask" },
     ],
   });
 
@@ -243,7 +286,7 @@ test("OfficialAcpRuntime 会缓存 new/load 返回的模型状态，并在 set_m
   });
 });
 
-test("OfficialAcpRuntime.closeSession 与 stop 会清理缓存的模型状态", async () => {
+test("OfficialAcpRuntime.closeSession 与 stop 会清理缓存的模式与模型状态", async () => {
   const config = createTestConfig();
   config.acp.backend = "official";
   const runtime = new OfficialAcpRuntime(
@@ -255,6 +298,10 @@ test("OfficialAcpRuntime.closeSession 与 stop 会清理缓存的模型状态", 
   const fakeConnection = {
     newSession: async () => ({
       sessionId: "session-1",
+      modes: {
+        currentModeId: "agent",
+        availableModes: [{ id: "agent", name: "Agent" }],
+      },
       models: {
         currentModelId: "auto",
         availableModels: [{ modelId: "auto", name: "Auto" }],
@@ -278,6 +325,10 @@ test("OfficialAcpRuntime.closeSession 与 stop 会清理缓存的模型状态", 
   });
 
   await runtime.newSession("/tmp/workspace");
+  assert.deepEqual(runtime.getSessionModeState("session-1"), {
+    currentModeId: "agent",
+    availableModes: [{ modeId: "agent", name: "Agent" }],
+  });
   assert.deepEqual(runtime.getSessionModelState("session-1"), {
     currentModelId: "auto",
     availableModels: [{ modelId: "auto", name: "Auto" }],
@@ -285,10 +336,12 @@ test("OfficialAcpRuntime.closeSession 与 stop 会清理缓存的模型状态", 
 
   await runtime.closeSession("session-1");
   assert.equal(closeCalls, 1);
+  assert.equal(runtime.getSessionModeState("session-1"), undefined);
   assert.equal(runtime.getSessionModelState("session-1"), undefined);
 
   await runtime.newSession("/tmp/workspace");
   await runtime.stop();
+  assert.equal(runtime.getSessionModeState("session-1"), undefined);
   assert.equal(runtime.getSessionModelState("session-1"), undefined);
 });
 

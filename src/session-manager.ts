@@ -49,6 +49,7 @@ export interface SessionSnapshot {
 
 export interface SlotListItem {
   slotIndex: number;
+  sessionId: string;
   name?: string;
   workspaceRoot: string;
   lastActiveAt: number;
@@ -583,6 +584,7 @@ export class SessionManager {
     const ordered = [...group.slots].sort((a, b) => a.slotIndex - b.slotIndex);
     return ordered.map((s) => ({
       slotIndex: s.slotIndex,
+      sessionId: s.session.sessionId,
       name: s.name,
       workspaceRoot: s.session.workspaceRoot,
       lastActiveAt: s.session.lastActiveAt,
