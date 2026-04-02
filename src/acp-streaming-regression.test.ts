@@ -54,6 +54,7 @@ function createTestConfig(): Config {
     bridge: {
       maxSessionsPerUser: 10,
       sessionIdleTimeoutMs: 60_000,
+      promptTimeoutMs: 150_000,
       sessionStorePath: path.join(tmpRoot, "sessions.json"),
       cardUpdateThrottleMs: 200,
       workspacePresetsPath: path.join(tmpRoot, "workspace-presets.json"),
@@ -414,6 +415,22 @@ test("loadConfig 仍允许显式切回 legacy", async () => {
     () => {
       const config = loadConfig();
       assert.equal(config.acp.backend, "legacy");
+    },
+  );
+});
+
+test("loadConfig 会解析 prompt watchdog 超时配置", async () => {
+  const tmpRoot = path.join(os.tmpdir(), "feishu-cursor-bridge-config-prompt-timeout-tests");
+  await withEnv(
+    {
+      FEISHU_APP_ID: "app-id",
+      FEISHU_APP_SECRET: "app-secret",
+      CURSOR_WORK_DIR: tmpRoot,
+      BRIDGE_PROMPT_TIMEOUT_MS: "45000",
+    },
+    () => {
+      const config = loadConfig();
+      assert.equal(config.bridge.promptTimeoutMs, 45_000);
     },
   );
 });

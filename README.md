@@ -116,6 +116,7 @@ docker-compose -f docker/compose.yaml down
 | `CURSOR_ACP_EXTRA_ARGS` | 透传 legacy 适配器 CLI（空格分隔） | 空 |
 | `BRIDGE_SESSION_STORE` | 飞书↔ACP 映射 JSON 路径 | `~/.feishu-cursor-bridge/.feishu-bridge-sessions.json` |
 | `SESSION_IDLE_TIMEOUT_MS` | 空闲多久新建会话；`0` / `infinity` 表示永不过期 | `604800000`（7 天） |
+| `BRIDGE_PROMPT_TIMEOUT_MS` | 单轮 prompt 最长等待时间；超时后主动 cancel 释放当前 slot；`0` / `infinity` 禁用 | `150000` |
 | `BRIDGE_MAX_SESSIONS_PER_USER` | 同一用户存活 session 总数上限（跨聊天）；`0` 不限制 | `10` |
 | `BRIDGE_SINGLE_INSTANCE_LOCK` | 单实例锁文件路径（已存在且 PID 存活则拒绝启动） | `~/.feishu-cursor-bridge/bridge.lock` |
 | `BRIDGE_ALLOW_MULTIPLE_INSTANCES` | `true` 时禁用单实例锁（仅调试） | `false` |

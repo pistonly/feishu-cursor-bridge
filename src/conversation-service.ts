@@ -38,6 +38,23 @@ function isLikelyTimeoutMisclassifiedAsAuth(
   return elapsedMs >= MISLEADING_AUTH_TIMEOUT_MS;
 }
 
+function formatPromptTimeoutMessage(timeoutMs: number): string {
+  const seconds = Math.max(1, Math.round(timeoutMs / 1000));
+  return (
+    `⏱️ 本次请求等待官方 ACP 超过 ${seconds} 秒，已主动中止，避免当前 session 一直停留在“上一个请求还在处理中”。\n\n` +
+    "请先重试一次；若仍稳定复现，通常说明上游 prompt/工具调用链路卡住了。"
+  );
+}
+
+function applyPromptTimeoutNotice(
+  state: FeishuCardState,
+  timeoutMs: number,
+): void {
+  const notice = formatPromptTimeoutMessage(timeoutMs);
+  const main = state.getMainText().trim();
+  state.setMainText(main ? `${main}\n\n---\n\n${notice}` : notice);
+}
+
 export class ConversationService {
   constructor(
     private readonly config: Config,
@@ -51,6 +68,7 @@ export class ConversationService {
   ): Promise<string | undefined> {
     const startedAt = Date.now();
     const throttleMs = this.config.bridge.cardUpdateThrottleMs;
+    const promptTimeoutMs = this.config.bridge.promptTimeoutMs;
     const cardMessageId = await this.feishu.sendCard(
       msg.chatId,
       "🤔 思考中...",
@@ -102,7 +120,51 @@ export class ConversationService {
         );
       }
 
-      const result = await this.acp.prompt(session.sessionId, msg.content);
+      const promptOutcome = this.acp
+        .prompt(session.sessionId, msg.content)
+        .then(
+          (result) => ({ kind: "result" as const, result }),
+          (error) => ({ kind: "error" as const, error }),
+        );
+      let timeoutHandle: NodeJS.Timeout | undefined;
+      const outcome = Number.isFinite(promptTimeoutMs)
+        ? await Promise.race([
+            promptOutcome,
+            new Promise<{ kind: "timeout" }>((resolve) => {
+              timeoutHandle = setTimeout(() => {
+                resolve({ kind: "timeout" });
+              }, promptTimeoutMs);
+            }),
+          ]).finally(() => {
+            if (timeoutHandle) {
+              clearTimeout(timeoutHandle);
+            }
+          })
+        : await promptOutcome;
+
+      if (outcome.kind === "timeout") {
+        const elapsedMs = Date.now() - startedAt;
+        console.warn(
+          `[conversation] prompt watchdog timeout sessionId=${session.sessionId} elapsedMs=${elapsedMs} timeoutMs=${promptTimeoutMs}`,
+        );
+        try {
+          await this.acp.cancelSession(session.sessionId);
+        } catch (err) {
+          console.warn(
+            `[conversation] cancelSession after prompt timeout failed sessionId=${session.sessionId}`,
+            err instanceof Error ? err.message : err,
+          );
+        }
+        applyPromptTimeoutNotice(state, promptTimeoutMs);
+        await flush(true);
+        return state.toMarkdown();
+      }
+
+      if (outcome.kind === "error") {
+        throw outcome.error;
+      }
+
+      const result = outcome.result;
 
       if (this.config.bridgeDebug) {
         console.log(
