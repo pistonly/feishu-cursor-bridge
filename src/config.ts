@@ -38,8 +38,6 @@ export interface Config {
      */
     maxSessionsPerUser: number;
     sessionIdleTimeoutMs: number;
-    /** 单轮 prompt watchdog；超时后主动 cancel 当前 ACP session 以释放同 slot 串行锁 */
-    promptTimeoutMs: number;
     sessionStorePath: string;
     cardUpdateThrottleMs: number;
     /** `/new list` 等使用的快捷列表 JSON 路径 */
@@ -158,8 +156,6 @@ function parseAcpBackend(raw: string | undefined): AcpBackend {
 }
 
 const DEFAULT_SESSION_IDLE_TIMEOUT_MS = 7 * 24 * 60 * 60_000;
-const DEFAULT_PROMPT_TIMEOUT_MS = 150_000;
-
 const DEFAULT_MAX_SESSIONS_PER_USER = 10;
 
 /** `0` 或负数表示不限制 */
@@ -186,19 +182,6 @@ function parseSessionIdleTimeoutMs(raw: string | undefined): number {
   return Math.max(60_000, parsed);
 }
 
-function parsePromptTimeoutMs(raw: string | undefined): number {
-  const trimmed = raw?.trim();
-  if (!trimmed) return DEFAULT_PROMPT_TIMEOUT_MS;
-  if (trimmed === "0" || /^infinity$/i.test(trimmed) || /^inf$/i.test(trimmed)) {
-    return Number.POSITIVE_INFINITY;
-  }
-
-  const parsed = Number(trimmed);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return DEFAULT_PROMPT_TIMEOUT_MS;
-  }
-  return Math.max(30_000, parsed);
-}
 
 /**
  * ACP 子进程 `spawn(..., { cwd: workspaceRoot })` 要求 cwd 必须存在；若目录缺失，Node 会报
@@ -321,9 +304,6 @@ export function loadConfig(): Config {
   const sessionIdleTimeoutMs = parseSessionIdleTimeoutMs(
     process.env["SESSION_IDLE_TIMEOUT_MS"],
   );
-  const promptTimeoutMs = parsePromptTimeoutMs(
-    process.env["BRIDGE_PROMPT_TIMEOUT_MS"],
-  );
 
   const maxSessionsPerUser = parseMaxSessionsPerUser(
     process.env["BRIDGE_MAX_SESSIONS_PER_USER"],
@@ -372,7 +352,6 @@ export function loadConfig(): Config {
     bridge: {
       maxSessionsPerUser,
       sessionIdleTimeoutMs,
-      promptTimeoutMs,
       sessionStorePath,
       cardUpdateThrottleMs,
       workspacePresetsPath,

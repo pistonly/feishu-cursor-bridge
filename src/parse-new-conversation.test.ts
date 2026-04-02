@@ -29,3 +29,14 @@ test("parseNewConversationCommand 支持 /mode 查询或切换模式", () => {
     modeId: "plan",
   });
 });
+
+test("parseNewConversationCommand 支持 /force 透传原始消息", () => {
+  assert.deepEqual(parseNewConversationCommand("/force hello world"), {
+    kind: "force",
+    prompt: "hello world",
+  });
+  assert.deepEqual(parseNewConversationCommand('/force "hello world"'), {
+    kind: "force",
+    prompt: "hello world",
+  });
+});

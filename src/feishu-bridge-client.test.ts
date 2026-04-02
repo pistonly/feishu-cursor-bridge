@@ -29,7 +29,6 @@ function createTestConfig(): Config {
     bridge: {
       maxSessionsPerUser: 10,
       sessionIdleTimeoutMs: 60_000,
-      promptTimeoutMs: 150_000,
       sessionStorePath: path.join(tmpRoot, "sessions.json"),
       cardUpdateThrottleMs: 200,
       workspacePresetsPath: path.join(tmpRoot, "workspace-presets.json"),

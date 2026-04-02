@@ -198,6 +198,92 @@ export class Bridge {
     return `${msg.chatId}:${msg.senderId}`;
   }
 
+  private currentPromptKey(msg: FeishuMessage): string {
+    const sessionKey = this.feishuSessionKey(msg);
+    const snap = this.sessionManager.getSessionSnapshot(
+      msg.chatId,
+      msg.senderId,
+      msg.chatType,
+      this.threadScope(msg),
+    );
+    return snap ? `${sessionKey}:${snap.activeSlot.slotIndex}` : sessionKey;
+  }
+
+  private async handleForcePrompt(
+    msg: FeishuMessage,
+    content: string,
+    prompt: string,
+  ): Promise<void> {
+    const trimmedPrompt = prompt.trim();
+    if (!trimmedPrompt) {
+      await this.feishuBot.sendText(
+        msg.chatId,
+        "用法：`/force <message>`\n\n这是实验命令：会绕过当前 slot 的本地串行保护，直接调用 ACP `prompt`，用于观察后端是否仍有响应。",
+        msg.messageId,
+        this.threadReplyOpts(msg),
+      );
+      return;
+    }
+
+    const promptKey = this.currentPromptKey(msg);
+    const hadActivePrompt = this.activePrompts.has(promptKey);
+    const session = await this.sessionManager.getOrCreateSession(
+      msg.chatId,
+      msg.senderId,
+      msg.chatType,
+      this.threadScope(msg),
+    );
+    await this.flushPendingSessionNotices(msg);
+
+    await this.feishuBot.sendText(
+      msg.chatId,
+      `🧪 已执行实验命令 \`/force\`，将绕过本地“上一个请求还在处理中”保护，直接向 ACP 发送本条消息。\n• sessionId：\`${session.sessionId}\`\n• 当前 slot 本地锁：${hadActivePrompt ? "占用中" : "空闲"}\n\n注意：若后端仍在处理同一 session 的旧请求，新的 ACP 事件或结果可能与正在进行的输出交错，仅用于排障实验。`,
+      msg.messageId,
+      this.threadReplyOpts(msg),
+    );
+
+    let stopReason = "unknown";
+    const replayMd = await captureAcpReplayDuring(
+      this.bridgeClient,
+      session.sessionId,
+      async () => {
+        const result = await this.acpRuntime.prompt(session.sessionId, trimmedPrompt);
+        stopReason = result.stopReason;
+      },
+      {
+        showAvailableCommands: this.config.bridge.showAcpAvailableCommands,
+      },
+    );
+
+    const header =
+      `🧪 \`/force\` 已完成，结果如下：\n` +
+      `• sessionId：\`${session.sessionId}\`\n` +
+      `• stopReason：\`${stopReason}\`\n` +
+      `• 本地锁状态（调用前）：${hadActivePrompt ? "占用中" : "空闲"}\n\n` +
+      `---\n\n`;
+    const emptyHint =
+      "_（ACP `prompt` 已返回，但这次没有捕获到可展示的 `session/update` 文本；若需进一步排查，可打开 `BRIDGE_DEBUG=true` 观察原始事件。）_";
+    let body = replayMd.trim() ? replayMd.trim() : emptyHint;
+    const MAX_TOTAL = 28_000;
+    if (header.length + body.length > MAX_TOTAL) {
+      body =
+        body.slice(0, Math.max(0, MAX_TOTAL - header.length - 120)) +
+        "\n\n_（实验输出过长，已截断）_";
+    }
+    await this.feishuBot.sendCard(
+      msg.chatId,
+      header + body,
+      msg.messageId,
+      this.threadReplyOpts(msg),
+    );
+
+    if (this.config.bridgeDebug) {
+      console.log(
+        `[bridge:debug] /force completed sessionId=${session.sessionId} stopReason=${stopReason} hadActivePrompt=${hadActivePrompt} len=${content.length}`,
+      );
+    }
+  }
+
   /**
    * `/topic …` 普通命令：整条消息直接丢弃，不调 SessionManager、不连 ACP、不建 session。
    * 飞书富文本常把 `/topic` 包在 **、`` ` `` 里，行首不是 `/`，需额外判断。
@@ -423,6 +509,14 @@ export class Bridge {
               this.threadReplyOpts(msg),
             );
           }
+          return;
+        }
+
+        // ----------------------------------------------------------------
+        // /force <message> — bypass local prompt serialization
+        // ----------------------------------------------------------------
+        if (newConv.kind === "force") {
+          await this.handleForcePrompt(msg, content, newConv.prompt);
           return;
         }
 
@@ -911,18 +1005,7 @@ export class Bridge {
 
     // Prompt key is scoped to the active slot so different slots can run in parallel,
     // but the same slot is still serialized.
-    const sessionKey = this.feishuSessionKey(msg);
-
-    // Peek at current active slot index for the prompt key
-    const snap = this.sessionManager.getSessionSnapshot(
-      msg.chatId,
-      msg.senderId,
-      msg.chatType,
-      this.threadScope(msg),
-    );
-    const promptKey = snap
-      ? `${sessionKey}:${snap.activeSlot.slotIndex}`
-      : sessionKey;
+    const promptKey = this.currentPromptKey(msg);
 
     if (this.activePrompts.has(promptKey)) {
       await this.feishuBot.sendText(
@@ -1007,7 +1090,7 @@ export class Bridge {
     });
     await this.feishuBot.sendText(
       msg.chatId,
-      `📋 当前所有 session（共 ${slots.length} 个；# 为槽位编号，关闭后不会复用，故可能与数量连续不一致）：\n\n${lines.join("\n\n")}\n\n• \`/new\` — 新建 session\n• \`/switch <编号或名称>\` — 切换\n• \`/reply [编号或名称]\` — 重发上一轮缓存回复\n• \`/resume\` — 对当前 session 执行 ACP \`session/load\`（测试/恢复）\n• \`/mode <模式ID>\` — 切换当前 session 模式\n• \`/rename <新名字>\` — 重命名当前 session\n• \`/rename <编号或名称> <新名字>\` — 重命名指定 session\n• \`/close <编号或名称>\` — 关闭\n• \`/close all\` — 关闭本组全部\n• \`/reset\` — 重置当前 session\n• \`/topic …\` — 仅发飞书、不发给 Agent（便于话题内写标题）`,
+      `📋 当前所有 session（共 ${slots.length} 个；# 为槽位编号，关闭后不会复用，故可能与数量连续不一致）：\n\n${lines.join("\n\n")}\n\n• \`/new\` — 新建 session\n• \`/switch <编号或名称>\` — 切换\n• \`/reply [编号或名称]\` — 重发上一轮缓存回复\n• \`/resume\` — 对当前 session 执行 ACP \`session/load\`（测试/恢复）\n• \`/force <message>\` — 实验：绕过本地串行锁，直接调用 ACP \`prompt\`\n• \`/mode <模式ID>\` — 切换当前 session 模式\n• \`/rename <新名字>\` — 重命名当前 session\n• \`/rename <编号或名称> <新名字>\` — 重命名指定 session\n• \`/close <编号或名称>\` — 关闭\n• \`/close all\` — 关闭本组全部\n• \`/reset\` — 重置当前 session\n• \`/topic …\` — 仅发飞书、不发给 Agent（便于话题内写标题）`,
       msg.messageId,
       this.threadReplyOpts(msg),
     );

@@ -10,7 +10,7 @@
 - **多 session**：同一用户在同一聊天中可同时持有多个 session（最多 5 个），各自独立上下文与工作区；可用 `/switch` 在它们之间切换，未活跃的 session 仍保持 ACP 连接
 - **每用户存活 session 上限**：同一飞书用户跨所有私聊/群/话题的存活 session 总数默认最多 **10**（可用 `BRIDGE_MAX_SESSIONS_PER_USER` 调整；`0` 表示不限制），避免将空闲过期设为无限时进程堆积过多 ACP 连接
 - 群聊 @ 机器人触发（或满足「仅 1 用户 + 1 机器人」时可免 @）；私聊直接对话
-- 内置命令：`/new`、`/sessions`、`/switch`、`/close`（含 `/close all`）、`/rename`、`/reset`（含快捷列表 `/new list`、`/new <序号>` 等）、`/status`、`/mode`、`/model`；另有 **`/topic` + 话题内容** 的纯展示命令（不发给 Agent，见 `docs/feishu-commands.md`）
+- 内置命令：`/new`、`/sessions`、`/switch`、`/close`（含 `/close all`）、`/rename`、`/reset`（含快捷列表 `/new list`、`/new <序号>` 等）、`/status`、`/mode`、`/model`、实验命令 `/force`；另有 **`/topic` + 话题内容** 的纯展示命令（不发给 Agent，见 `docs/feishu-commands.md`）
 - 会话映射持久化：进程重启后若 Agent 声明 `loadSession`，可 `session/load` 恢复
 - **CLI resume ID（legacy only）**：若切到 `ACP_BACKEND=legacy`，`/status` 会展示当前活跃 session 对应的 CLI chat id；官方 ACP 当前未暴露等价字段
 
@@ -116,7 +116,6 @@ docker-compose -f docker/compose.yaml down
 | `CURSOR_ACP_EXTRA_ARGS` | 透传 legacy 适配器 CLI（空格分隔） | 空 |
 | `BRIDGE_SESSION_STORE` | 飞书↔ACP 映射 JSON 路径 | `~/.feishu-cursor-bridge/.feishu-bridge-sessions.json` |
 | `SESSION_IDLE_TIMEOUT_MS` | 空闲多久新建会话；`0` / `infinity` 表示永不过期 | `604800000`（7 天） |
-| `BRIDGE_PROMPT_TIMEOUT_MS` | 单轮 prompt 最长等待时间；超时后主动 cancel 释放当前 slot；`0` / `infinity` 禁用 | `150000` |
 | `BRIDGE_MAX_SESSIONS_PER_USER` | 同一用户存活 session 总数上限（跨聊天）；`0` 不限制 | `10` |
 | `BRIDGE_SINGLE_INSTANCE_LOCK` | 单实例锁文件路径（已存在且 PID 存活则拒绝启动） | `~/.feishu-cursor-bridge/bridge.lock` |
 | `BRIDGE_ALLOW_MULTIPLE_INSTANCES` | `true` 时禁用单实例锁（仅调试） | `false` |
@@ -139,6 +138,7 @@ docker-compose -f docker/compose.yaml down
 - `/status` 或 `/状态`：会话统计，始终展示当前 ACP 后端与当前活跃 session 已知 mode；若是 `legacy`，会额外显示当前活跃 slot 的 CLI resume ID；`BRIDGE_DEBUG=true` 时额外含 ACP `sessionId`、路径、可用模式等调试信息
 - `/mode <模式ID>`：通过 ACP `session/set_mode` 切换当前活跃 session 的 mode；无参数时返回当前 session 已知的可用模式与当前模式
 - `/model <模型ID>`：通过 ACP `session/set_model` 切换当前活跃 session 的模型；默认 `official` 后端以下**当前 ACP session 返回的可用 selector**为准，无参数时返回当前 session 已知的可用模型与当前模型；在 `official` 下可直接用 `/model <序号>`
+- `/force <message>`：实验命令，绕过桥接层同 slot 串行保护，直接调用 ACP `prompt`，用于排查“本地锁住了”还是“后端仍可响应”
 
 ## 最小验证清单（手工）
 
