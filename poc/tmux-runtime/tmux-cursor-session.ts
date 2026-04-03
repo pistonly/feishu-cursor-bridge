@@ -16,6 +16,7 @@ import {
 export interface TmuxCursorSessionOptions {
   cwd: string;
   sessionName?: string;
+  windowId?: string;
   paneId?: string;
   startCommand?: string;
   cursorCliChatId?: string;
@@ -42,8 +43,9 @@ export interface RunPromptHooks {
 }
 
 export interface TmuxSessionBinding {
-  paneId: string;
+  paneId?: string;
   tmuxSessionName: string;
+  tmuxWindowId?: string;
   workspaceRoot: string;
   startCommand: string;
   cursorCliChatId?: string;
@@ -54,12 +56,25 @@ export interface TmuxBindingProbeResult {
   hasCursorAgentUi: boolean;
   snapshot?: string;
   reason?: string;
+  resolvedBinding?: {
+    paneId: string;
+    tmuxSessionName: string;
+    tmuxWindowId: string;
+  };
 }
 
 interface OutputEvent {
   paneId: string;
   text: string;
 }
+
+interface ResolvedTmuxTarget {
+  paneId: string;
+  tmuxSessionName: string;
+  tmuxWindowId: string;
+}
+
+const DEFAULT_SHARED_TMUX_SESSION_NAME = "feishu-cursor";
 
 function formatCommand(args: string[]): string {
   return ["tmux", ...args].join(" ");
@@ -102,67 +117,110 @@ export async function probeTmuxBinding(
   binding: TmuxSessionBinding,
   historyLines = 80,
 ): Promise<TmuxBindingProbeResult> {
-  try {
-    const descriptor = await runTmux([
-      "display-message",
-      "-p",
-      "-t",
-      binding.paneId,
-      "#{pane_id} #{session_name}",
-    ]);
-    const [paneId, sessionName] = descriptor.trim().split(/\s+/, 2);
-    if (paneId !== binding.paneId || sessionName !== binding.tmuxSessionName) {
-      return {
-        exists: false,
-        hasCursorAgentUi: false,
-        reason: `pane identity mismatch: expected ${binding.paneId}/${binding.tmuxSessionName}, got ${paneId || "-"} / ${sessionName || "-"}`,
-      };
+  const targets = [binding.paneId, binding.tmuxWindowId].filter(
+    (value, index, all): value is string => !!value && all.indexOf(value) === index,
+  );
+  let lastReason = "no pane/window target provided";
+  let resolved: ResolvedTmuxTarget | undefined;
+
+  for (const target of targets) {
+    try {
+      const candidate = await resolveTmuxTarget(target);
+      if (candidate.tmuxSessionName !== binding.tmuxSessionName) {
+        lastReason =
+          `target ${target} session mismatch: expected ${binding.tmuxSessionName}, ` +
+          `got ${candidate.tmuxSessionName}`;
+        continue;
+      }
+      if (binding.tmuxWindowId && candidate.tmuxWindowId !== binding.tmuxWindowId) {
+        lastReason =
+          `target ${target} window mismatch: expected ${binding.tmuxWindowId}, ` +
+          `got ${candidate.tmuxWindowId}`;
+        continue;
+      }
+      resolved = candidate;
+      break;
+    } catch (error) {
+      lastReason = error instanceof Error ? error.message : String(error);
     }
-  } catch (error) {
+  }
+
+  if (!resolved) {
     return {
       exists: false,
       hasCursorAgentUi: false,
-      reason: error instanceof Error ? error.message : String(error),
+      reason: lastReason,
     };
   }
 
   try {
-    const snapshot = await capturePane(binding.paneId, historyLines);
+    const snapshot = await capturePane(resolved.paneId, historyLines);
     const normalized = normalizeSnapshot(snapshot);
     return {
       exists: true,
       hasCursorAgentUi: looksLikeCursorAgentUi(normalized),
       snapshot,
+      resolvedBinding: resolved,
     };
   } catch (error) {
     return {
       exists: true,
       hasCursorAgentUi: false,
       reason: error instanceof Error ? error.message : String(error),
+      resolvedBinding: resolved,
     };
   }
 }
 
-async function createDetachedSession(
+async function tmuxSessionExists(sessionName: string): Promise<boolean> {
+  try {
+    await runTmux(["has-session", "-t", sessionName]);
+    return true;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/can't find session/i.test(message) || /no server running/i.test(message)) {
+      return false;
+    }
+    throw error;
+  }
+}
+
+async function createDetachedWindow(
   sessionName: string,
   cwd: string,
-): Promise<{ sessionName: string; paneId: string }> {
-  const output = await runTmux([
-    "new-session",
-    "-d",
-    "-P",
-    "-F",
-    "#{session_name} #{pane_id}",
-    "-s",
-    sessionName,
-    "-c",
-    cwd,
-  ]);
-  const [createdSessionName, paneId] = output.trim().split(/\s+/, 2);
-  if (!createdSessionName || !paneId) {
+): Promise<ResolvedTmuxTarget> {
+  const output = (await tmuxSessionExists(sessionName))
+    ? await runTmux([
+        "new-window",
+        "-d",
+        "-P",
+        "-F",
+        "#{session_name} #{window_id} #{pane_id}",
+        "-t",
+        sessionName,
+        "-c",
+        cwd,
+      ])
+    : await runTmux([
+        "new-session",
+        "-d",
+        "-P",
+        "-F",
+        "#{session_name} #{window_id} #{pane_id}",
+        "-s",
+        sessionName,
+        "-c",
+        cwd,
+      ]);
+  const [createdSessionName, windowId, paneId] = output.trim().split(/\s+/, 3);
+  if (!createdSessionName || !windowId || !paneId) {
     throw new Error(`Unexpected tmux new-session output: ${JSON.stringify(output)}`);
   }
-  return { sessionName: createdSessionName, paneId };
+  return {
+    paneId,
+    tmuxSessionName: createdSessionName,
+    tmuxWindowId: windowId,
+  };
 }
 
 async function createCursorCliChat(cwd: string): Promise<string> {
@@ -211,13 +269,19 @@ function shellEscapeArg(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-async function resolveSessionNameForPane(paneId: string): Promise<string> {
-  const sessionName = await runTmux(["display-message", "-p", "-t", paneId, "#{session_name}"]);
-  const normalized = sessionName.trim();
-  if (!normalized) {
-    throw new Error(`Failed to resolve session name for pane ${paneId}`);
+async function resolveTmuxTarget(target: string): Promise<ResolvedTmuxTarget> {
+  const descriptor = await runTmux([
+    "display-message",
+    "-p",
+    "-t",
+    target,
+    "#{session_name} #{window_id} #{pane_id}",
+  ]);
+  const [tmuxSessionName, tmuxWindowId, paneId] = descriptor.trim().split(/\s+/, 3);
+  if (!tmuxSessionName || !tmuxWindowId || !paneId) {
+    throw new Error(`Failed to resolve tmux binding for target ${target}`);
   }
-  return normalized;
+  return { paneId, tmuxSessionName, tmuxWindowId };
 }
 
 async function sendLiteral(paneId: string, text: string, pressEnter = false): Promise<void> {
@@ -421,9 +485,9 @@ export class TmuxCursorSession {
   private readonly verbose: boolean;
 
   private sessionName: string;
+  private windowId?: string;
   private paneId?: string;
   private cursorCliChatId?: string;
-  private ownsSession = false;
   private started = false;
   private observer: TmuxControlModeObserver | null = null;
   private turnInFlight = false;
@@ -431,7 +495,8 @@ export class TmuxCursorSession {
 
   constructor(options: TmuxCursorSessionOptions) {
     this.cwd = path.resolve(options.cwd);
-    this.sessionName = options.sessionName || `cursor-tmux-session-${Date.now()}`;
+    this.sessionName = options.sessionName || DEFAULT_SHARED_TMUX_SESSION_NAME;
+    this.windowId = options.windowId;
     this.paneId = options.paneId;
     this.cursorCliChatId = options.cursorCliChatId?.trim() || undefined;
     this.startCommand = options.startCommand || "cursor agent";
@@ -454,6 +519,13 @@ export class TmuxCursorSession {
     return this.sessionName;
   }
 
+  getWindowId(): string {
+    if (!this.windowId) {
+      throw new Error("tmux window is not initialized");
+    }
+    return this.windowId;
+  }
+
   getCursorCliChatId(): string | undefined {
     return this.cursorCliChatId;
   }
@@ -462,6 +534,7 @@ export class TmuxCursorSession {
     return {
       paneId: this.getPaneId(),
       tmuxSessionName: this.sessionName,
+      tmuxWindowId: this.getWindowId(),
       workspaceRoot: this.cwd,
       startCommand: this.startCommand,
       ...(this.cursorCliChatId ? { cursorCliChatId: this.cursorCliChatId } : {}),
@@ -615,20 +688,20 @@ export class TmuxCursorSession {
 
   async close(): Promise<void> {
     await this.stop();
-    if (!this.paneId) return;
+    if (!this.windowId && !this.paneId) return;
     try {
-      if (this.ownsSession) {
-        await runTmux(["kill-session", "-t", this.sessionName]);
-      } else {
+      if (this.windowId) {
+        await runTmux(["kill-window", "-t", this.windowId]);
+      } else if (this.paneId) {
         await runTmux(["kill-pane", "-t", this.paneId]);
       }
     } catch {
       // ignore
     } finally {
-      this.ownsSession = false;
       this.started = false;
       this.turnInFlight = false;
       this.cancelRequested = false;
+      this.windowId = undefined;
       this.paneId = undefined;
     }
   }
@@ -645,14 +718,31 @@ export class TmuxCursorSession {
   }
 
   private async ensurePane(): Promise<void> {
-    if (this.paneId) {
-      this.sessionName = await resolveSessionNameForPane(this.paneId);
-      return;
+    if (this.paneId || this.windowId) {
+      const probe = await probeTmuxBinding(
+        {
+          paneId: this.paneId,
+          tmuxSessionName: this.sessionName,
+          ...(this.windowId ? { tmuxWindowId: this.windowId } : {}),
+          workspaceRoot: this.cwd,
+          startCommand: this.startCommand,
+          ...(this.cursorCliChatId ? { cursorCliChatId: this.cursorCliChatId } : {}),
+        },
+        20,
+      );
+      if (probe.exists && probe.resolvedBinding) {
+        this.sessionName = probe.resolvedBinding.tmuxSessionName;
+        this.windowId = probe.resolvedBinding.tmuxWindowId;
+        this.paneId = probe.resolvedBinding.paneId;
+        return;
+      }
+      this.windowId = undefined;
+      this.paneId = undefined;
     }
-    const created = await createDetachedSession(this.sessionName, this.cwd);
-    this.sessionName = created.sessionName;
+    const created = await createDetachedWindow(this.sessionName, this.cwd);
+    this.sessionName = created.tmuxSessionName;
+    this.windowId = created.tmuxWindowId;
     this.paneId = created.paneId;
-    this.ownsSession = true;
   }
 
   private async ensureObserver(): Promise<void> {

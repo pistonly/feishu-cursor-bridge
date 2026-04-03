@@ -5,6 +5,7 @@ export interface PersistedTmuxAcpSessionRecord {
   sessionId: string;
   paneId: string;
   tmuxSessionName: string;
+  tmuxWindowId?: string;
   cursorCliChatId?: string;
   workspaceRoot: string;
   startCommand: string;

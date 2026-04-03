@@ -178,8 +178,9 @@ export class TmuxAcpAgent implements Agent {
     const binding = session.describeBinding();
     const record: PersistedTmuxAcpSessionRecord = {
       sessionId,
-      paneId: binding.paneId,
+      paneId: binding.paneId ?? session.getPaneId(),
       tmuxSessionName: binding.tmuxSessionName,
+      tmuxWindowId: binding.tmuxWindowId,
       ...(binding.cursorCliChatId ? { cursorCliChatId: binding.cursorCliChatId } : {}),
       workspaceRoot: binding.workspaceRoot,
       startCommand: binding.startCommand,
@@ -249,6 +250,7 @@ export class TmuxAcpAgent implements Agent {
           cursorChatId: record.cursorCliChatId,
           tmuxPaneId: record.paneId,
           tmuxSessionName: record.tmuxSessionName,
+          tmuxWindowId: record.tmuxWindowId,
         },
       }));
     return { sessions };
@@ -320,6 +322,7 @@ export class TmuxAcpAgent implements Agent {
           _meta: {
             cursorChatId: runtime.record.cursorCliChatId,
             tmuxPaneId: runtime.record.paneId,
+            tmuxWindowId: runtime.record.tmuxWindowId,
           },
         };
       } catch (error) {
@@ -424,6 +427,7 @@ export class TmuxAcpAgent implements Agent {
     const binding: TmuxSessionBinding = {
       paneId: record.paneId,
       tmuxSessionName: record.tmuxSessionName,
+      ...(record.tmuxWindowId ? { tmuxWindowId: record.tmuxWindowId } : {}),
       workspaceRoot: cwdOverride ?? record.workspaceRoot,
       startCommand: record.startCommand,
       ...(record.cursorCliChatId ? { cursorCliChatId: record.cursorCliChatId } : {}),
@@ -436,6 +440,7 @@ export class TmuxAcpAgent implements Agent {
         cwd: cwdOverride ?? record.workspaceRoot,
         paneId: record.paneId,
         sessionName: record.tmuxSessionName,
+        windowId: probe.resolvedBinding?.tmuxWindowId ?? record.tmuxWindowId,
         startCommand: record.startCommand,
         cursorCliChatId: record.cursorCliChatId,
         verbose: false,
@@ -503,6 +508,7 @@ export class TmuxAcpAgent implements Agent {
   ): void {
     record.paneId = binding.paneId;
     record.tmuxSessionName = binding.tmuxSessionName;
+    record.tmuxWindowId = binding.tmuxWindowId;
     record.workspaceRoot = binding.workspaceRoot;
     record.startCommand = binding.startCommand;
     record.cursorCliChatId = binding.cursorCliChatId;
