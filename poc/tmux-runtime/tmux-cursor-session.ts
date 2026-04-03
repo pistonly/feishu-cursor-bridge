@@ -184,8 +184,15 @@ async function createCursorCliChat(cwd: string): Promise<string> {
     proc.on("close", (code) => {
       if (code === 0) {
         const id = stdout.trim();
-        if (!id) {
-          reject(new Error("cursor agent create-chat returned empty output"));
+        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) {
+          const summary = id.replace(/\s+/g, " ").slice(0, 200);
+          reject(
+            new Error(
+              summary
+                ? `cursor agent create-chat returned unexpected output: ${summary}`
+                : "cursor agent create-chat returned empty output",
+            ),
+          );
           return;
         }
         resolve(id);
@@ -315,8 +322,8 @@ function buildReplyText(
 function looksLikeCursorAgentExited(snapshot: string): boolean {
   const normalized = normalizeSnapshot(snapshot);
   return (
-    normalized.includes("To resume this session: cursor agent --resume=") ||
-    /\$\s*$/.test(normalized)
+    /To resume this session: (?:cursor agent|agent) --resume=/i.test(normalized) ||
+    /[#$]\s*$/.test(normalized)
   );
 }
 
@@ -660,7 +667,14 @@ export class TmuxCursorSession {
       return;
     }
     if (!this.cursorCliChatId) {
-      this.cursorCliChatId = await createCursorCliChat(this.cwd);
+      try {
+        this.cursorCliChatId = await createCursorCliChat(this.cwd);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(
+          `[tmux-session] create-chat unavailable, falling back to plain cursor agent startup: ${message}`,
+        );
+      }
     }
   }
 
