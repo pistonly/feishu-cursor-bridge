@@ -18,9 +18,13 @@ export class TmuxAcpRuntime extends SdkAcpRuntimeBase {
       tmuxTsxCliEntry,
       tmuxServerEntry,
       tmuxSessionStorePath,
+      tmuxStartCommand,
       workspaceRoot,
     } = this.config.acp;
     const args = [tmuxTsxCliEntry, tmuxServerEntry, "--store-path", tmuxSessionStorePath];
+    if (tmuxStartCommand) {
+      args.push("--start-command", tmuxStartCommand);
+    }
     return {
       command: nodePath,
       args,

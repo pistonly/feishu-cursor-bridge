@@ -25,6 +25,7 @@ function createTestConfig(): Config {
       tmuxTsxCliEntry: "/tmp/tsx-cli.mjs",
       tmuxServerEntry: "/tmp/tmux-acp-server.ts",
       tmuxSessionStorePath: path.join(tmpRoot, "tmux-acp-sessions.json"),
+      tmuxStartCommand: undefined,
       workspaceRoot: tmpRoot,
       allowedWorkspaceRoots: [tmpRoot],
       adapterSessionDir: path.join(tmpRoot, "acp-sessions"),

@@ -74,6 +74,9 @@ async function main() {
     console.log(`[main] tmux ACP server entry: ${config.acp.tmuxServerEntry}`);
     console.log(`[main] tmux ACP tsx cli: ${config.acp.tmuxTsxCliEntry}`);
     console.log(`[main] tmux ACP session store: ${config.acp.tmuxSessionStorePath}`);
+    console.log(
+      `[main] tmux ACP start command: ${config.acp.tmuxStartCommand ?? "cursor agent"}`,
+    );
   }
   console.log(`[main] Default workspace (CURSOR_WORK_DIR): ${config.acp.workspaceRoot}`);
   console.log(

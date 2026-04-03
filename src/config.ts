@@ -31,6 +31,8 @@ export interface Config {
     tmuxServerEntry: string;
     /** tmux ACP server 的 session 持久化文件 */
     tmuxSessionStorePath: string;
+    /** tmux backend 启动交互式 Cursor Agent 的命令 */
+    tmuxStartCommand?: string;
     /** Cursor 工作区根目录（ACP cwd / 客户端文件沙箱默认根） */
     workspaceRoot: string;
     /**
@@ -346,6 +348,8 @@ export function loadConfig(): Config {
     process.env["TMUX_ACP_TSX_CLI"]?.trim() || resolveBundledTsxCliEntry();
   const tmuxServerEntry =
     process.env["TMUX_ACP_SERVER_ENTRY"]?.trim() || resolveBundledTmuxAcpServerEntry();
+  const tmuxStartCommand =
+    process.env["TMUX_ACP_START_COMMAND"]?.trim() || undefined;
 
   const nodePath = resolveNodeExecutablePath();
 
@@ -373,6 +377,7 @@ export function loadConfig(): Config {
       tmuxTsxCliEntry,
       tmuxServerEntry,
       tmuxSessionStorePath,
+      tmuxStartCommand,
       workspaceRoot,
       allowedWorkspaceRoots,
       adapterSessionDir,

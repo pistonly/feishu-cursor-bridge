@@ -51,6 +51,7 @@ function createTestConfig(): Config {
       tmuxTsxCliEntry: "/tmp/tsx-cli.mjs",
       tmuxServerEntry: "/tmp/tmux-acp-server.ts",
       tmuxSessionStorePath: path.join(tmpRoot, "tmux-acp-sessions.json"),
+      tmuxStartCommand: undefined,
       workspaceRoot: tmpRoot,
       allowedWorkspaceRoots: [tmpRoot],
       adapterSessionDir: path.join(tmpRoot, "acp-sessions"),
@@ -375,6 +376,24 @@ test("createAcpRuntime 会按 ACP_BACKEND 返回对应实现", () => {
   assert.ok(tmuxRuntime instanceof TmuxAcpRuntime);
 });
 
+test("TmuxAcpRuntime 会透传自定义 start command", () => {
+  const config = createTestConfig();
+  config.acp.backend = "tmux";
+  config.acp.tmuxStartCommand = "cursor agent --yolo --approve-mcps";
+  const runtime = new TmuxAcpRuntime(config, {} as FeishuBridgeClient);
+
+  const spec = (runtime as unknown as { createSpawnSpec: () => { args: string[] } }).createSpawnSpec();
+
+  assert.deepEqual(spec.args, [
+    "/tmp/tsx-cli.mjs",
+    "/tmp/tmux-acp-server.ts",
+    "--store-path",
+    config.acp.tmuxSessionStorePath,
+    "--start-command",
+    "cursor agent --yolo --approve-mcps",
+  ]);
+});
+
 test("loadConfig 会解析官方 ACP 后端开关与命令参数", async () => {
   const tmpRoot = path.join(os.tmpdir(), "feishu-cursor-bridge-config-tests");
   await withEnv(
@@ -440,6 +459,7 @@ test("loadConfig 会解析 tmux ACP 后端与内置 server 配置", async () => 
       TMUX_ACP_TSX_CLI: "/tmp/tsx-cli.mjs",
       TMUX_ACP_SERVER_ENTRY: "/tmp/tmux-acp-server.ts",
       TMUX_ACP_SESSION_STORE: "/tmp/tmux-acp-sessions.json",
+      TMUX_ACP_START_COMMAND: "cursor agent --yolo --approve-mcps",
       CURSOR_WORK_DIR: tmpRoot,
     },
     () => {
@@ -448,6 +468,7 @@ test("loadConfig 会解析 tmux ACP 后端与内置 server 配置", async () => 
       assert.equal(config.acp.tmuxTsxCliEntry, "/tmp/tsx-cli.mjs");
       assert.equal(config.acp.tmuxServerEntry, "/tmp/tmux-acp-server.ts");
       assert.equal(config.acp.tmuxSessionStorePath, "/tmp/tmux-acp-sessions.json");
+      assert.equal(config.acp.tmuxStartCommand, "cursor agent --yolo --approve-mcps");
     },
   );
 });

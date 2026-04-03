@@ -663,7 +663,7 @@ export class TmuxCursorSession {
   }
 
   private async ensureCursorCliChatId(): Promise<void> {
-    if (!this.usesDefaultCursorAgentCommand()) {
+    if (!this.usesCursorAgentCommand()) {
       return;
     }
     if (!this.cursorCliChatId) {
@@ -678,12 +678,12 @@ export class TmuxCursorSession {
     }
   }
 
-  private usesDefaultCursorAgentCommand(): boolean {
-    return this.startCommand.trim() === "cursor agent";
+  private usesCursorAgentCommand(): boolean {
+    return /^cursor agent(?:\s|$)/.test(this.startCommand.trim());
   }
 
   private composeLaunchCommand(): string {
-    if (!this.usesDefaultCursorAgentCommand()) {
+    if (!this.usesCursorAgentCommand()) {
       return this.startCommand;
     }
     if (!this.cursorCliChatId) {

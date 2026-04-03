@@ -837,6 +837,7 @@ export class Bridge {
         } else {
           body += `\n• tmux ACP server: ${this.config.acp.tmuxServerEntry}`;
           body += `\n• tmux ACP store: ${this.config.acp.tmuxSessionStorePath}`;
+          body += `\n• tmux start command: ${this.config.acp.tmuxStartCommand ?? "cursor agent"}`;
         }
       }
       await this.feishuBot.sendText(msg.chatId, body, msg.messageId, this.threadReplyOpts(msg));
