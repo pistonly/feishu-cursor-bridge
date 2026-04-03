@@ -29,16 +29,19 @@ import {
   type SetSessionModelResponse,
   type CloseSessionRequest,
   type CloseSessionResponse,
+  type ToolKind,
 } from "@agentclientprotocol/sdk";
 import {
   TmuxCursorSession,
   probeTmuxBinding,
+  type RunPromptHooks,
   type TmuxSessionBinding,
 } from "./tmux-cursor-session.js";
 import {
   TmuxAcpSessionStore,
   type PersistedTmuxAcpSessionRecord,
 } from "./tmux-acp-session-store.js";
+import type { SemanticSignal } from "./cursor-agent-detector.js";
 
 interface ServerOptions {
   storePath: string;
@@ -113,6 +116,236 @@ function extractPromptText(blocks: ContentBlock[]): string {
 function isCancelledError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /cancel/i.test(message);
+}
+
+function isIgnorableContentSignal(text: string, promptText: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return true;
+  if (trimmed === promptText.trim()) return true;
+  if (trimmed === `→ ${promptText.trim()}`) return true;
+  if (/^→\s*/.test(trimmed)) return true;
+  if (/^Add a follow-up\b/.test(trimmed)) return true;
+  if (/^Plan, search, build anything$/.test(trimmed)) return true;
+  if (/^Press Ctrl\+C again to exit$/i.test(trimmed)) return true;
+  if (/^To resume this session: cursor agent --resume=/i.test(trimmed)) return true;
+  if (/^\(base\)\s+\S+@\S+:.*[$#]$/.test(trimmed)) return true;
+  return false;
+}
+
+function normalizeThoughtSignal(signal: SemanticSignal): string | undefined {
+  if (signal.kind === "status") {
+    const normalized = signal.text
+      .replace(/\.+(?=(\s+\d+.*)?$)/, "")
+      .trim();
+    return normalized ? `[status] ${normalized}` : undefined;
+  }
+  if (signal.kind === "title") {
+    const normalized = signal.text.trim();
+    return normalized ? `[title] ${normalized}` : undefined;
+  }
+  return undefined;
+}
+
+interface ParsedToolStatus {
+  kind: ToolKind;
+  title: string;
+  state: "progress" | "completed";
+}
+
+function parseToolStatus(text: string): ParsedToolStatus | undefined {
+  const normalized = text.trim();
+  if (!normalized) return undefined;
+  const cleaned = normalized.replace(/\.+(?=\s+\d+\s+tokens?$)/i, "").trim();
+  const tokenCounter = /^[A-Za-z]+\.*\s+[\d.]+[kKmM]?\s+tokens?$/i;
+
+  if (/^(Generating|Thinking)\b/i.test(cleaned)) {
+    return undefined;
+  }
+  if (/^Reading\b/i.test(cleaned) && tokenCounter.test(cleaned)) {
+    return undefined;
+  }
+  if (/^Globbing\b/i.test(cleaned) && tokenCounter.test(cleaned)) {
+    return undefined;
+  }
+
+  const mapping: Array<{
+    regex: RegExp;
+    kind: ToolKind;
+    state: "progress" | "completed";
+  }> = [
+    { regex: /^Reading\b/i, kind: "read", state: "progress" },
+    { regex: /^Read\b/i, kind: "read", state: "completed" },
+    { regex: /^Globbing\b/i, kind: "search", state: "progress" },
+    { regex: /^Globbed\b/i, kind: "search", state: "completed" },
+    { regex: /^Searching\b/i, kind: "search", state: "progress" },
+    { regex: /^Indexing\b/i, kind: "search", state: "progress" },
+    { regex: /^Running\b/i, kind: "execute", state: "progress" },
+    { regex: /^Executing\b/i, kind: "execute", state: "progress" },
+    { regex: /^Applying\b/i, kind: "edit", state: "progress" },
+  ];
+
+  for (const item of mapping) {
+    if (item.regex.test(cleaned)) {
+      return {
+        kind: item.kind,
+        title: cleaned,
+        state: item.state,
+      };
+    }
+  }
+  return undefined;
+}
+
+function sanitizeReplyDelta(text: string, promptText: string): string {
+  return text
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter((line) => !isIgnorableContentSignal(line, promptText))
+    .join("\n")
+    .trim();
+}
+
+function createStreamingHooks(
+  promptText: string,
+  enqueue: (update: {
+    sessionUpdate:
+      | "agent_message_chunk"
+      | "agent_thought_chunk"
+      | "tool_call"
+      | "tool_call_update";
+    content?: { type: "text"; text: string };
+    toolCallId?: string;
+    title?: string;
+    status?: "pending" | "in_progress" | "completed" | "failed";
+    kind?: ToolKind;
+    rawOutput?: unknown;
+  }) => void,
+): {
+  hooks: RunPromptHooks;
+  hasStreamedContent: () => boolean;
+  finalize: (status: "completed" | "failed") => void;
+} {
+  const seenThought = new Set<string>();
+  let streamedContent = false;
+  let lastReplyText = "";
+  let nextToolSeq = 1;
+  let activeTool:
+    | {
+        toolCallId: string;
+        title: string;
+        kind: ToolKind;
+      }
+    | undefined;
+
+  const completeActiveTool = (rawOutput?: unknown, status: "completed" | "failed" = "completed") => {
+    if (!activeTool) return;
+    enqueue({
+      sessionUpdate: "tool_call_update",
+      toolCallId: activeTool.toolCallId,
+      status,
+      rawOutput,
+    });
+    activeTool = undefined;
+  };
+
+  return {
+    hooks: {
+      onSemanticSignals: (signals) => {
+        for (const signal of signals) {
+          if (signal.kind === "status") {
+            const parsed = parseToolStatus(signal.text);
+            if (parsed) {
+              if (
+                activeTool &&
+                activeTool.title === parsed.title &&
+                activeTool.kind === parsed.kind
+              ) {
+                if (parsed.state === "completed") {
+                  completeActiveTool({ status: signal.text });
+                }
+                continue;
+              }
+
+              if (activeTool) {
+                completeActiveTool({ supersededBy: parsed.title });
+              }
+
+              const toolCallId = `tmux-tool-${nextToolSeq++}`;
+              enqueue({
+                sessionUpdate: "tool_call",
+                toolCallId,
+                title: parsed.title,
+                status: parsed.state === "completed" ? "in_progress" : "in_progress",
+                kind: parsed.kind,
+              });
+              activeTool = {
+                toolCallId,
+                title: parsed.title,
+                kind: parsed.kind,
+              };
+
+              if (parsed.state === "completed") {
+                completeActiveTool({ status: signal.text });
+              }
+              continue;
+            }
+          }
+
+          const thought = normalizeThoughtSignal(signal);
+          if (!thought || seenThought.has(thought)) {
+            continue;
+          }
+          seenThought.add(thought);
+          enqueue({
+            sessionUpdate: "agent_thought_chunk",
+            content: {
+              type: "text",
+              text: thought,
+            },
+          });
+        }
+      },
+      onReplyTextProgress: (replyText) => {
+        const normalized = replyText.trim();
+        if (!normalized || isIgnorableContentSignal(normalized, promptText)) {
+          return;
+        }
+        if (normalized === lastReplyText) {
+          return;
+        }
+        if (lastReplyText && lastReplyText.startsWith(normalized)) {
+          return;
+        }
+
+        let delta = normalized;
+        if (lastReplyText && normalized.startsWith(lastReplyText)) {
+          delta = normalized.slice(lastReplyText.length);
+        } else if (lastReplyText && normalized.includes(lastReplyText)) {
+          delta = normalized.slice(normalized.indexOf(lastReplyText) + lastReplyText.length);
+        }
+
+        delta = sanitizeReplyDelta(delta.replace(/^\n+/, ""), promptText);
+        if (!delta.trim()) {
+          lastReplyText = normalized;
+          return;
+        }
+
+        streamedContent = true;
+        lastReplyText = normalized;
+        enqueue({
+          sessionUpdate: "agent_message_chunk",
+          content: {
+            type: "text",
+            text: delta,
+          },
+        });
+      },
+    },
+    hasStreamedContent: () => streamedContent,
+    finalize: (status) => {
+      completeActiveTool(undefined, status);
+    },
+  };
 }
 
 export class TmuxAcpAgent implements Agent {
@@ -270,16 +503,36 @@ export class TmuxAcpAgent implements Agent {
       },
     });
 
+    let updateChain = Promise.resolve();
+    const enqueueSessionUpdate = (update: {
+      sessionUpdate: "agent_message_chunk" | "agent_thought_chunk";
+      content: { type: "text"; text: string };
+    }): void => {
+      updateChain = updateChain.then(() =>
+        this.connection.sessionUpdate({
+          sessionId: params.sessionId,
+          update,
+        }),
+      );
+    };
+    const streaming = createStreamingHooks(
+      promptText,
+      enqueueSessionUpdate,
+    );
+
     const promptPromise = (async (): Promise<PromptResponse> => {
       try {
-        const result = await runtime.session.runPrompt(promptText, 90);
+        const result = await runtime.session.runPrompt(promptText, 90, streaming.hooks);
+        await updateChain;
+        streaming.finalize("completed");
+        await updateChain;
         runtime.record.lastActiveAt = Date.now();
         runtime.record.title = summarizePromptText(promptText) ?? runtime.record.title;
         this.syncBindingToRecord(runtime.record, runtime.session.describeBinding());
         this.store.set(runtime.record);
         await this.store.flush();
 
-        if (result.replyText.trim()) {
+        if (!streaming.hasStreamedContent() && result.replyText.trim()) {
           await this.connection.sessionUpdate({
             sessionId: params.sessionId,
             update: {
@@ -301,6 +554,10 @@ export class TmuxAcpAgent implements Agent {
           },
         };
       } catch (error) {
+        if (isCancelledError(error)) {
+          streaming.finalize("failed");
+        }
+        await updateChain.catch(() => undefined);
         if (isCancelledError(error)) {
           return {
             stopReason: "cancelled",

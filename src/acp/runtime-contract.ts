@@ -1,7 +1,7 @@
 import type { InitializeResponse } from "@agentclientprotocol/sdk";
 import type { FeishuBridgeClient } from "./feishu-bridge-client.js";
 
-export type AcpBackend = "legacy" | "official";
+export type AcpBackend = "legacy" | "official" | "tmux";
 
 export interface AcpNewSessionOptions {
   cursorCliChatId?: string;

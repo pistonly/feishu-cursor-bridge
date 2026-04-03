@@ -1,6 +1,7 @@
 import type { Config } from "../config.js";
 import { FeishuBridgeClient } from "./feishu-bridge-client.js";
 import { OfficialAcpRuntime } from "./official-runtime.js";
+import { TmuxAcpRuntime } from "./tmux-runtime.js";
 import type {
   AcpBackend,
   AcpNewSessionOptions,
@@ -137,11 +138,17 @@ export function createAcpRuntime(
   config: Config,
   handler: FeishuBridgeClient,
 ): BridgeAcpRuntime {
-  return config.acp.backend === "official"
-    ? new OfficialAcpRuntime(config, handler)
-    : new AcpRuntime(config, handler);
+  if (config.acp.backend === "official") {
+    return new OfficialAcpRuntime(config, handler);
+  }
+  if (config.acp.backend === "tmux") {
+    return new TmuxAcpRuntime(config, handler);
+  }
+  return new AcpRuntime(config, handler);
 }
 
 export function formatAcpBackendLabel(backend: AcpBackend): string {
-  return backend === "official" ? "Cursor 官方 ACP" : "第三方 ACP 适配器";
+  if (backend === "official") return "Cursor 官方 ACP";
+  if (backend === "tmux") return "tmux ACP server 原型";
+  return "第三方 ACP 适配器";
 }

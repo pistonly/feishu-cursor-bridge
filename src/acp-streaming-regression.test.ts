@@ -12,6 +12,7 @@ import {
   createAcpRuntime,
   resolveAdapterSessionTimeoutMs,
 } from "./acp/runtime.js";
+import { TmuxAcpRuntime } from "./acp/tmux-runtime.js";
 
 const require = createRequire(import.meta.url);
 
@@ -47,6 +48,9 @@ function createTestConfig(): Config {
       officialAgentPath: "agent",
       officialApiKey: undefined,
       officialAuthToken: undefined,
+      tmuxTsxCliEntry: "/tmp/tsx-cli.mjs",
+      tmuxServerEntry: "/tmp/tmux-acp-server.ts",
+      tmuxSessionStorePath: path.join(tmpRoot, "tmux-acp-sessions.json"),
       workspaceRoot: tmpRoot,
       allowedWorkspaceRoots: [tmpRoot],
       adapterSessionDir: path.join(tmpRoot, "acp-sessions"),
@@ -356,11 +360,19 @@ test("createAcpRuntime 会按 ACP_BACKEND 返回对应实现", () => {
     officialConfig,
     {} as FeishuBridgeClient,
   );
+  const tmuxConfig = createTestConfig();
+  tmuxConfig.acp.backend = "tmux";
+  const tmuxRuntime = createAcpRuntime(
+    tmuxConfig,
+    {} as FeishuBridgeClient,
+  );
 
   assert.equal(legacyRuntime.backend, "legacy");
   assert.ok(legacyRuntime instanceof AcpRuntime);
   assert.equal(officialRuntime.backend, "official");
   assert.ok(officialRuntime instanceof OfficialAcpRuntime);
+  assert.equal(tmuxRuntime.backend, "tmux");
+  assert.ok(tmuxRuntime instanceof TmuxAcpRuntime);
 });
 
 test("loadConfig 会解析官方 ACP 后端开关与命令参数", async () => {
@@ -414,6 +426,28 @@ test("loadConfig 仍允许显式切回 legacy", async () => {
     () => {
       const config = loadConfig();
       assert.equal(config.acp.backend, "legacy");
+    },
+  );
+});
+
+test("loadConfig 会解析 tmux ACP 后端与内置 server 配置", async () => {
+  const tmpRoot = path.join(os.tmpdir(), "feishu-cursor-bridge-config-tmux-tests");
+  await withEnv(
+    {
+      FEISHU_APP_ID: "app-id",
+      FEISHU_APP_SECRET: "app-secret",
+      ACP_BACKEND: "tmux",
+      TMUX_ACP_TSX_CLI: "/tmp/tsx-cli.mjs",
+      TMUX_ACP_SERVER_ENTRY: "/tmp/tmux-acp-server.ts",
+      TMUX_ACP_SESSION_STORE: "/tmp/tmux-acp-sessions.json",
+      CURSOR_WORK_DIR: tmpRoot,
+    },
+    () => {
+      const config = loadConfig();
+      assert.equal(config.acp.backend, "tmux");
+      assert.equal(config.acp.tmuxTsxCliEntry, "/tmp/tsx-cli.mjs");
+      assert.equal(config.acp.tmuxServerEntry, "/tmp/tmux-acp-server.ts");
+      assert.equal(config.acp.tmuxSessionStorePath, "/tmp/tmux-acp-sessions.json");
     },
   );
 });

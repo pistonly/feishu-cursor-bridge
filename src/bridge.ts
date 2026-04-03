@@ -818,7 +818,9 @@ export class Bridge {
         const backendPolicy =
           this.config.acp.backend === "legacy"
             ? `bridge=${bridgeIdlePolicy} / adapter=${formatDurationMs(Number(resolveAdapterSessionTimeoutMs(this.config)))}`
-            : `bridge=${bridgeIdlePolicy} / official=agent-managed`;
+            : this.config.acp.backend === "official"
+              ? `bridge=${bridgeIdlePolicy} / official=agent-managed`
+              : `bridge=${bridgeIdlePolicy} / tmux-acp=store-managed`;
         const slot = snap?.activeSlot;
         const availableModeIds = slot
           ? (
@@ -830,8 +832,11 @@ export class Bridge {
         body += `\n\n[调试 BRIDGE_DEBUG]\n• ACP 后端: ${this.acpRuntime.backend}\n• sessionKey: ${snap?.sessionKey ?? "(尚无)"}\n• threadId: ${this.threadScope(msg) ?? "（主会话区）"}\n• 活跃 slot: #${slot?.slotIndex ?? "—"}${slot?.name ? ` (${slot.name})` : ""}\n• ACP sessionId: ${slot?.session.sessionId ?? "—"}\n• 当前模式: ${currentModeId ?? "—"}\n• 可用模式: ${availableModeIds || "—"}\n• 会话 cwd: ${slot?.session.workspaceRoot ?? "—"}\n• 空闲过期约: ${idleLabel}\n• 会话策略: ${backendPolicy}\n• 默认工作区 (CURSOR_WORK_DIR): ${this.config.acp.workspaceRoot}\n• 允许根 (CURSOR_WORK_ALLOWLIST): ${this.config.acp.allowedWorkspaceRoots.join(", ")}\n• 映射文件: ${this.config.bridge.sessionStorePath}\n• loadSession: ${this.acpRuntime.supportsLoadSession}\n• LOG_LEVEL: ${this.config.logLevel}`;
         if (this.config.acp.backend === "legacy") {
           body += `\n• 适配器会话目录: ${this.config.acp.adapterSessionDir}`;
-        } else {
+        } else if (this.config.acp.backend === "official") {
           body += `\n• 官方 ACP 命令: ${this.config.acp.officialAgentPath} acp`;
+        } else {
+          body += `\n• tmux ACP server: ${this.config.acp.tmuxServerEntry}`;
+          body += `\n• tmux ACP store: ${this.config.acp.tmuxSessionStorePath}`;
         }
       }
       await this.feishuBot.sendText(msg.chatId, body, msg.messageId, this.threadReplyOpts(msg));

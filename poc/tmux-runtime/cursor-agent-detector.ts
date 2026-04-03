@@ -210,6 +210,12 @@ export class CursorAgentTurnDetector {
     this.lastOutputAt = now;
   }
 
+  noteReplyProgress(now = Date.now()): void {
+    this.lastOutputAt = now;
+    this.lastSemanticAt = now;
+    this.seenSemanticAfterPrompt = true;
+  }
+
   evaluateSnapshot(snapshot: string, now = Date.now()): TurnEvaluation {
     const normalized = normalizeSnapshot(snapshot);
     const busy = isCursorAgentBusy(normalized);

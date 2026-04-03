@@ -36,6 +36,11 @@ export interface RunPromptResult {
   semanticSignals: SemanticSignal[];
 }
 
+export interface RunPromptHooks {
+  onSemanticSignals?: (signals: SemanticSignal[]) => void;
+  onReplyTextProgress?: (replyText: string) => void;
+}
+
 export interface TmuxSessionBinding {
   paneId: string;
   tmuxSessionName: string;
@@ -230,17 +235,23 @@ async function capturePane(paneId: string, historyLines: number): Promise<string
 
 function isUiNoiseLine(line: string, prompt: string): boolean {
   const trimmed = line.trim();
-  if (!trimmed) return true;
-  if (trimmed === prompt.trim()) return true;
-  if (trimmed === `→ ${prompt.trim()}`) return true;
-  if (/^→\s*Add a follow-up/.test(trimmed)) return true;
-  if (/^(Generating|Reading|Thinking|Searching|Globbing|Running|Executing|Applying|Indexing)\b/.test(trimmed)) {
+  const unboxed = trimmed.replace(/^[│\s]+|[│\s]+$/g, "").trim();
+  if (!unboxed) return true;
+  if (unboxed === prompt.trim()) return true;
+  if (unboxed === `→ ${prompt.trim()}`) return true;
+  if (/^[│┌┐└┘─\s]+$/.test(trimmed)) return true;
+  if (/^Cursor Agent v/i.test(unboxed)) return true;
+  if (/^Composer\b/.test(unboxed)) return true;
+  if (/^\/ commands\b/.test(unboxed)) return true;
+  if (/^Plan, search, build anything$/.test(unboxed)) return true;
+  if (/^→\s*Add a follow-up/.test(unboxed)) return true;
+  if (/^(Generating|Reading|Thinking|Searching|Globbing|Running|Executing|Applying|Indexing)\b/.test(unboxed)) {
     return true;
   }
-  if (/^(Read|Globbed|Searching|Running|Executing|Applying)\b/.test(trimmed)) {
+  if (/^(Read|Globbed|Searching|Running|Executing|Applying)\b/.test(unboxed)) {
     return true;
   }
-  if (/^[⬡⬢]\s/.test(trimmed)) {
+  if (/^[⬡⬢]\s/.test(unboxed)) {
     return true;
   }
   return false;
@@ -273,6 +284,17 @@ function extractReplyFromSnapshot(snapshot: string, prompt: string): string {
   return candidates.join("\n").trim();
 }
 
+function extractReplyProgressFromSnapshot(snapshot: string, prompt: string): string {
+  const lines = snapshot
+    .split("\n")
+    .map((line) => line.replace(/\s+$/g, ""));
+  const promptIdx = lines.findIndex((line) => line.includes(prompt.trim()));
+  if (promptIdx < 0) {
+    return "";
+  }
+  return extractReplyFromSnapshot(snapshot, prompt);
+}
+
 function buildReplyText(
   prompt: string,
   semanticSignals: SemanticSignal[],
@@ -288,6 +310,14 @@ function buildReplyText(
     return contentLines.join("\n");
   }
   return extractReplyFromSnapshot(finalSnapshot, prompt);
+}
+
+function looksLikeCursorAgentExited(snapshot: string): boolean {
+  const normalized = normalizeSnapshot(snapshot);
+  return (
+    normalized.includes("To resume this session: cursor agent --resume=") ||
+    /\$\s*$/.test(normalized)
+  );
 }
 
 class TmuxControlModeObserver {
@@ -435,7 +465,11 @@ export class TmuxCursorSession {
     await this.attach();
   }
 
-  async runPrompt(prompt: string, maxSeconds = 90): Promise<RunPromptResult> {
+  async runPrompt(
+    prompt: string,
+    maxSeconds = 90,
+    hooks?: RunPromptHooks,
+  ): Promise<RunPromptResult> {
     await this.startAgent();
     if (this.turnInFlight) {
       throw new Error("A prompt is already running in this tmux session.");
@@ -456,6 +490,7 @@ export class TmuxCursorSession {
       if (signals.length > 0) {
         semanticSignals.push(...signals);
         turnDetector.noteSemanticSignals(signals);
+        hooks?.onSemanticSignals?.(signals);
         const summary = summarizeSemanticSignals(signals);
         if (summary && summary !== lastSummary) {
           lastSummary = summary;
@@ -472,13 +507,21 @@ export class TmuxCursorSession {
       await sendLiteral(this.getPaneId(), prompt, true);
       const deadline = Date.now() + maxSeconds * 1000;
       let finalSnapshot = "";
+      let lastReplyProgress = "";
       while (Date.now() < deadline) {
         finalSnapshot = await capturePane(this.getPaneId(), this.historyLines);
+        const replyProgress = extractReplyProgressFromSnapshot(finalSnapshot, prompt);
+        if (replyProgress && replyProgress !== lastReplyProgress) {
+          lastReplyProgress = replyProgress;
+          turnDetector.noteReplyProgress();
+          hooks?.onReplyTextProgress?.(replyProgress);
+        }
         const evaluation = turnDetector.evaluateSnapshot(finalSnapshot);
         if (
           this.cancelRequested &&
-          looksLikeCursorAgentUi(normalizeSnapshot(finalSnapshot)) &&
-          !isCursorAgentBusy(normalizeSnapshot(finalSnapshot))
+          ((looksLikeCursorAgentUi(normalizeSnapshot(finalSnapshot)) &&
+            !isCursorAgentBusy(normalizeSnapshot(finalSnapshot))) ||
+            looksLikeCursorAgentExited(finalSnapshot))
         ) {
           throw new Error("Cursor Agent turn was cancelled.");
         }
@@ -540,12 +583,23 @@ export class TmuxCursorSession {
     await runTmux(["send-keys", "-t", this.getPaneId(), "C-c"]);
     const deadline = Date.now() + timeoutMs;
     let lastSnapshot = "";
+    let resentCtrlC = false;
     while (Date.now() < deadline) {
       lastSnapshot = await capturePane(this.getPaneId(), this.historyLines);
       const normalized = normalizeSnapshot(lastSnapshot);
-      if (looksLikeCursorAgentUi(normalized) && !isCursorAgentBusy(normalized)) {
+      if (
+        (looksLikeCursorAgentUi(normalized) && !isCursorAgentBusy(normalized)) ||
+        looksLikeCursorAgentExited(lastSnapshot)
+      ) {
         this.turnInFlight = false;
         return lastSnapshot;
+      }
+      if (
+        !resentCtrlC &&
+        /Press Ctrl\+C again to exit/i.test(normalized)
+      ) {
+        await runTmux(["send-keys", "-t", this.getPaneId(), "C-c"]);
+        resentCtrlC = true;
       }
       await delay(this.pollMs);
     }

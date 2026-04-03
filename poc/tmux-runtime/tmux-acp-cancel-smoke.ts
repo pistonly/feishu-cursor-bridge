@@ -42,7 +42,23 @@ function parseArgs(argv: string[]): Options {
 class NullClient {
   async sessionUpdate(n: SessionNotification): Promise<void> {
     const kind = n.update.sessionUpdate;
-    if (kind === "agent_message_chunk" || kind === "user_message_chunk") {
+    if (kind === "tool_call") {
+      console.log(
+        `[client update] tool_call: ${n.update.title} [${String(n.update.status ?? "pending")}]`,
+      );
+      return;
+    }
+    if (kind === "tool_call_update") {
+      console.log(
+        `[client update] tool_call_update: ${n.update.toolCallId} [${String(n.update.status ?? "?")}]${n.update.title ? ` ${n.update.title}` : ""}`,
+      );
+      return;
+    }
+    if (
+      kind === "agent_message_chunk" ||
+      kind === "user_message_chunk" ||
+      kind === "agent_thought_chunk"
+    ) {
       const text = n.update.content?.type === "text" ? n.update.content.text : "";
       console.log(`[client update] ${kind}: ${text}`);
       return;

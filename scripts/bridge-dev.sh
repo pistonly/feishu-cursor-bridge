@@ -6,6 +6,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 LOCK_FILE="${BRIDGE_SINGLE_INSTANCE_LOCK:-$HOME/.feishu-cursor-bridge/bridge.lock}"
+LOG_FILE="${BRIDGE_DEV_LOG_FILE:-$HOME/.feishu-cursor-bridge/logs/bridge-dev.log}"
 
 # 从 .env 读取 BRIDGE_SINGLE_INSTANCE_LOCK（仅当环境中未设置该变量时）
 if [[ -z "${BRIDGE_SINGLE_INSTANCE_LOCK+x}" ]] && [[ -f "$ROOT/.env" ]]; then
@@ -30,6 +31,7 @@ expand_lock_path() {
   fi
 }
 LOCK_FILE="$(expand_lock_path "$LOCK_FILE")"
+LOG_FILE="$(expand_lock_path "$LOG_FILE")"
 
 read_lock_pid() {
   if [[ ! -f "$LOCK_FILE" ]]; then
@@ -102,8 +104,18 @@ case "$cmd" in
     ;;
   restart | dev | run | "")
     stop_bridge
-    echo "[bridge-dev] Starting: npm run dev"
-    exec npm run dev
+    mkdir -p "$(dirname "$LOG_FILE")"
+    echo "[bridge-dev] Starting in background: npm run dev"
+    echo "[bridge-dev] Log file: $LOG_FILE"
+    nohup npm run dev >>"$LOG_FILE" 2>&1 &
+    sleep 0.5
+    pid="$(read_lock_pid)"
+    if [[ -n "$pid" ]] && is_running "$pid"; then
+      echo "[bridge-dev] Started PID $pid"
+      exit 0
+    fi
+    echo "[bridge-dev] Warning: lock file not ready yet, please check logs: $LOG_FILE"
+    exit 1
     ;;
   -h | --help | help)
     cat <<'EOF'
@@ -115,6 +127,7 @@ case "$cmd" in
   -h, --help              帮助
 
 环境变量 BRIDGE_SINGLE_INSTANCE_LOCK 可覆盖锁文件路径（与桥接程序一致）。
+环境变量 BRIDGE_DEV_LOG_FILE 可覆盖后台日志路径。
 EOF
     ;;
   *)

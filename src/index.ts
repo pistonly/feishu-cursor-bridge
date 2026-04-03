@@ -60,7 +60,7 @@ async function main() {
       `[main] ACP adapter: ${config.acp.nodePath} ${config.acp.adapterEntry}`,
     );
     console.log(`[main] Adapter session dir: ${config.acp.adapterSessionDir}`);
-  } else {
+  } else if (config.acp.backend === "official") {
     const authHints = [
       config.acp.officialApiKey ? "api-key" : null,
       config.acp.officialAuthToken ? "auth-token" : null,
@@ -70,6 +70,10 @@ async function main() {
     console.log(
       `[main] Official ACP command: ${config.acp.officialAgentPath} acp${authHints ? ` (${authHints})` : ""}`,
     );
+  } else {
+    console.log(`[main] tmux ACP server entry: ${config.acp.tmuxServerEntry}`);
+    console.log(`[main] tmux ACP tsx cli: ${config.acp.tmuxTsxCliEntry}`);
+    console.log(`[main] tmux ACP session store: ${config.acp.tmuxSessionStorePath}`);
   }
   console.log(`[main] Default workspace (CURSOR_WORK_DIR): ${config.acp.workspaceRoot}`);
   console.log(

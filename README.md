@@ -64,7 +64,7 @@ npm run build && npm start
 - `/home/liuyang/.feishu-cursor-bridge`
 - `/home/liuyang/Documents`
 
-这样容器里的 bridge 可以直接调用宿主机已登录的 `agent acp`，也能继续访问你的工作区与本地 session store。
+这样容器里的 bridge 可以直接调用宿主机已登录的 `agent acp` / `cursor agent`，也能继续访问你的工作区与本地 session store。
 
 首次使用：
 
@@ -83,11 +83,24 @@ docker-compose -f docker/compose.yaml logs -f bridge-dev
 docker-compose -f docker/compose.yaml down
 ```
 
+### Docker 中验证 tmux backend
+
+当前仓库还提供了两个**一次性 smoke 服务**，用于在不影响宿主机正在运行的飞书 bridge 的情况下，单独验证容器内的 `tmux` backend：
+
+```bash
+# 基本链路：newSession -> prompt -> server 重启 -> loadSession -> prompt -> closeSession
+docker-compose -f docker/compose.yaml run --rm tmux-acp-smoke
+
+# 取消链路：session/cancel -> stopReason: cancelled
+docker-compose -f docker/compose.yaml run --rm tmux-acp-cancel-smoke
+```
+
 说明：
 
 - 该 compose 面向**本机 Linux 开发联调**，当前宿主机路径按 `/home/liuyang/...` 写死；若换机器，请同步修改 `docker/compose.yaml` 中的 bind mount。
 - 容器内工作目录与宿主机保持一致：`/home/liuyang/Documents/feishu-cursor-bridge`，因此现有 `.env` 里的工作区绝对路径通常无需额外改写。
 - 依赖安装在 Docker volume `bridge_node_modules` 中；`package-lock.json` 变化后，容器启动时会自动重新执行 `npm install`。
+- `docker/Dockerfile.dev` 现已安装 `tmux`，因此 smoke 服务可直接验证 `ACP_BACKEND=tmux` 路径；这两个 smoke 服务不会占用飞书 bot 长连接，只用于容器内的 backend 回归。
 
 ## 网络与代理
 
@@ -105,7 +118,7 @@ docker-compose -f docker/compose.yaml down
 | `FEISHU_APP_ID` | 飞书 App ID（必填） | - |
 | `FEISHU_APP_SECRET` | 飞书 App Secret（必填） | - |
 | `FEISHU_DOMAIN` | `feishu` / `lark` / 自定义 URL | `feishu` |
-| `ACP_BACKEND` | ACP 后端：`official` / `legacy` | `official` |
+| `ACP_BACKEND` | ACP 后端：`official` / `legacy` / `tmux` | `official` |
 | `CURSOR_AGENT_PATH` | 官方 ACP 命令路径 | `agent` |
 | `CURSOR_API_KEY` | 官方 ACP API key（可选） | 空 |
 | `CURSOR_AUTH_TOKEN` | 官方 ACP auth token（可选） | 空 |

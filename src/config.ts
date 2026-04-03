@@ -1,7 +1,11 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { resolveBundledAdapterEntry } from "./acp/paths.js";
+import {
+  resolveBundledAdapterEntry,
+  resolveBundledTmuxAcpServerEntry,
+  resolveBundledTsxCliEntry,
+} from "./acp/paths.js";
 import type { AcpBackend } from "./acp/runtime-contract.js";
 
 export interface Config {
@@ -21,6 +25,12 @@ export interface Config {
     officialAgentPath: string;
     officialApiKey?: string;
     officialAuthToken?: string;
+    /** 启动 tmux ACP server 时使用的 tsx CLI 入口 */
+    tmuxTsxCliEntry: string;
+    /** 仓库内置的 tmux ACP server TypeScript 入口 */
+    tmuxServerEntry: string;
+    /** tmux ACP server 的 session 持久化文件 */
+    tmuxSessionStorePath: string;
     /** Cursor 工作区根目录（ACP cwd / 客户端文件沙箱默认根） */
     workspaceRoot: string;
     /**
@@ -69,7 +79,7 @@ export interface Config {
 }
 
 const LOG_LEVELS = new Set(["debug", "info", "warn", "error"]);
-const ACP_BACKENDS = new Set<AcpBackend>(["legacy", "official"]);
+const ACP_BACKENDS = new Set<AcpBackend>(["legacy", "official", "tmux"]);
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -253,6 +263,17 @@ export function loadConfig(): Config {
     ),
   );
 
+  const defaultTmuxSessionStore = path.join(
+    os.homedir(),
+    ".feishu-cursor-bridge",
+    "tmux-acp-sessions.json",
+  );
+  const tmuxSessionStorePath = path.resolve(
+    expandHome(
+      process.env["TMUX_ACP_SESSION_STORE"]?.trim() || defaultTmuxSessionStore,
+    ),
+  );
+
   const defaultSingleInstanceLock = path.join(
     os.homedir(),
     ".feishu-cursor-bridge",
@@ -321,6 +342,10 @@ export function loadConfig(): Config {
   const adapterEntry =
     process.env["CURSOR_ACP_ADAPTER_ENTRY"]?.trim() ||
     (backend === "legacy" ? resolveBundledAdapterEntry() : "");
+  const tmuxTsxCliEntry =
+    process.env["TMUX_ACP_TSX_CLI"]?.trim() || resolveBundledTsxCliEntry();
+  const tmuxServerEntry =
+    process.env["TMUX_ACP_SERVER_ENTRY"]?.trim() || resolveBundledTmuxAcpServerEntry();
 
   const nodePath = resolveNodeExecutablePath();
 
@@ -345,6 +370,9 @@ export function loadConfig(): Config {
       officialAgentPath,
       officialApiKey,
       officialAuthToken,
+      tmuxTsxCliEntry,
+      tmuxServerEntry,
+      tmuxSessionStorePath,
       workspaceRoot,
       allowedWorkspaceRoots,
       adapterSessionDir,
