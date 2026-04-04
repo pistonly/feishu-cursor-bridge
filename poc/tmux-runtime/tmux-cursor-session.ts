@@ -292,7 +292,8 @@ async function sendLiteral(paneId: string, text: string, pressEnter = false): Pr
 }
 
 async function capturePane(paneId: string, historyLines: number): Promise<string> {
-  const baseArgs = ["capture-pane", "-p", "-J", "-t", paneId, "-S", `-${historyLines}`];
+  // 不用 -J：保留 tmux 屏幕上实际可见的换行，而不是把软换行内容拼回一行。
+  const baseArgs = ["capture-pane", "-p", "-t", paneId, "-S", `-${historyLines}`];
   try {
     return await runTmux([...baseArgs.slice(0, 2), "-a", ...baseArgs.slice(2)]);
   } catch (error) {
@@ -304,10 +305,14 @@ async function capturePane(paneId: string, historyLines: number): Promise<string
   }
 }
 
+function unwrapUiLine(line: string): string {
+  return line.replace(/\s+$/g, "").replace(/^│ ?/, "").replace(/ ?│$/, "");
+}
+
 function isUiNoiseLine(line: string, prompt: string): boolean {
   const trimmed = line.trim();
-  const unboxed = trimmed.replace(/^[│\s]+|[│\s]+$/g, "").trim();
-  if (!unboxed) return true;
+  const unboxed = unwrapUiLine(line).trim();
+  if (!unboxed && /^[│┌┐└┘─\s]*$/.test(trimmed)) return true;
   if (unboxed === prompt.trim()) return true;
   if (unboxed === `→ ${prompt.trim()}`) return true;
   if (/^[│┌┐└┘─\s]+$/.test(trimmed)) return true;
@@ -338,29 +343,75 @@ function dedupeConsecutive(lines: string[]): string[] {
   return out;
 }
 
+function compactReplyLines(lines: string[]): string[] {
+  const out: string[] = [];
+  for (const line of lines) {
+    const isBlank = line.trim().length === 0;
+    if (isBlank) {
+      if (out.length === 0 || out[out.length - 1] === "") {
+        continue;
+      }
+      out.push("");
+      continue;
+    }
+    out.push(line);
+  }
+  while (out[0] === "") {
+    out.shift();
+  }
+  while (out[out.length - 1] === "") {
+    out.pop();
+  }
+  return out;
+}
+
+function findPromptEndIndex(lines: string[], prompt: string): number {
+  const normalizedPrompt = prompt.replace(/\s+/g, " ").trim();
+  if (!normalizedPrompt) {
+    return -1;
+  }
+  for (let start = 0; start < lines.length; start += 1) {
+    let merged = "";
+    for (let end = start; end < Math.min(lines.length, start + 12); end += 1) {
+      const segment = lines[end].trim();
+      if (segment) {
+        merged = `${merged} ${segment}`.trim().replace(/\s+/g, " ");
+      }
+      if (merged.includes(normalizedPrompt)) {
+        return end;
+      }
+      if (merged.length > normalizedPrompt.length + 200) {
+        break;
+      }
+    }
+  }
+  return -1;
+}
+
 function extractReplyFromSnapshot(snapshot: string, prompt: string): string {
-  const lines = snapshot
-    .split("\n")
-    .map((line) => line.replace(/\s+$/g, ""));
+  const lines = snapshot.split("\n").map((line) => unwrapUiLine(line));
   const followUpIdx = lines.findIndex((line) => line.includes("Add a follow-up"));
   const cutoff = followUpIdx >= 0 ? followUpIdx : lines.length;
-  const promptIdx = lines.findIndex((line) => line.includes(prompt.trim()));
-  const start = promptIdx >= 0 ? promptIdx + 1 : 0;
-  const candidates = dedupeConsecutive(
-    lines
-      .slice(start, cutoff)
-      .map((line) => line.trim())
-      .filter((line) => !isUiNoiseLine(line, prompt)),
+  const promptEndIdx = findPromptEndIndex(lines, prompt);
+  const start = promptEndIdx >= 0 ? promptEndIdx + 1 : 0;
+  const candidates = compactReplyLines(
+    dedupeConsecutive(
+      lines
+        .slice(start, cutoff)
+        .filter((line) => {
+          if (!line.trim()) return true;
+          return !isUiNoiseLine(line, prompt);
+        }),
+    ),
   );
-  return candidates.join("\n").trim();
+  return candidates.join("\n");
 }
 
 function extractReplyProgressFromSnapshot(snapshot: string, prompt: string): string {
   const lines = snapshot
     .split("\n")
-    .map((line) => line.replace(/\s+$/g, ""));
-  const promptIdx = lines.findIndex((line) => line.includes(prompt.trim()));
-  if (promptIdx < 0) {
+    .map((line) => unwrapUiLine(line));
+  if (findPromptEndIndex(lines, prompt) < 0) {
     return "";
   }
   return extractReplyFromSnapshot(snapshot, prompt);
@@ -371,16 +422,22 @@ function buildReplyText(
   semanticSignals: SemanticSignal[],
   finalSnapshot: string,
 ): string {
-  const contentLines = dedupeConsecutive(
-    semanticSignals
-      .filter((signal) => signal.kind === "content")
-      .map((signal) => signal.text.trim())
-      .filter((line) => !isUiNoiseLine(line, prompt)),
-  );
-  if (contentLines.length > 0) {
-    return contentLines.join("\n");
+  const snapshotReply = extractReplyFromSnapshot(finalSnapshot, prompt);
+  if (snapshotReply) {
+    return snapshotReply;
   }
-  return extractReplyFromSnapshot(finalSnapshot, prompt);
+  const fallbackLines = compactReplyLines(
+    dedupeConsecutive(
+      semanticSignals
+        .filter((signal) => signal.kind === "content")
+        .map((signal) => signal.text.trimEnd())
+        .filter((line) => !isUiNoiseLine(line, prompt)),
+    ),
+  );
+  if (fallbackLines.length > 0) {
+    return fallbackLines.join("\n");
+  }
+  return "";
 }
 
 function looksLikeCursorAgentExited(snapshot: string): boolean {

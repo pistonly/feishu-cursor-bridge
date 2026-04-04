@@ -287,12 +287,16 @@ export class Bridge {
     if (!content) return;
 
     const newConv = parseNewConversationCommand(content);
-    if (newConv) {
+    const bridgeManagedCommand =
+      newConv?.kind === "mode" && this.acpRuntime.backend === "tmux"
+        ? null
+        : newConv;
+    if (bridgeManagedCommand) {
       try {
         // ----------------------------------------------------------------
         // /sessions — list all slots
         // ----------------------------------------------------------------
-        if (newConv.kind === "sessions") {
+        if (bridgeManagedCommand.kind === "sessions") {
           await this.handleSessionsList(msg);
           return;
         }
@@ -300,7 +304,7 @@ export class Bridge {
         // ----------------------------------------------------------------
         // /resume — ACP session/load
         // ----------------------------------------------------------------
-        if (newConv.kind === "resume") {
+        if (bridgeManagedCommand.kind === "resume") {
           const session = await this.sessionManager.getOrCreateSession(
             msg.chatId,
             msg.senderId,
@@ -371,8 +375,8 @@ export class Bridge {
         // ----------------------------------------------------------------
         // /mode [modeId]
         // ----------------------------------------------------------------
-        if (newConv.kind === "mode") {
-          if (!newConv.modeId) {
+        if (bridgeManagedCommand.kind === "mode") {
+          if (!bridgeManagedCommand.modeId) {
             const snap = this.sessionManager.getSessionSnapshot(
               msg.chatId,
               msg.senderId,
@@ -402,7 +406,10 @@ export class Bridge {
             sessionId = session.sessionId;
             await this.flushPendingSessionNotices(msg);
             const modeState = this.acpRuntime.getSessionModeState(session.sessionId);
-            const resolved = resolveSessionModeInput(newConv.modeId, modeState);
+            const resolved = resolveSessionModeInput(
+              bridgeManagedCommand.modeId,
+              modeState,
+            );
             await this.acpRuntime.setSessionMode(session.sessionId, resolved.modeId);
             await this.feishuBot.sendText(
               msg.chatId,
@@ -429,8 +436,8 @@ export class Bridge {
         // ----------------------------------------------------------------
         // /switch [target]
         // ----------------------------------------------------------------
-        if (newConv.kind === "switch") {
-          if (newConv.target === null) {
+        if (bridgeManagedCommand.kind === "switch") {
+          if (bridgeManagedCommand.target === null) {
             const slot = await this.sessionManager.switchToPreviousSlot(
               msg.chatId,
               msg.senderId,
@@ -460,7 +467,7 @@ export class Bridge {
             msg.chatId,
             msg.senderId,
             msg.chatType,
-            newConv.target,
+            bridgeManagedCommand.target,
             this.threadScope(msg),
           );
           await this.flushPendingSessionNotices(msg);
@@ -486,12 +493,12 @@ export class Bridge {
         // ----------------------------------------------------------------
         // /reply [target]
         // ----------------------------------------------------------------
-        if (newConv.kind === "reply") {
+        if (bridgeManagedCommand.kind === "reply") {
           const slot = await this.sessionManager.getSlot(
             msg.chatId,
             msg.senderId,
             msg.chatType,
-            newConv.target,
+            bridgeManagedCommand.target,
             this.threadScope(msg),
           );
           await this.flushPendingSessionNotices(msg);
@@ -519,10 +526,11 @@ export class Bridge {
         // /rename <name>
         // /rename <target> <name>
         // ----------------------------------------------------------------
-        if (newConv.kind === "rename") {
+        if (bridgeManagedCommand.kind === "rename") {
           if (
-            (typeof newConv.target === "number" && isNaN(newConv.target as number)) ||
-            !newConv.name.trim()
+            (typeof bridgeManagedCommand.target === "number" &&
+              isNaN(bridgeManagedCommand.target as number)) ||
+            !bridgeManagedCommand.name.trim()
           ) {
             await this.feishuBot.sendText(
               msg.chatId,
@@ -536,8 +544,8 @@ export class Bridge {
             msg.chatId,
             msg.senderId,
             msg.chatType,
-            newConv.target,
-            newConv.name,
+            bridgeManagedCommand.target,
+            bridgeManagedCommand.name,
             this.threadScope(msg),
           );
           await this.flushPendingSessionNotices(msg);
@@ -553,8 +561,11 @@ export class Bridge {
         // ----------------------------------------------------------------
         // /close <target>
         // ----------------------------------------------------------------
-        if (newConv.kind === "close") {
-          if (typeof newConv.target === "number" && isNaN(newConv.target as number)) {
+        if (bridgeManagedCommand.kind === "close") {
+          if (
+            typeof bridgeManagedCommand.target === "number" &&
+            isNaN(bridgeManagedCommand.target as number)
+          ) {
             await this.feishuBot.sendText(
               msg.chatId,
               "用法：`/close <编号或名称>` 或 `/close all`\n\n发送 `/sessions` 查看当前所有 session。",
@@ -563,7 +574,7 @@ export class Bridge {
             );
             return;
           }
-          if (newConv.target === "all") {
+          if (bridgeManagedCommand.target === "all") {
             const { closed } = await this.sessionManager.closeAllSlots(
               msg.chatId,
               msg.senderId,
@@ -589,7 +600,7 @@ export class Bridge {
             msg.chatId,
             msg.senderId,
             msg.chatType,
-            newConv.target,
+            bridgeManagedCommand.target,
             this.threadScope(msg),
           );
           await this.flushPendingSessionNotices(msg);
@@ -609,8 +620,8 @@ export class Bridge {
         // ----------------------------------------------------------------
         // /new — workspace presets list management (no session creation)
         // ----------------------------------------------------------------
-        if (newConv.kind === "new") {
-          if (newConv.variant === "list") {
+        if (bridgeManagedCommand.kind === "new") {
+          if (bridgeManagedCommand.variant === "list") {
             const presets = this.presetsStore.getPresets();
             const lines =
               presets.length > 0
@@ -624,8 +635,8 @@ export class Bridge {
             );
             return;
           }
-          if (newConv.variant === "remove-list") {
-            if (newConv.index < 1) {
+          if (bridgeManagedCommand.variant === "remove-list") {
+            if (bridgeManagedCommand.index < 1) {
               await this.feishuBot.sendText(
                 msg.chatId,
                 "用法：`/new remove-list <序号>`（序号见 `/new list`）",
@@ -635,22 +646,22 @@ export class Bridge {
               return;
             }
             const removed = await this.presetsStore.removePresetAt(
-              newConv.index,
+              bridgeManagedCommand.index,
             );
             const list = this.presetsStore.getPresets();
             const lines = list.map((p, i) => `${i + 1}. \`${p}\``).join("\n");
             await this.feishuBot.sendText(
               msg.chatId,
               removed
-                ? `✅ 已删除序号 ${newConv.index}。\n\n${list.length ? lines : "（列表已空）"}`
-                : `❌ 无序号 ${newConv.index}。请先 \`/new list\` 查看当前列表。`,
+                ? `✅ 已删除序号 ${bridgeManagedCommand.index}。\n\n${list.length ? lines : "（列表已空）"}`
+                : `❌ 无序号 ${bridgeManagedCommand.index}。请先 \`/new list\` 查看当前列表。`,
               msg.messageId,
               this.threadReplyOpts(msg),
             );
             return;
           }
-          if (newConv.variant === "add-list") {
-            if (!newConv.path.trim()) {
+          if (bridgeManagedCommand.variant === "add-list") {
+            if (!bridgeManagedCommand.path.trim()) {
               await this.feishuBot.sendText(
                 msg.chatId,
                 "用法：`/new add-list <目录路径>`",
@@ -660,7 +671,7 @@ export class Bridge {
               return;
             }
             const abs = await resolveAllowedWorkspaceDir(
-              newConv.path,
+              bridgeManagedCommand.path,
               this.config,
             );
             const added = await this.presetsStore.addPreset(abs);
@@ -685,26 +696,26 @@ export class Bridge {
         let workspaceAbs: string | undefined;
         let slotName: string | undefined;
 
-        if (newConv.kind === "reset") {
-          if (newConv.path) {
+        if (bridgeManagedCommand.kind === "reset") {
+          if (bridgeManagedCommand.path) {
             workspaceAbs = await resolveAllowedWorkspaceDir(
-              newConv.path,
+              bridgeManagedCommand.path,
               this.config,
             );
           }
-        } else if (newConv.kind === "new") {
-          slotName = newConv.name;
-          switch (newConv.variant) {
+        } else if (bridgeManagedCommand.kind === "new") {
+          slotName = bridgeManagedCommand.name;
+          switch (bridgeManagedCommand.variant) {
             case "default":
               break;
             case "workspace":
               workspaceAbs = await resolveAllowedWorkspaceDir(
-                newConv.path,
+                bridgeManagedCommand.path,
                 this.config,
               );
               break;
             case "preset": {
-              const idx = newConv.index;
+              const idx = bridgeManagedCommand.index;
               if (idx < 1) {
                 await this.feishuBot.sendText(
                   msg.chatId,
@@ -732,7 +743,7 @@ export class Bridge {
           }
         }
 
-        if (newConv.kind === "reset") {
+        if (bridgeManagedCommand.kind === "reset") {
           await this.sessionManager.resetSession(
             msg.chatId,
             msg.senderId,
@@ -791,9 +802,11 @@ export class Bridge {
         this.threadScope(msg),
       );
       const cliResume = snap?.activeSlot.session.cursorCliChatId;
-      const currentModeId = snap
-        ? this.acpRuntime.getSessionModeState(snap.activeSlot.session.sessionId)?.currentModeId
-        : undefined;
+      const currentModeId =
+        snap && this.acpRuntime.backend !== "tmux"
+          ? this.acpRuntime.getSessionModeState(snap.activeSlot.session.sessionId)
+              ?.currentModeId
+          : undefined;
       let body = `📊 活跃/内存 slot: ${stats.active}/${stats.total}`;
       body += `\n• ACP 后端：${this.acpRuntime.backend}`;
       if (currentModeId) {
@@ -822,13 +835,15 @@ export class Bridge {
               ? `bridge=${bridgeIdlePolicy} / official=agent-managed`
               : `bridge=${bridgeIdlePolicy} / tmux-acp=store-managed`;
         const slot = snap?.activeSlot;
-        const availableModeIds = slot
-          ? (
-              this.acpRuntime.getSessionModeState(slot.session.sessionId)?.availableModes ?? []
-            )
-              .map((mode) => mode.modeId)
-              .join(", ")
-          : "";
+        const availableModeIds =
+          slot && this.acpRuntime.backend !== "tmux"
+            ? (
+                this.acpRuntime.getSessionModeState(slot.session.sessionId)
+                  ?.availableModes ?? []
+              )
+                .map((mode) => mode.modeId)
+                .join(", ")
+            : "";
         body += `\n\n[调试 BRIDGE_DEBUG]\n• ACP 后端: ${this.acpRuntime.backend}\n• sessionKey: ${snap?.sessionKey ?? "(尚无)"}\n• threadId: ${this.threadScope(msg) ?? "（主会话区）"}\n• 活跃 slot: #${slot?.slotIndex ?? "—"}${slot?.name ? ` (${slot.name})` : ""}\n• ACP sessionId: ${slot?.session.sessionId ?? "—"}\n• 当前模式: ${currentModeId ?? "—"}\n• 可用模式: ${availableModeIds || "—"}\n• 会话 cwd: ${slot?.session.workspaceRoot ?? "—"}\n• 空闲过期约: ${idleLabel}\n• 会话策略: ${backendPolicy}\n• 默认工作区 (CURSOR_WORK_DIR): ${this.config.acp.workspaceRoot}\n• 允许根 (CURSOR_WORK_ALLOWLIST): ${this.config.acp.allowedWorkspaceRoots.join(", ")}\n• 映射文件: ${this.config.bridge.sessionStorePath}\n• loadSession: ${this.acpRuntime.supportsLoadSession}\n• LOG_LEVEL: ${this.config.logLevel}`;
         if (this.config.acp.backend === "legacy") {
           body += `\n• 适配器会话目录: ${this.config.acp.adapterSessionDir}`;
@@ -844,10 +859,10 @@ export class Bridge {
       return;
     }
 
-    // cursor-agent-acp 在 prompt 里识别 /model 后仍会把整句发给 CLI，导致大模型「解释命令」。
-    // 这里直接走 session/set_model，不触发 prompt。
+    // 非 tmux ACP 后端在 prompt 里识别 /model 后仍会把整句发给 CLI，导致大模型「解释命令」。
+    // legacy / official 在 bridge 侧直接走 session/set_model；tmux 需要把命令真实送进 pane。
     const modelMatch = content.trim().match(/^\/model(?:\s+(\S+))?$/i);
-    if (modelMatch) {
+    if (modelMatch && this.acpRuntime.backend !== "tmux") {
       const modelId = modelMatch[1]?.trim();
       if (!modelId) {
         const snap = this.sessionManager.getSessionSnapshot(
@@ -1007,7 +1022,9 @@ export class Bridge {
       const active = s.isActive ? " ◀ 当前" : "";
       const name = s.name ? ` (${s.name})` : "";
       const modeId =
-        this.acpRuntime.getSessionModeState(s.sessionId)?.currentModeId ?? "";
+        this.acpRuntime.backend === "tmux"
+          ? ""
+          : (this.acpRuntime.getSessionModeState(s.sessionId)?.currentModeId ?? "");
       const modeLine = modeId ? `\n  模式：\`${modeId}\`` : "";
       return `#${s.slotIndex}${name}${active}\n  工作区：\`${s.workspaceRoot}\`${modeLine}`;
     });

@@ -131,12 +131,27 @@ export function parseToolStatus(text: string): ParsedToolStatus | undefined {
 }
 
 function sanitizeReplyDelta(text: string, promptText: string): string {
-  return text
-    .split("\n")
-    .map((line) => line.trimEnd())
-    .filter((line) => !isIgnorableContentSignal(line, promptText))
-    .join("\n")
-    .trim();
+  const out: string[] = [];
+  for (const line of text.split("\n").map((item) => item.trimEnd())) {
+    if (!line.trim()) {
+      if (out.length === 0 || out[out.length - 1] === "") {
+        continue;
+      }
+      out.push("");
+      continue;
+    }
+    if (isIgnorableContentSignal(line, promptText)) {
+      continue;
+    }
+    out.push(line);
+  }
+  while (out[0] === "") {
+    out.shift();
+  }
+  while (out[out.length - 1] === "") {
+    out.pop();
+  }
+  return out.join("\n");
 }
 
 export function createStreamingHooks(

@@ -106,3 +106,22 @@ test("createStreamingHooks 会忽略取消后的 shell prompt", () => {
 
   assert.deepEqual(updates, []);
 });
+
+test("createStreamingHooks 会保留回复中的空行", () => {
+  const updates: StreamingUpdate[] = [];
+  const streaming = createStreamingHooks("prompt", (update) => {
+    updates.push(update);
+  });
+
+  streaming.hooks.onReplyTextProgress?.("第一段\n\n第二段");
+
+  assert.deepEqual(updates, [
+    {
+      sessionUpdate: "agent_message_chunk",
+      content: {
+        type: "text",
+        text: "第一段\n\n第二段",
+      },
+    },
+  ]);
+});

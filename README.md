@@ -148,9 +148,9 @@ docker-compose -f docker/compose.yaml run --rm tmux-acp-cancel-smoke
 - **群聊**：@机器人 + 内容（开发平台须为应用开通 **`im:message.group_msg`**，否则群消息事件不会投递到机器人）；**话题群**内不同话题（`thread_id`）会**分别**映射 ACP 会话，与群主页会话互不共享
 - **多 session 切换**：`/new` 新建并切到该 session（旧 session 保持连接）；`/sessions` 列表；`/switch <编号或名称>` 切换活跃 session（无参数时切到上一次用过的）；`/close` 关闭指定；`/rename` 便于用名称切换。完整语法与快捷列表见 `docs/feishu-commands.md`
 - `/reset` 仅重置**当前活跃** session（同槽位换新 ACP 会话），不关闭其它 session
-- `/status` 或 `/状态`：会话统计，始终展示当前 ACP 后端与当前活跃 session 已知 mode；若是 `legacy`，会额外显示当前活跃 slot 的 CLI resume ID；`BRIDGE_DEBUG=true` 时额外含 ACP `sessionId`、路径、可用模式等调试信息
-- `/mode <模式ID>`：通过 ACP `session/set_mode` 切换当前活跃 session 的 mode；无参数时返回当前 session 已知的可用模式与当前模式
-- `/model <模型ID>`：通过 ACP `session/set_model` 切换当前活跃 session 的模型；默认 `official` 后端以下**当前 ACP session 返回的可用 selector**为准，无参数时返回当前 session 已知的可用模型与当前模型；在 `official` 下可直接用 `/model <序号>`
+- `/status` 或 `/状态`：会话统计，始终展示当前 ACP 后端；`official` / `legacy` 下还会展示当前活跃 session 已知 mode，`tmux` 下不再显示 bridge 侧伪造的 mode；若是 `legacy`，会额外显示当前活跃 slot 的 CLI resume ID；`BRIDGE_DEBUG=true` 时额外含 ACP `sessionId`、路径、可用模式等调试信息
+- `/mode <模式ID>`：`official` / `legacy` 下通过 ACP `session/set_mode` 切换当前活跃 session 的 mode；`tmux` 下则把 `/mode ...` 原样发给真实 Cursor CLI pane，由 CLI 自己处理
+- `/model <模型ID>`：`legacy` / `official` 后端下通过 ACP `session/set_model` 切换当前活跃 session 的模型；其中 `official` 以当前 ACP session 返回的 selector 为准；`tmux` 后端下则把 `/model ...` 原样发给真实 Cursor CLI pane，由 CLI 自己处理；仅 `official` 支持桥接侧 `/model <序号>`
 
 ## 最小验证清单（手工）
 

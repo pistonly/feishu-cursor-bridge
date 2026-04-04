@@ -226,10 +226,16 @@
 /mode <模式ID>
 ```
 
-**作用**：查看或切换当前活跃 session 的 ACP mode，**不会**把整条消息再发给大模型。
+**作用**：
 
-- 不带参数时：返回当前 session 已知的可用模式列表与当前模式。
-- 带参数时：调用 ACP `session/set_mode` 切换当前 session 模式。
+- `official` / `legacy` 后端：查看或切换当前活跃 session 的 ACP mode，**不会**把整条消息再发给大模型。
+- `tmux` 后端：bridge 会把 `/mode ...` 原样发给真实的交互式 Cursor CLI pane，由 CLI 自己处理；bridge 不再维护一个“权威 mode 列表”。
+
+后端差异：
+
+- `official` / `legacy` 不带参数时：返回当前 session 已知的可用模式列表与当前模式。
+- `official` / `legacy` 带参数时：调用 ACP `session/set_mode` 切换当前 session 模式。
+- `tmux` 后端下，无论是否带参数，都会把 `/mode` 原样发给 Cursor CLI，由 CLI 自己展示或切换。
 
 **示例**：
 
@@ -251,7 +257,7 @@
 
 **等价命令**：`/status`、`/状态`
 
-**作用**：返回当前桥接 session 统计（活跃与内存中的 slot 总数），以及当前活跃 session 已知的 mode。
+**作用**：返回当前桥接 session 统计（活跃与内存中的 slot 总数），以及当前 ACP 后端信息；在 `official` / `legacy` 后端下，还会附带当前活跃 session 已知的 mode。
 
 **增强信息**：当服务环境 **`BRIDGE_DEBUG=true`** 时，同一条回复中会追加调试信息，包括：
 
@@ -274,7 +280,10 @@
 /model <序号>
 ```
 
-**作用**：通过 ACP `session/set_model` 切换**当前活跃 session** 使用的模型，**不会**把整条消息再发给大模型（避免仅出现「解释 /model」类回复）。
+**作用**：
+
+- `legacy` / `official` 后端：bridge 直接调用 ACP `session/set_model` 切换**当前活跃 session** 的模型，**不会**把整条消息再发给大模型（避免仅出现「解释 /model」类回复）。
+- `tmux` 后端：bridge 会把 `/model ...` 原样发给真实的交互式 Cursor CLI pane，由 CLI 自己处理；此时不走 ACP `session/set_model`，也不依赖 bridge 侧缓存的模型列表。
 
 **示例**：
 
@@ -289,9 +298,12 @@
 - 默认 `official` 后端下，以**当前 ACP session 返回的 `availableModels`** 为准，而不是 `cursor-agent models` 的 alias 列表。
 - 机器人返回列表时，反引号中的值就是可直接提交给 ACP `session/set_model` 的**精确 selector**；若带 `[]` 或其它参数后缀，必须完整带上。
 - `official` 后端下，列表会带 `【n】` 序号，可直接使用 `/model <序号>`；桥接会按当前 session 的可用模型列表做 1-based 解析。
-- 若当前 session 尚未拿到模型状态，机器人会回退到基础用法提示；此时请先让该 slot 建立/恢复 session 并完成一轮交互，再使用序号或列表。
+- `legacy` / `official` 后端下，若当前 session 尚未拿到模型状态，机器人会回退到基础用法提示；此时请先让该 slot 建立/恢复 session 并完成一轮交互，再使用模型 id、selector 或序号（仅 `official`）。
 
-未带参数时，若当前 session 已拿到模型状态，机器人会直接返回可用模型列表与当前模型；否则回退到基础用法提示。
+未带参数时：
+
+- `legacy` / `official` 后端下，若当前 session 已拿到模型状态，机器人会直接返回可用模型列表与当前模型；否则回退到基础用法提示。
+- `tmux` 后端下，会把 `/model` 原样发给 Cursor CLI，由 CLI 自己展示当前模型或可选项。
 
 ---
 
