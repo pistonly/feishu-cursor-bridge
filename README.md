@@ -1,4 +1,188 @@
-# 飞书-Cursor 桥接服务
+# feishu-cursor-bridge
+
+> Standalone service that controls the Cursor AI Agent via a Feishu bot. The bridge runs as an **ACP Client**, spawning Cursor’s official **`agent acp`** by default, while `ACP_BACKEND=legacy` can fall back to **`@blowmage/cursor-agent-acp`** for emergency rollback.
+
+**[中文文档](#中文文档)**
+
+---
+
+## Features
+
+- Forward Feishu messages to Cursor (default path: official `agent acp`)
+- Stream replies to Feishu (interactive cards: answer, thinking, tools, plan, etc.)
+- Per-user session isolation (DM / group chat maps to ACP `sessionId` per user)
+- **Multiple sessions**: up to **5** concurrent sessions per user per chat, each with its own context and workspace; `/switch` between them; inactive sessions keep their ACP connection
+- **Max live sessions per user**: default **10** across all DMs / groups / threads (tune with `BRIDGE_MAX_SESSIONS_PER_USER`; `0` means unlimited), reducing idle ACP connection buildup when idle timeout is infinite
+- Group chats: @ the bot (or no @ when “only one human + the bot”); DMs: talk directly
+- Built-in commands: `/new`, `/sessions`, `/switch`, `/close` (incl. `/close all`), `/rename`, `/reset` (incl. shortcuts like `/new list`, `/new <index>`), `/status`, `/mode`, `/model`; **`/topic` + text** is display-only (not sent to the Agent — see `docs/feishu-commands.md`)
+- Persistent Feishu ↔ ACP mapping: after restart, if the Agent reports `loadSession`, `session/load` can recover
+- **CLI resume ID (legacy only)**: with `ACP_BACKEND=legacy`, `/status` shows the CLI chat id for the active session; official ACP does not expose an equivalent field today
+
+## Architecture
+
+```
+Feishu user ──(WebSocket)──> FeishuBot ──> Bridge
+                                              │
+                   ConversationService / FeishuCardState
+                                              │
+                   @agentclientprotocol/sdk ClientSideConnection
+                                              │
+                   stdio NDJSON ──> agent acp child (default) / cursor-agent-acp (legacy) ──> Cursor
+```
+
+- **Feishu layer**: `src/feishu-bot.ts` (SDK + message I/O only)
+- **ACP runtime**: `src/acp/runtime.ts` + `src/acp/feishu-bridge-client.ts` (Client: permissions, sandbox read/write, normalized `session/update`)
+- **Orchestration**: `src/bridge.ts`, `src/conversation-service.ts`
+- **Sessions**: `src/session-manager.ts` + `src/session-store.ts`
+
+## Prerequisites
+
+1. **Node.js 18+**
+2. **Cursor CLI / Agent CLI** installed (`agent` on PATH, logged in); for legacy rollback, `cursor-agent` must also be available locally
+3. Feishu enterprise app: bot, `im:message`, **`im:message.group_msg`** (required for group messages), `im:message:send_as_bot`, `im:chat`; for “one user + bot” no-@ logic, grant read chat / member APIs as needed (`im:chat` related)
+
+## Quick Start
+
+```bash
+npm install
+cp .env.example .env
+# Edit .env
+
+npm run dev
+# or
+npm run build && npm start
+
+# Debug: stop other instances before dev (single-instance lock)
+# ./scripts/bridge-dev.sh
+# npm run dev:restart
+```
+
+### Docker dev setup
+
+The repo ships a **development** Docker stack under `docker/`: `docker/Dockerfile.dev`, `docker/compose.yaml`, `docker/dev-entrypoint.sh`. It does **not** reinstall Cursor Agent in the image; it **bind-mounts** these host paths:
+
+- `/home/liuyang/.local/bin`
+- `/home/liuyang/.local/share/cursor-agent`
+- `/home/liuyang/.cursor`
+- `/home/liuyang/.config/Cursor`
+- `/home/liuyang/.feishu-cursor-bridge`
+- `/home/liuyang/Documents`
+
+So the container can call the host’s logged-in `agent acp` / `cursor agent` and use your workspaces and local session store.
+
+First run:
+
+```bash
+cp .env.example .env
+# Edit .env
+docker-compose -f docker/compose.yaml up --build
+```
+
+Common commands:
+
+```bash
+docker-compose -f docker/compose.yaml up -d
+docker-compose -f docker/compose.yaml restart
+docker-compose -f docker/compose.yaml logs -f bridge-dev
+docker-compose -f docker/compose.yaml down
+```
+
+### tmux backend smoke tests (Docker)
+
+Two **one-off** smoke services validate the `tmux` backend inside the container without touching a live Feishu bridge:
+
+```bash
+# Basic: newSession -> prompt -> server restart -> loadSession -> prompt -> closeSession
+docker-compose -f docker/compose.yaml run --rm tmux-acp-smoke
+
+# Cancel: session/cancel -> stopReason: cancelled
+docker-compose -f docker/compose.yaml run --rm tmux-acp-cancel-smoke
+```
+
+Notes:
+
+- This compose targets **local Linux dev**; host paths are hard-coded as `/home/liuyang/...` — edit `docker/compose.yaml` bind mounts if your machine differs.
+- Workspace path in the container matches the host: `/home/liuyang/Documents/feishu-cursor-bridge`, so absolute paths in `.env` often need no change.
+- Dependencies live in Docker volume `bridge_node_modules`; `package-lock.json` changes trigger `npm install` on container start.
+- `docker/Dockerfile.dev` includes `tmux`, so smoke can exercise `ACP_BACKEND=tmux`; smokes do not hold a Feishu long connection — backend regression only.
+
+## Network & proxy
+
+- By default the service talks to Feishu APIs and the long-connection gateway **directly**; no proxy is required.
+- If the host must use a proxy, set `https_proxy` / `http_proxy` / `all_proxy`; the Feishu long connection reuses them.
+- For WebSocket-specific proxy, set `wss_proxy` / `ws_proxy` (they override `https_proxy` / `http_proxy`).
+- When any of these is set, the service sets `NODE_USE_ENV_PROXY=1` for child processes so `agent` / `cursor-agent` use the same proxy (manual runs and `systemd` both apply).
+- With no proxy env vars, traffic stays direct.
+- If you use `systemd --user`, put proxy vars in the `.env` the unit loads (or `Environment=` / `EnvironmentFile=`), not only in an interactive shell; the service does not inherit login shells.
+
+## Environment variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `FEISHU_APP_ID` | Feishu App ID (required) | — |
+| `FEISHU_APP_SECRET` | Feishu App Secret (required) | — |
+| `FEISHU_DOMAIN` | `feishu` / `lark` / custom URL | `feishu` |
+| `ACP_BACKEND` | ACP backend: `official` / `legacy` / `tmux` | `official` |
+| `CURSOR_AGENT_PATH` | Official ACP command path | `agent` |
+| `CURSOR_API_KEY` | Official ACP API key (optional) | empty |
+| `CURSOR_AUTH_TOKEN` | Official ACP auth token (optional) | empty |
+| `CURSOR_WORK_DIR` | Workspace absolute path (ACP `cwd`, sandbox root) | cwd |
+| `CURSOR_ACP_ADAPTER_ENTRY` | `cursor-agent-acp` entry JS (`legacy` only) | packaged `dist/bin/cursor-agent-acp.js` |
+| `ACP_NODE_PATH` | Node binary for legacy adapter | `process.execPath` |
+| `CURSOR_ACP_SESSION_DIR` | legacy `--session-dir` | `~/.feishu-cursor-bridge/cursor-acp-sessions` |
+| `CURSOR_ACP_EXTRA_ARGS` | Extra legacy CLI args (space-separated) | empty |
+| `BRIDGE_SESSION_STORE` | Feishu ↔ ACP mapping JSON path | `~/.feishu-cursor-bridge/.feishu-bridge-sessions.json` |
+| `SESSION_IDLE_TIMEOUT_MS` | Idle before new session; `0` / `infinity` = never | `604800000` (7 days) |
+| `BRIDGE_MAX_SESSIONS_PER_USER` | Max live sessions per user (all chats); `0` = unlimited | `10` |
+| `BRIDGE_SINGLE_INSTANCE_LOCK` | Single-instance lock file (refuse start if PID alive) | `~/.feishu-cursor-bridge/bridge.lock` |
+| `BRIDGE_ALLOW_MULTIPLE_INSTANCES` | `true` disables single-instance lock (debug only) | `false` |
+| `FEISHU_CARD_THROTTLE_MS` | Card update throttle | `800` |
+| `AUTO_APPROVE_PERMISSIONS` | Auto-pick allow-style permission options | `true` |
+| `LOG_LEVEL` | `debug` / `info` / `warn` / `error` | `info` |
+| `BRIDGE_DEBUG` | Verbose logs + `/status` details | `false` |
+| `EXPERIMENT_LOG_TO_FILE` | Experimental: append `console.*` to file | `false` |
+| `EXPERIMENT_LOG_FILE` | Experimental log path | `~/.feishu-cursor-bridge/logs/bridge.log` |
+
+Proxy precedence: `wss_proxy` / `ws_proxy` > `https_proxy` / `http_proxy` / `all_proxy`. Proxy is used only when env vars are set; otherwise direct.
+
+## Usage
+
+- **DM**: send a message directly
+- **Group**: @ the bot + content ( **`im:message.group_msg`** must be enabled or group events won’t arrive); in **topic** groups, each `thread_id` maps to its own ACP session (not shared with the main group chat)
+- **Multi-session**: `/new` creates and switches (old session stays connected); `/sessions` lists; `/switch <index or name>` switches active (no arg → last used); `/close` closes one; `/rename` helps name-based switching. Full syntax: `docs/feishu-commands.md`
+- `/reset` resets **only the active** session (new ACP session in the same slot); other sessions unchanged
+- `/status` or `/状态`: session stats, always shows ACP backend; `official` / `legacy` also show known mode for the active session; `tmux` does not show a bridge-faked mode; **legacy** adds CLI resume ID for the active slot; with `BRIDGE_DEBUG=true`, adds ACP `sessionId`, paths, modes, etc.
+- `/mode <id>`: `official` / `legacy` use ACP `session/set_mode`; `tmux` forwards `/mode ...` verbatim to the real Cursor CLI pane
+- `/model <id>`: `legacy` / `official` use ACP `session/set_model` (`official` follows selector from ACP); `tmux` forwards to CLI pane; only `official` supports bridge-side `/model <index>`
+
+## Manual smoke checklist
+
+1. `npm run build` succeeds
+2. DM once — card shows an “answer” block
+3. Multi-turn — same session reused (`BRIDGE_DEBUG`: stable `sessionId`)
+4. After `/reset`, active slot’s ACP `sessionId` changes; with multiple `/new` sessions, `/switch` keeps contexts independent
+5. When tools run, card “tools” updates (depends on Agent output)
+6. `/status` shows backend + mode; with `BRIDGE_DEBUG=true`, `sessionId` / workspace, etc.; **CLI resume ID** appears only with `ACP_BACKEND=legacy`
+
+## Tech stack
+
+- **Cursor `agent acp`** — default ACP server
+- **[@blowmage/cursor-agent-acp](https://www.npmjs.com/package/@blowmage/cursor-agent-acp)** — legacy backend
+- **[@agentclientprotocol/sdk](https://www.npmjs.com/package/@agentclientprotocol/sdk)** — ACP client types + connection
+- **@larksuiteoapi/node-sdk** — Feishu long connection + message API
+- **TypeScript + Node.js**
+
+## Backend strategy
+
+- Default: **`agent acp`** (official).
+- Emergency rollback: `ACP_BACKEND=legacy`.
+- Protocol follows the SDK; events cover thinking, tools, plan, mode, etc., folded by `FeishuCardState`.
+
+---
+
+# 中文文档
+
+## 这是什么
 
 独立服务，通过飞书机器人控制 Cursor AI Agent。桥接进程作为 **ACP Client**，默认子进程运行 Cursor 官方 **`agent acp`**；同时保留 `ACP_BACKEND=legacy` 回滚到 **`@blowmage/cursor-agent-acp`** 的能力，便于紧急兜底。
 
