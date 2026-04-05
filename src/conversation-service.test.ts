@@ -190,7 +190,51 @@ test("ConversationService 会把交错的工具事件持续合并到同一张卡
   assert.match(reply ?? "", /读取文件 — running/);
   assert.match(reply ?? "", /写入文件 — completed/);
   assert.match(reply ?? "", /\*\*回答\*\*/);
-  assert.match(reply ?? "", /第一段回答。第二段回答。/);
+  assert.match(reply ?? "", /第一段回答。/);
+  assert.match(reply ?? "", /第二段回答。/);
+  const r = reply ?? "";
+  assert.ok(
+    r.indexOf("第一段回答。") < r.indexOf("第二段回答。"),
+    "按时间线：第一工具段后的回答应出现在第二工具段后的回答之前",
+  );
+});
+
+test("ConversationService 飞书 markdown 按 ACP 到达顺序排列思考与回答", async () => {
+  const replyEarlyThought = await createHarness([
+    {
+      type: "agent_thought_chunk",
+      sessionId: "session-1",
+      text: "先思考\n",
+    },
+    {
+      type: "agent_message_chunk",
+      sessionId: "session-1",
+      text: "后回答",
+    },
+  ]).service.handleUserPrompt(createMessage(), createSession());
+
+  const a1 = replyEarlyThought?.indexOf("**思考**") ?? -1;
+  const b1 = replyEarlyThought?.indexOf("**回答**") ?? -1;
+  assert.ok(a1 >= 0 && b1 >= 0);
+  assert.ok(a1 < b1, "先到的思考应排在回答前");
+
+  const replyEarlyAnswer = await createHarness([
+    {
+      type: "agent_message_chunk",
+      sessionId: "session-1",
+      text: "先回答",
+    },
+    {
+      type: "agent_thought_chunk",
+      sessionId: "session-1",
+      text: "\n后思考",
+    },
+  ]).service.handleUserPrompt(createMessage(), createSession());
+
+  const a2 = replyEarlyAnswer?.indexOf("**回答**") ?? -1;
+  const b2 = replyEarlyAnswer?.indexOf("**思考**") ?? -1;
+  assert.ok(a2 >= 0 && b2 >= 0);
+  assert.ok(a2 < b2, "先到的回答应排在思考前");
 });
 
 test("ConversationService 会在工具累计超过阈值后再拆成多张卡片", async () => {
