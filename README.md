@@ -57,6 +57,38 @@ npm run build && npm start
 # npm run dev:restart
 ```
 
+### Auto-start (`service.sh`)
+
+The same **`bash service.sh`** script supports **macOS** (`launchd`) and **Linux with systemd** (e.g. **Ubuntu**): **`npm install` + `npm run build`**, then install a user service and start it. The process runs **`node dist/index.js`** with **`WorkingDirectory`** = repo root (`.env` is loaded by `dotenv`).
+
+#### macOS (launchd)
+
+Same idea as **feishu-cursor-claw**: plist at **`~/Library/LaunchAgents/com.feishu-cursor-bridge.plist`**, **`RunAtLoad`**, **`KeepAlive`**. Logs: **`/tmp/feishu-cursor-bridge.log`**. **`stop`** uses **`launchctl bootout`** (unloads the job but keeps the plist); killing only the process would respawn it immediately because of **`KeepAlive`**.
+
+#### Linux / Ubuntu (`systemd --user`)
+
+User unit: **`~/.config/systemd/user/feishu-cursor-bridge.service`**, **`Restart=always`**. Logs: **`journalctl --user -u feishu-cursor-bridge.service`** (also **`bash service.sh logs`**).
+
+To start the user service **at boot without an interactive login**, run once: **`sudo loginctl enable-linger "$USER"`** (optional).
+
+```bash
+bash service.sh install    # npm install + build + install + start
+bash service.sh status
+bash service.sh logs       # macOS: follow log file; Linux: journalctl -f
+```
+
+| Command | Description |
+|---------|-------------|
+| `bash service.sh install` | `npm install` + `npm run build`, then install auto-start and launch |
+| `bash service.sh uninstall` | Remove auto-start and stop |
+| `bash service.sh start` | Start |
+| `bash service.sh stop` | Stop |
+| `bash service.sh restart` | Restart |
+| `bash service.sh status` | Status |
+| `bash service.sh logs` | Live logs |
+
+After code changes, run `npm run build` then **`bash service.sh restart`**; or **`bash service.sh install`** again to refresh deps, rebuild, and rewrite the plist / unit. If you change the Node binary path, re-run **`bash service.sh install`**.
+
 ### Docker dev setup
 
 The repo ships a **development** Docker stack under `docker/`: `docker/Dockerfile.dev`, `docker/compose.yaml`, `docker/dev-entrypoint.sh`. It does **not** reinstall Cursor Agent in the image; it **bind-mounts** these host paths:
@@ -114,6 +146,7 @@ Notes:
 - When any of these is set, the service sets `NODE_USE_ENV_PROXY=1` for child processes so `agent` / `cursor-agent` use the same proxy (manual runs and `systemd` both apply).
 - With no proxy env vars, traffic stays direct.
 - If you use `systemd --user`, put proxy vars in the `.env` the unit loads (or `Environment=` / `EnvironmentFile=`), not only in an interactive shell; the service does not inherit login shells.
+- For **launchd** / **systemd --user** (`service.sh`), proxy settings in the project **`.env`** are loaded by the app; the service manager still does not inherit your interactive shell.
 
 ## Environment variables
 
@@ -237,6 +270,38 @@ npm run build && npm start
 # npm run dev:restart
 ```
 
+### 开机自启（`service.sh`：macOS launchd / Linux systemd）
+
+同一脚本在 **macOS** 使用 **launchd**，在 **systemd** 的 Linux（如 **Ubuntu**）使用 **`systemctl --user`**：先 **`npm install`**、**`npm run build`**，再注册用户级服务并启动。进程在仓库根目录运行 **`node dist/index.js`**（**`.env`** 由 `dotenv` 加载）。
+
+#### macOS（launchd）
+
+与 feishu-cursor-claw 同类：**`~/Library/LaunchAgents/com.feishu-cursor-bridge.plist`**，**`RunAtLoad`** + **`KeepAlive`**。日志：**`/tmp/feishu-cursor-bridge.log`**。**`stop`** 使用 **`launchctl bootout`**（卸载任务、保留 plist）；若只杀进程，**`KeepAlive`** 会让 launchd 立刻再拉起进程。
+
+#### Linux / Ubuntu（`systemd --user`）
+
+用户单元：**`~/.config/systemd/user/feishu-cursor-bridge.service`**，**`Restart=always`**。日志：**`journalctl --user -u feishu-cursor-bridge.service`**（或 **`bash service.sh logs`**）。
+
+若要在**未登录图形会话时**仍随开机启动当前用户的单元，可执行一次：**`sudo loginctl enable-linger "$USER"`**（可选）。
+
+```bash
+bash service.sh install    # npm install + build + 安装并启动
+bash service.sh status
+bash service.sh logs       # macOS：跟日志文件；Linux：journalctl -f
+```
+
+| 命令 | 说明 |
+|------|------|
+| `bash service.sh install` | `npm install` + `npm run build` + 安装自启动并启动 |
+| `bash service.sh uninstall` | 卸载自启动并停止 |
+| `bash service.sh start` | 启动 |
+| `bash service.sh stop` | 停止 |
+| `bash service.sh restart` | 重启 |
+| `bash service.sh status` | 状态 |
+| `bash service.sh logs` | 实时日志 |
+
+代码更新后可 `npm run build` 再 **`bash service.sh restart`**；也可再次 **`bash service.sh install`** 以更新依赖、重建并**重写 plist / systemd unit**。更换 Node 路径后请重新 **`bash service.sh install`**。
+
 ### Docker 开发联调
 
 仓库内提供了一套**开发联调**用的 Docker 配置，集中放在 `docker/` 目录：`docker/Dockerfile.dev`、`docker/compose.yaml`、`docker/dev-entrypoint.sh`。它不会在镜像里重新安装 Cursor Agent，而是**直接复用宿主机**上的以下目录：
@@ -294,6 +359,7 @@ docker-compose -f docker/compose.yaml run --rm tmux-acp-cancel-smoke
 - 检测到上述任一代理变量时，服务会自动为子进程补上 `NODE_USE_ENV_PROXY=1`，使 `agent` / `cursor-agent` 等子进程也走环境代理；手动启动与 `systemd` 服务均适用。
 - 若未设置任何代理变量，则保持直连模式。
 - 若使用 `systemd --user` 运行服务，请把代理变量写进该服务读取的 `.env`（或 unit 的 `Environment=` / `EnvironmentFile=`），不要只写在交互式 shell 配置里；服务不会自动继承登录 shell 的环境。
+- 使用 **launchd** / **systemd --user**（`service.sh`）时，项目 **`.env`** 会被进程加载；服务管理环境同样不会继承交互式 shell。
 
 ## 环境变量
 
