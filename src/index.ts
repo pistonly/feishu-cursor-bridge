@@ -56,8 +56,9 @@ async function main() {
     `[main] ACP backend: ${config.acp.backend} (${formatAcpBackendLabel(config.acp.backend)})`,
   );
   if (config.acp.backend === "legacy") {
+    const tsx = config.acp.adapterTsxCli;
     console.log(
-      `[main] ACP adapter: ${config.acp.nodePath} ${config.acp.adapterEntry}`,
+      `[main] ACP adapter: ${config.acp.nodePath} ${tsx ? `${tsx} ` : ""}${config.acp.adapterEntry}`,
     );
     console.log(`[main] Adapter session dir: ${config.acp.adapterSessionDir}`);
   } else if (config.acp.backend === "official") {

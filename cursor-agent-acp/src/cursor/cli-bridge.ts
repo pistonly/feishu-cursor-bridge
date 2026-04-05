@@ -59,11 +59,24 @@ interface CursorStreamJsonEvent {
   >;
 }
 
+/** Strip Cursor-style trailing “(12s)” / “(1.5s)” timers for deduping thinking lines. */
+function stripThinkingTimers(text: string): string {
+  let t = text.trimEnd();
+  let prev = '';
+  while (t !== prev) {
+    prev = t;
+    t = t.replace(/\s*\(\d+(?:\.\d+)?s\)\s*$/i, '').trimEnd();
+  }
+  return t;
+}
+
 /** Mutable state while scanning stream-json lines (assistant dedupe + tool spacing). */
 interface CursorStreamAccumState {
   assistantText: string;
   toolStatusEmitted: boolean;
   cursorStreamSessionId?: string;
+  lastThinkingRaw?: string;
+  lastThinkingNormalized?: string;
 }
 
 const STREAM_TOOL_LABELS: Record<string, string> = {
@@ -685,26 +698,40 @@ export class CursorCliBridge {
     }
 
     switch (ev.type) {
-      case 'thinking':
-        // Cursor CLI repeats the same status line with growing "(Ns)" timers; forwarding
-        // each event makes Feishu show a long useless English blob. Claw keeps thinking
-        // for progress UI only, not as final user-visible transcript.
-        if (
-          String(process.env['ACP_ADAPTER_FORWARD_STREAM_THINKING'] || '')
-            .toLowerCase() === 'true' &&
-          ev.text &&
-          onChunk
-        ) {
-          await onChunk({
-            type: 'content',
-            data: { type: 'text', text: ev.text },
-          });
-        } else if (ev.text) {
-          this.logger.debug('stream-json thinking (not forwarded to client)', {
-            preview: ev.text.slice(0, 120),
-          });
+      case 'thinking': {
+        // Map to ACP agent_thought_chunk (Feishu 「思考」区). Skip timer-only updates
+        // when the line is the same except for trailing "(Ns)" to avoid spam.
+        if (!ev.text || !onChunk) {
+          if (ev.text) {
+            this.logger.debug('stream-json thinking (no chunk handler)', {
+              preview: ev.text.slice(0, 120),
+            });
+          }
+          break;
         }
+        const raw = ev.text;
+        const norm = stripThinkingTimers(raw);
+        const prevNorm = streamState.lastThinkingNormalized;
+        const prevRaw = streamState.lastThinkingRaw;
+        if (
+          prevNorm !== undefined &&
+          norm === prevNorm &&
+          raw !== prevRaw
+        ) {
+          streamState.lastThinkingRaw = raw;
+          this.logger.debug('stream-json thinking (timer-only, skipped)', {
+            preview: raw.slice(0, 120),
+          });
+          break;
+        }
+        streamState.lastThinkingNormalized = norm;
+        streamState.lastThinkingRaw = raw;
+        await onChunk({
+          type: 'thought',
+          data: { type: 'text', text: raw },
+        });
         break;
+      }
 
       case 'assistant': {
         const blocks = this.extractStreamingContentBlocks(ev, streamState);

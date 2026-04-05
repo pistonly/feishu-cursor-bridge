@@ -11,10 +11,10 @@ import type {
 import { SdkAcpRuntimeBase } from "./sdk-runtime-base.js";
 
 /**
- * 上游 legacy 适配器在 `session/prompt` 链路里识别 `stream` 开关，走
- * cursor-agent `stream-json` + `--stream-partial-output`。但官方 SDK 的 PromptRequest
- * schema 不包含顶层 `stream`，Agent 侧校验会把未知键剥掉；因此桥接把该标记放进 `_meta.stream`
- *（并保留顶层 `stream` 以兼容未做 schema 剥离的实现）。
+ * `cursor-agent-acp` 在 `session/prompt` 链路里识别 `stream` 开关，走
+ * cursor-agent `stream-json` + `--stream-partial-output`。官方 SDK 的 PromptRequest
+ * schema 不包含顶层 `stream`，Agent 可能剥掉未知键；因此桥接把该标记放进 `_meta.stream`
+ *（并保留顶层 `stream` 以防对端未剥该字段）。
  */
 type SessionPromptParams = Parameters<
   import("@agentclientprotocol/sdk").ClientSideConnection["prompt"]
@@ -32,7 +32,7 @@ export const MAX_ADAPTER_SESSION_TIMEOUT_MS = 24 * 60 * 60_000;
 
 /**
  * 同步适配器自己的 session 清理窗口，避免桥侧仍认为 session 存活时，
- * 上游 cursor-agent-acp 先按其默认 1 小时超时把底层 session 删掉。
+ * `cursor-agent-acp` 先按其内部超时把底层 session 删掉。
  *
  * 注意：适配器自身把 `sessionTimeout` 限制在 1 分钟到 24 小时之间，
  * 所以桥侧即便配置了更长空闲期，这里也只能截断到 24 小时，再依赖上层探活+重建兜底。
@@ -61,9 +61,17 @@ export class AcpRuntime extends SdkAcpRuntimeBase {
   }
 
   protected createSpawnSpec() {
-    const { nodePath, adapterEntry, extraArgs, workspaceRoot, adapterSessionDir } =
-      this.config.acp;
-    const args = [adapterEntry, ...extraArgs];
+    const {
+      nodePath,
+      adapterEntry,
+      adapterTsxCli,
+      extraArgs,
+      workspaceRoot,
+      adapterSessionDir,
+    } = this.config.acp;
+    const args = adapterTsxCli
+      ? [adapterTsxCli, adapterEntry, ...extraArgs]
+      : [adapterEntry, ...extraArgs];
     if (this.config.logLevel === "debug") {
       args.push("--log-level", "debug");
     }

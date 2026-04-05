@@ -36,8 +36,8 @@ interface CliOptions {
   testCursor?: boolean;
 }
 
-// Read version from package.json
-const packagePath = join(__dirname, '../../package.json');
+// Monorepo root package.json (this file lives at cursor-agent-acp/src/bin/)
+const packagePath = join(__dirname, '../../../package.json');
 const packageInfo = JSON.parse(readFileSync(packagePath, 'utf8'));
 const VERSION = packageInfo.version;
 

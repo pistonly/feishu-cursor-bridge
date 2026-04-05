@@ -2,11 +2,22 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
-  resolveBundledAdapterEntry,
+  resolveLegacyAdapterDistEntry,
+  resolveLegacyAdapterSourceEntry,
   resolveBundledTmuxAcpServerEntry,
   resolveBundledTsxCliEntry,
 } from "./acp/paths.js";
 import type { AcpBackend } from "./acp/runtime-contract.js";
+
+/**
+ * 是否由 `tsx src/index.ts`（即 `npm run dev`）启动桥接主进程。
+ * 与 `tsx src/index.ts`（`npm run dev`）一致时，legacy 适配器用 `cursor-agent-acp` 源码；与 `node dist/index.js` 一致时用其 `dist`。
+ */
+function isBridgeMainScriptSourceIndex(): boolean {
+  const raw = process.argv[1];
+  if (!raw) return false;
+  return path.resolve(raw).endsWith(path.join("src", "index.ts"));
+}
 
 export interface Config {
   feishu: {
@@ -14,11 +25,16 @@ export interface Config {
     appSecret: string;
     domain: string;
   };
-  /** 上游 legacy 适配器（本仓库 packages/cursor-agent-acp）子进程与工作区 */
+  /** `ACP_BACKEND=legacy`：本仓库 `cursor-agent-acp/` 子进程与工作区 */
   acp: {
     backend: AcpBackend;
     nodePath: string;
+    /** legacy 时为本仓库 `cursor-agent-acp` 入口（与桥接 dev/prod 同源：tsx+src 或 dist+node） */
     adapterEntry: string;
+    /**
+     * 与桥接一致从源码跑 legacy 时：`node <nodePath> <adapterTsxCli> <adapterEntry> ...`
+     */
+    adapterTsxCli?: string;
     /** 透传给 cursor-agent-acp 的额外参数（不含 --session-dir） */
     extraArgs: string[];
     /** Cursor 官方 ACP 命令路径（默认 `agent`） */
@@ -368,9 +384,19 @@ export function loadConfig(): Config {
     (process.env["BRIDGE_SHOW_ACP_AVAILABLE_COMMANDS"] ?? "false").toLowerCase() ===
     "true";
 
-  const adapterEntry =
-    process.env["CURSOR_ACP_ADAPTER_ENTRY"]?.trim() ||
-    (backend === "legacy" ? resolveBundledAdapterEntry() : "");
+  const bridgeFromSource = isBridgeMainScriptSourceIndex();
+
+  let adapterEntry = "";
+  let adapterTsxCli: string | undefined;
+
+  if (backend === "legacy") {
+    if (bridgeFromSource) {
+      adapterTsxCli = resolveBundledTsxCliEntry();
+      adapterEntry = resolveLegacyAdapterSourceEntry();
+    } else {
+      adapterEntry = resolveLegacyAdapterDistEntry();
+    }
+  }
   const tmuxTsxCliEntry =
     process.env["TMUX_ACP_TSX_CLI"]?.trim() || resolveBundledTsxCliEntry();
   const tmuxServerEntry =
@@ -397,6 +423,7 @@ export function loadConfig(): Config {
       backend,
       nodePath,
       adapterEntry,
+      ...(adapterTsxCli ? { adapterTsxCli } : {}),
       extraArgs,
       officialAgentPath,
       officialApiKey,

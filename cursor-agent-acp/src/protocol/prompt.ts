@@ -157,32 +157,6 @@ export class PromptHandler {
   }
 
   /**
-   * Returns a random element from an array
-   */
-  private getRandomProcessingText(): string {
-    const texts = [
-      'Crunching the numbers (and my will to live)...',
-      'Hold on, consulting the magic 8-ball...',
-      'Doing the thing...',
-      'Asking the hamsters to run faster...',
-      'Spinning up the chaos engines...',
-      'Bribing the servers...',
-      'Waking up the code gremlins...',
-      'Sacrificing a rubber duck to the programming gods...',
-      'Convincing the database to cooperate...',
-      'Rolling the dice...',
-      'Summoning the data from the void...',
-      'Teaching the robots to behave...',
-      'Turning it off and on again...',
-      'Threatening the API with a timeout...',
-      'Hoping this works...',
-      'Doing some wizardry...',
-      'Making the computers think harder...',
-    ];
-    return texts[Math.floor(Math.random() * texts.length)]!;
-  }
-
-  /**
    * Determine the appropriate stop reason based on execution context with detailed metadata
    * Per ACP spec: Returns one of 5 valid stop reasons with rich context
    */
@@ -786,75 +760,7 @@ export class PromptHandler {
         // Mark session as processing to prevent cleanup during long-running operations
         this.sessionManager.markSessionProcessing(sessionId);
 
-        let heartbeatCount = 0;
-        /**
-         * Optional English "processing" quips every 12s as agent_thought_chunk.
-         * Feishu bridge *appends* each chunk into the card 「思考」 section, so this
-         * becomes a long repetitive blob (e.g. "Teaching... (12s)(24s)...").
-         * Enable only for clients that want Zed-style liveness text.
-         */
-        const thoughtHeartbeatEnabled =
-          String(process.env['ACP_ADAPTER_THOUGHT_HEARTBEAT'] || '')
-            .toLowerCase() === 'true';
-
-        let heartbeatInterval: ReturnType<typeof setInterval> | undefined;
-
-        if (thoughtHeartbeatEnabled) {
-          const processingText = this.getRandomProcessingText();
-
-          this.sendNotification({
-            jsonrpc: '2.0',
-            method: 'session/update',
-            params: {
-              sessionId: promptParams.sessionId,
-              update: {
-                sessionUpdate: 'agent_thought_chunk',
-                content: {
-                  type: 'text',
-                  text: processingText,
-                },
-              },
-            },
-          });
-
-          heartbeatInterval = setInterval(async () => {
-            heartbeatCount++;
-            const elapsed = heartbeatCount * 12;
-
-            try {
-              await this.sessionManager.updateSession(sessionId, {});
-            } catch (error) {
-              this.logger.warn('Session not found during heartbeat', {
-                sessionId,
-                error: error instanceof Error ? error.message : String(error),
-              });
-              clearInterval(heartbeatInterval);
-              return;
-            }
-
-            this.sendNotification({
-              jsonrpc: '2.0',
-              method: 'session/update',
-              params: {
-                sessionId: promptParams.sessionId,
-                update: {
-                  sessionUpdate: 'agent_thought_chunk',
-                  content: {
-                    type: 'text',
-                    text: `${processingText} (${elapsed}s)`,
-                    annotations: {
-                      _meta: {
-                        heartbeat: true,
-                        elapsedSeconds: elapsed,
-                        heartbeatNumber: heartbeatCount,
-                      },
-                    },
-                  },
-                },
-              },
-            });
-          }, 12000);
-        }
+        const heartbeatCount = 0;
 
         try {
           // Process and AWAIT completion to get stopReason and metadata
@@ -958,9 +864,6 @@ export class PromptHandler {
           });
           throw error;
         } finally {
-          if (heartbeatInterval) {
-            clearInterval(heartbeatInterval);
-          }
           // Always unmark session as processing
           this.sessionManager.unmarkSessionProcessing(sessionId);
         }
@@ -1485,7 +1388,31 @@ export class PromptHandler {
         }),
         abortSignal: abortController.signal,
         onChunk: async (chunk: StreamChunk) => {
-          if (chunk.type === 'content') {
+          if (chunk.type === 'thought') {
+            const d = chunk.data;
+            if (
+              d &&
+              typeof d === 'object' &&
+              d.type === 'text' &&
+              typeof d.text === 'string' &&
+              d.text
+            ) {
+              this.sendNotification({
+                jsonrpc: '2.0',
+                method: 'session/update',
+                params: {
+                  sessionId,
+                  update: {
+                    sessionUpdate: 'agent_thought_chunk',
+                    content: {
+                      type: 'text',
+                      text: d.text,
+                    },
+                  },
+                },
+              });
+            }
+          } else if (chunk.type === 'content') {
             // Process chunk - may return null for partial blocks
             const contentBlock = await this.contentProcessor.processStreamChunk(
               chunk.data

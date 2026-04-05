@@ -14,7 +14,7 @@
 | 飞书 ↔ ACP 会话映射持久化 JSON | `BRIDGE_SESSION_STORE` | `~/.feishu-cursor-bridge/.feishu-bridge-sessions.json` |
 | `/new list`、`/new <序号>` 使用的快捷工作区列表 JSON | `CURSOR_WORK_PRESETS_FILE` | `~/.feishu-cursor-bridge/workspace-presets.json` |
 | 快捷列表为空时的种子路径（仅首次初始化） | `CURSOR_WORK_PRESETS` | 无默认；不设置则不从环境变量注入种子 |
-| `cursor-agent-acp` 入口脚本（仅 `legacy`） | `CURSOR_ACP_ADAPTER_ENTRY` | 包内解析：`node_modules/@feishu-cursor-bridge/cursor-agent-acp/dist/bin/cursor-agent-acp.js`（`npm install` 后由 `postinstall` 构建 `dist/`；通过 `require.resolve` 定位） |
+| `cursor-agent-acp` 入口脚本（仅 `legacy`） | — | 与桥接启动方式一致，**无单独环境变量**：**`node dist/index.js`** → **`cursor-agent-acp/dist/bin/cursor-agent-acp.js`**（`npm install` 的 `postinstall` 会 `build:adapter`）；**`tsx src/index.ts`**（`npm run dev`）→ **`cursor-agent-acp/src/bin/cursor-agent-acp.ts`** + **tsx** |
 | 启动 legacy 适配器用的 Node 可执行文件 | `ACP_NODE_PATH` | 当前进程的 Node（`process.execPath`） |
 
 ## 分条说明
@@ -34,7 +34,7 @@
 
 - **`ACP_BACKEND` 默认**：`official`
 - **`CURSOR_AGENT_PATH` 默认**：`agent`
-- **含义**：默认拉起 Cursor 官方 `agent acp`；仅在需要回滚时再切到 `legacy`
+- **含义**：默认拉起 Cursor 官方 `agent acp`；需要本仓 stdio 适配器时再设 `legacy`
 
 ### 适配器会话目录 `CURSOR_ACP_SESSION_DIR`
 
@@ -51,11 +51,11 @@
 - **`CURSOR_WORK_PRESETS_FILE` 默认**：`~/.feishu-cursor-bridge/workspace-presets.json`
 - **`CURSOR_WORK_PRESETS`**：逗号分隔的绝对路径；**仅在列表文件为空时**用于首次种子初始化，不设则没有来自该变量的默认列表。
 
-### 适配器入口与 Node `CURSOR_ACP_ADAPTER_ENTRY` / `ACP_NODE_PATH`
+### 适配器入口与 Node `ACP_NODE_PATH`
 
-- **适配器脚本默认路径**：仅在 `ACP_BACKEND=legacy` 时，从本仓库 workspace 包 `@feishu-cursor-bridge/cursor-agent-acp` 解析出 `dist/bin/cursor-agent-acp.js`（实现见 `src/acp/paths.ts`；克隆后需 `npm install` 以触发构建）。
-- **Node 默认**：当前运行桥接进程的 Node 可执行文件路径，仅用于启动 legacy 适配器。
+- **适配器脚本路径**（仅 `ACP_BACKEND=legacy`）：固定相对**桥接仓库根目录**解析（`src/config.ts` / `src/acp/paths.ts`），规则与桥接自身一致——主进程为 **`dist/index.js`** → 适配器 **`cursor-agent-acp/dist/bin/cursor-agent-acp.js`**；主进程为 **`tsx …/src/index.ts`**（`npm run dev`）→ **`cursor-agent-acp/src/bin/cursor-agent-acp.ts`** + **tsx**。克隆后需 `npm install` 以生成生产用 `dist/`。
+- **Node 默认**：当前运行桥接进程的 Node 可执行文件路径，仅用于在 `legacy` 下启动本仓 `cursor-agent-acp`。
 
 ## 与 README 的关系
 
-环境变量一览仍以根目录 `README.md` 中的表格为准；本文侧重**默认落盘位置**与路径之间的关系，便于排查「文件写到了哪里」。
+环境变量一览仍以根目录 `README.md` 中的表格为准；本文侧重**默认落盘位置**与路径之间的关系，便于排查「文件写到了哪里」。`cursor-agent-acp/` 的历史参考见 [third-party.md](third-party.md)。

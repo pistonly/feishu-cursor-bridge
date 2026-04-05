@@ -11,7 +11,7 @@
  * ## Usage Example
  *
  * ```typescript
- * import { ExtensionRegistry } from '@blowmage/cursor-agent-acp';
+ * import { ExtensionRegistry } from '../tools/extension-registry.js';
  *
  * const registry = new ExtensionRegistry(logger);
  *

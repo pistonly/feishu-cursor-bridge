@@ -1,6 +1,6 @@
 # feishu-cursor-bridge
 
-> Standalone service that controls the Cursor AI Agent via a Feishu bot. The bridge runs as an **ACP Client**, spawning Cursor’s official **`agent acp`** by default, while `ACP_BACKEND=legacy` can fall back to **`@blowmage/cursor-agent-acp`** for emergency rollback.
+> Standalone service that controls the Cursor AI Agent via a Feishu bot. The bridge runs as an **ACP Client**, spawning Cursor’s official **`agent acp`** by default; optional **`ACP_BACKEND=legacy`** runs the in-repo **`cursor-agent-acp/`** stdio adapter (see [docs/third-party.md](docs/third-party.md) for provenance only).
 
 **[中文文档](#中文文档)**
 
@@ -16,7 +16,7 @@
 - Group chats: @ the bot (or no @ when “only one human + the bot”); DMs: talk directly
 - Built-in commands: `/new`, `/sessions`, `/switch`, `/close` (incl. `/close all`), `/rename`, `/reset` (incl. shortcuts like `/new list`, `/new <index>`), `/status`, `/mode`, `/model`; **`/topic` + text** is display-only (not sent to the Agent — see `docs/feishu-commands.md`)
 - Persistent Feishu ↔ ACP mapping: after restart, if the Agent reports `loadSession`, `session/load` can recover
-- **CLI resume ID (legacy only)**: with `ACP_BACKEND=legacy`, `/status` shows the CLI chat id for the active session; official ACP does not expose an equivalent field today
+- **CLI resume ID (`legacy` / in-repo adapter only)**: with `ACP_BACKEND=legacy`, `/status` shows the CLI chat id for the active session; official ACP does not expose an equivalent field today
 
 ## Architecture
 
@@ -27,7 +27,7 @@ Feishu user ──(WebSocket)──> FeishuBot ──> Bridge
                                               │
                    @agentclientprotocol/sdk ClientSideConnection
                                               │
-                   stdio NDJSON ──> agent acp child (default) / cursor-agent-acp (legacy) ──> Cursor
+                   stdio NDJSON ──> agent acp child (default) / in-repo cursor-agent-acp (`legacy`) ──> Cursor
 ```
 
 - **Feishu layer**: `src/feishu-bot.ts` (SDK + message I/O only)
@@ -38,7 +38,7 @@ Feishu user ──(WebSocket)──> FeishuBot ──> Bridge
 ## Prerequisites
 
 1. **Node.js 18+**
-2. **Cursor CLI / Agent CLI** installed (`agent` on PATH, logged in); for legacy rollback, `cursor-agent` must also be available locally
+2. **Cursor CLI / Agent CLI** installed (`agent` on PATH, logged in); if you use **`ACP_BACKEND=legacy`**, the in-repo adapter still shells out to **`cursor-agent`** — keep it on PATH
 3. Feishu enterprise app: bot, `im:message`, **`im:message.group_msg`** (required for group messages), `im:message:send_as_bot`, `im:chat`; for “one user + bot” no-@ logic, grant read chat / member APIs as needed (`im:chat` related)
 
 ## Quick Start
@@ -49,6 +49,7 @@ cp .env.example .env
 # Edit .env
 
 npm run dev
+# (`tsx src/index.ts`: with ACP_BACKEND=legacy, the adapter defaults to cursor-agent-acp sources via tsx—no build:adapter loop)
 # or
 npm run build && npm start
 
@@ -160,10 +161,9 @@ Notes:
 | `CURSOR_API_KEY` | Official ACP API key (optional) | empty |
 | `CURSOR_AUTH_TOKEN` | Official ACP auth token (optional) | empty |
 | `CURSOR_WORK_DIR` | Workspace absolute path (ACP `cwd`, sandbox root) | cwd |
-| `CURSOR_ACP_ADAPTER_ENTRY` | `cursor-agent-acp` entry JS (`legacy` only) | packaged `dist/bin/cursor-agent-acp.js` |
-| `ACP_NODE_PATH` | Node binary for legacy adapter | `process.execPath` |
-| `CURSOR_ACP_SESSION_DIR` | legacy `--session-dir` | `~/.feishu-cursor-bridge/cursor-acp-sessions` |
-| `CURSOR_ACP_EXTRA_ARGS` | Extra legacy CLI args (space-separated) | empty |
+| `ACP_NODE_PATH` | Node binary used to spawn **in-repo** `cursor-agent-acp` (`legacy` only) | `process.execPath` |
+| `CURSOR_ACP_SESSION_DIR` | Passed to `cursor-agent-acp` as `--session-dir` (`legacy` only) | `~/.feishu-cursor-bridge/cursor-acp-sessions` |
+| `CURSOR_ACP_EXTRA_ARGS` | Extra args for `cursor-agent-acp` CLI (`legacy` only, space-separated) | empty |
 | `BRIDGE_SESSION_STORE` | Feishu ↔ ACP mapping JSON path | `~/.feishu-cursor-bridge/.feishu-bridge-sessions.json` |
 | `SESSION_IDLE_TIMEOUT_MS` | Idle before new session; `0` / `infinity` = never | `604800000` (7 days) |
 | `BRIDGE_MAX_SESSIONS_PER_USER` | Max live sessions per user (all chats); `0` = unlimited | `10` |
@@ -202,7 +202,7 @@ Proxy precedence: `wss_proxy` / `ws_proxy` > `https_proxy` / `http_proxy` / `all
 ## Tech stack
 
 - **Cursor `agent acp`** — default ACP server
-- **[@blowmage/cursor-agent-acp](https://www.npmjs.com/package/@blowmage/cursor-agent-acp)** — legacy backend
+- **`cursor-agent-acp/`** — in-repo stdio adapter when `ACP_BACKEND=legacy` ([provenance](docs/third-party.md))
 - **[@agentclientprotocol/sdk](https://www.npmjs.com/package/@agentclientprotocol/sdk)** — ACP client types + connection
 - **@larksuiteoapi/node-sdk** — Feishu long connection + message API
 - **TypeScript + Node.js**
@@ -210,7 +210,7 @@ Proxy precedence: `wss_proxy` / `ws_proxy` > `https_proxy` / `http_proxy` / `all
 ## Backend strategy
 
 - Default: **`agent acp`** (official).
-- Emergency rollback: `ACP_BACKEND=legacy`.
+- Optional: **`ACP_BACKEND=legacy`** uses the embedded **`cursor-agent-acp/`** adapter (stdio + `cursor-agent`).
 - Protocol follows the SDK; events cover thinking, tools, plan, mode, etc., folded by `FeishuCardState`.
 
 ---
@@ -219,7 +219,7 @@ Proxy precedence: `wss_proxy` / `ws_proxy` > `https_proxy` / `http_proxy` / `all
 
 ## 这是什么
 
-独立服务，通过飞书机器人控制 Cursor AI Agent。桥接进程作为 **ACP Client**，默认子进程运行 Cursor 官方 **`agent acp`**；同时保留 `ACP_BACKEND=legacy` 使用本仓库 **`packages/cursor-agent-acp`**（源自 [@blowmage/cursor-agent-acp](https://www.npmjs.com/package/@blowmage/cursor-agent-acp)）的能力，便于紧急兜底与定制。
+独立服务，通过飞书机器人控制 Cursor AI Agent。桥接进程作为 **ACP Client**，默认子进程运行 Cursor 官方 **`agent acp`**；也可设 **`ACP_BACKEND=legacy`** 使用本仓库内 **`cursor-agent-acp/`**（stdio 适配器）。历史参考说明见 [docs/third-party.md](docs/third-party.md)，**不维护与外部 npm 包一致**。
 
 ## 功能特性
 
@@ -242,7 +242,7 @@ Proxy precedence: `wss_proxy` / `ws_proxy` > `https_proxy` / `http_proxy` / `all
                                            │
                     @agentclientprotocol/sdk ClientSideConnection
                                            │
-                    stdio NDJSON ──> agent acp 子进程（默认） / cursor-agent-acp（legacy） ──> Cursor
+                    stdio NDJSON ──> agent acp 子进程（默认） / 本仓 cursor-agent-acp（`legacy`） ──> Cursor
 ```
 
 - **飞书层**：`src/feishu-bot.ts`（仅 SDK 与消息收发）
@@ -253,7 +253,7 @@ Proxy precedence: `wss_proxy` / `ws_proxy` > `https_proxy` / `http_proxy` / `all
 ## 前置条件
 
 1. **Node.js 18+**
-2. 已安装 **Cursor CLI / Agent CLI**（`agent` 在 PATH 中，并已完成登录；若使用 legacy 回滚链路，还需本机 `cursor-agent` 可用）
+2. 已安装 **Cursor CLI / Agent CLI**（`agent` 在 PATH 中，并已完成登录；若使用 **`ACP_BACKEND=legacy`**，内嵌适配器会调用 **`cursor-agent`**，需本机可用）
 3. 飞书企业自建应用：机器人、`im:message`、**`im:message.group_msg`**（群聊收消息必需）、`im:message:send_as_bot`、`im:chat`；若使用「仅 1 用户 + 1 机器人」免 @ 等需拉群信息的逻辑，还需按需开通 `im:chat` 相关只读权限（如查看群成员）
 
 ## 快速开始
@@ -264,6 +264,7 @@ cp .env.example .env
 # 编辑 .env
 
 npm run dev
+# （`tsx src/index.ts`：若 .env 中 ACP_BACKEND=legacy，本仓 cursor-agent-acp 默认以 tsx 跑源码，改适配器无需先 npm run build:adapter）
 # 或
 npm run build && npm start
 
@@ -375,10 +376,9 @@ docker-compose -f docker/compose.yaml run --rm tmux-acp-cancel-smoke
 | `CURSOR_API_KEY` | 官方 ACP API key（可选） | 空 |
 | `CURSOR_AUTH_TOKEN` | 官方 ACP auth token（可选） | 空 |
 | `CURSOR_WORK_DIR` | 工作区绝对路径（ACP `cwd`、读文件沙箱根） | 当前目录 |
-| `CURSOR_ACP_ADAPTER_ENTRY` | `cursor-agent-acp` 入口 JS 路径（仅 `legacy`） | 包内 `dist/bin/cursor-agent-acp.js` |
-| `ACP_NODE_PATH` | 用于启动 legacy 适配器的 Node | `process.execPath` |
-| `CURSOR_ACP_SESSION_DIR` | legacy 适配器 `--session-dir` | `~/.feishu-cursor-bridge/cursor-acp-sessions` |
-| `CURSOR_ACP_EXTRA_ARGS` | 透传 legacy 适配器 CLI（空格分隔） | 空 |
+| `ACP_NODE_PATH` | 用于启动本仓 `cursor-agent-acp` 子进程的 Node（仅 `legacy`） | `process.execPath` |
+| `CURSOR_ACP_SESSION_DIR` | 传给 `cursor-agent-acp` 的 `--session-dir`（仅 `legacy`） | `~/.feishu-cursor-bridge/cursor-acp-sessions` |
+| `CURSOR_ACP_EXTRA_ARGS` | 透传 `cursor-agent-acp` CLI 的额外参数（仅 `legacy`，空格分隔） | 空 |
 | `BRIDGE_SESSION_STORE` | 飞书↔ACP 映射 JSON 路径 | `~/.feishu-cursor-bridge/.feishu-bridge-sessions.json` |
 | `SESSION_IDLE_TIMEOUT_MS` | 空闲多久新建会话；`0` / `infinity` 表示永不过期 | `604800000`（7 天） |
 | `BRIDGE_MAX_SESSIONS_PER_USER` | 同一用户存活 session 总数上限（跨聊天）；`0` 不限制 | `10` |
@@ -418,7 +418,7 @@ docker-compose -f docker/compose.yaml run --rm tmux-acp-cancel-smoke
 ## 技术栈
 
 - **Cursor `agent acp`** — 默认 ACP 服务端
-- **`packages/cursor-agent-acp`** — legacy 适配器源码（随仓库维护；上游 [npm](https://www.npmjs.com/package/@blowmage/cursor-agent-acp)）
+- **`cursor-agent-acp/`** — 内嵌 stdio 适配器源码与构建产物（`ACP_BACKEND=legacy`）；溯源见 [docs/third-party.md](docs/third-party.md)。目录内 `package.json` 仅含 `"type":"commonjs"`，避免根目录 `"type":"module"` 将 `dist/*.js` 误判为 ESM
 - **[@agentclientprotocol/sdk](https://www.npmjs.com/package/@agentclientprotocol/sdk)** — 官方 ACP Client 连接与类型
 - **@larksuiteoapi/node-sdk** — 飞书长连接与消息 API
 - **TypeScript + Node.js**
@@ -426,5 +426,5 @@ docker-compose -f docker/compose.yaml run --rm tmux-acp-cancel-smoke
 ## 当前后端策略
 
 - 默认使用 **`agent acp` 官方后端**。
-- 如需紧急回滚，可设 `ACP_BACKEND=legacy`。
+- 可选 **`ACP_BACKEND=legacy`**：使用本仓库内 **`cursor-agent-acp/`**（不依赖外部 npm 包）。
 - 协议实现以 SDK 为准，事件面覆盖思考、工具、计划、模式等，并由 `FeishuCardState` 折叠展示。

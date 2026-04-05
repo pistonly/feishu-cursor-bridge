@@ -1,5 +1,7 @@
 # Cursor Agent ACP Adapter
 
+> **In feishu-cursor-bridge:** This directory is **vendored inside the parent repo** and evolved there. Build it with the repository root’s `npm run build:adapter` / `npm run build`. It is **not** published or supported from this tree as the npm package described below. Historical source note: parent [docs/third-party.md](../docs/third-party.md).
+
 A full-featured Agent Client Protocol (ACP) adapter for Cursor CLI, enabling seamless AI-powered coding assistance in ACP-compliant editors like Zed.
 
 ## Overview
@@ -67,12 +69,12 @@ cursor-agent login
 
 ### Install the Adapter
 
-```bash
-# Install globally
-npm install -g @blowmage/cursor-agent-acp
+For **this monorepo**, use the parent project’s `npm install` and `npm run build:adapter` instead of the commands below (they describe the **historical** standalone npm distribution, not this embedded copy).
 
-# Or install locally in your project
-npm install @blowmage/cursor-agent-acp
+```bash
+# Historical standalone install (upstream package; not how feishu-cursor-bridge ships this tree)
+npm install -g @blowmage/cursor-agent-acp
+# or: npm install @blowmage/cursor-agent-acp
 ```
 
 ## Usage

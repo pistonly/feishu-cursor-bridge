@@ -120,6 +120,16 @@ export class MockCursorCliBridge {
     const response = 'Streaming response chunk by chunk...';
     const chunks = response.match(/.{1,10}/g) || [response];
 
+    if (options.onChunk) {
+      await options.onChunk({
+        type: 'thought',
+        data: {
+          type: 'text',
+          text: 'Mock: stream-json thinking line (maps to agent_thought_chunk)',
+        },
+      });
+    }
+
     for (const chunk of chunks) {
       await new Promise((resolve) => setTimeout(resolve, 5));
 

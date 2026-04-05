@@ -173,7 +173,7 @@ export interface ToolCall {
 }
 
 export interface StreamChunk {
-  type: 'content' | 'progress' | 'error' | 'done';
+  type: 'content' | 'thought' | 'progress' | 'error' | 'done';
   data?: any;
   error?: string;
 }

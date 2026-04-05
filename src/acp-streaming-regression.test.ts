@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { loadConfig, type Config } from "./config.js";
 import type { FeishuBridgeClient } from "./acp/feishu-bridge-client.js";
 import { OfficialAcpRuntime } from "./acp/official-runtime.js";
@@ -26,8 +27,9 @@ type CursorCliBridgeConstructor = new (
   logger: unknown,
 ) => TestCursorCliBridge;
 
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const { CursorCliBridge } = require(
-  "@feishu-cursor-bridge/cursor-agent-acp/dist/cursor/cli-bridge.js",
+  path.join(repoRoot, "cursor-agent-acp", "dist", "cursor", "cli-bridge.js"),
 ) as {
   CursorCliBridge: CursorCliBridgeConstructor;
 };
@@ -449,6 +451,34 @@ test("loadConfig 仍允许显式切回 legacy", async () => {
       assert.equal(config.acp.backend, "legacy");
     },
   );
+});
+
+test("loadConfig legacy 在 tsx src/index.ts 入口下默认使用适配器源码与 tsx", async () => {
+  const tmpRoot = path.join(
+    os.tmpdir(),
+    "feishu-cursor-bridge-config-deventry-tests",
+  );
+  const savedArgv1 = process.argv[1];
+  process.argv[1] = path.join(repoRoot, "src", "index.ts");
+  try {
+    await withEnv(
+      {
+        FEISHU_APP_ID: "app-id",
+        FEISHU_APP_SECRET: "app-secret",
+        ACP_BACKEND: "legacy",
+        CURSOR_WORK_DIR: tmpRoot,
+      },
+      () => {
+        const config = loadConfig();
+        assert.equal(config.acp.backend, "legacy");
+        const norm = config.acp.adapterEntry.replace(/\\/g, "/");
+        assert.ok(norm.endsWith("cursor-agent-acp/src/bin/cursor-agent-acp.ts"));
+        assert.ok(config.acp.adapterTsxCli && config.acp.adapterTsxCli.length > 0);
+      },
+    );
+  } finally {
+    process.argv[1] = savedArgv1;
+  }
 });
 
 test("loadConfig 会解析 tmux ACP 后端与内置 server 配置", async () => {

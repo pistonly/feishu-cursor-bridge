@@ -552,13 +552,13 @@ describe('Prompt Turn Integration Tests', () => {
         (n) => n.params?.update?.sessionUpdate
       );
 
-      // Should start with agent_thought_chunk (progress notification)
-      expect(updateTypes[0]).toBe('agent_thought_chunk');
+      const firstThoughtIdx = updateTypes.indexOf('agent_thought_chunk');
+      const firstMessageIdx = updateTypes.indexOf('agent_message_chunk');
+      expect(firstThoughtIdx).toBeGreaterThanOrEqual(0);
+      expect(firstMessageIdx).toBeGreaterThanOrEqual(0);
+      // Echoed user chunks come first; then thought from stream-json, then assistant text
+      expect(firstThoughtIdx).toBeLessThan(firstMessageIdx);
 
-      // Should have agent_message_chunk (response content)
-      expect(updateTypes).toContain('agent_message_chunk');
-
-      // Verify we have both thought and message chunks
       const thoughtChunks = updateTypes.filter(
         (t) => t === 'agent_thought_chunk'
       );

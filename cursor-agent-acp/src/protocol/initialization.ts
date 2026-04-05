@@ -845,9 +845,8 @@ export class InitializationHandler {
         cursorVersion: connectivityResult?.version,
         description: 'Production-ready ACP adapter for Cursor CLI',
 
-        // Implementation details for debugging
-        implementation: 'cursor-agent-acp-npm',
-        repositoryUrl: 'https://github.com/blowmage/cursor-agent-acp-npm',
+        // Implementation details for debugging (in-repo fork; lineage: parent docs/third-party.md)
+        implementation: 'feishu-cursor-bridge/cursor-agent-acp',
 
         // Per ACP spec: Advertise custom extension methods and notifications
         // Format: namespace -> { methods: [...], notifications: [...] }
