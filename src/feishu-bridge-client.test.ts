@@ -35,6 +35,8 @@ function createTestConfig(): Config {
       sessionIdleTimeoutMs: 60_000,
       sessionStorePath: path.join(tmpRoot, "sessions.json"),
       cardUpdateThrottleMs: 200,
+      cardSplitMarkdownThreshold: 3_500,
+      cardSplitToolThreshold: 8,
       workspacePresetsPath: path.join(tmpRoot, "workspace-presets.json"),
       workspacePresetsSeed: [],
       singleInstanceLockPath: path.join(tmpRoot, "bridge.lock"),

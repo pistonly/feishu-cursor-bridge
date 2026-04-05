@@ -61,6 +61,8 @@ function createTestConfig(): Config {
       sessionIdleTimeoutMs: 60_000,
       sessionStorePath: path.join(tmpRoot, "sessions.json"),
       cardUpdateThrottleMs: 200,
+      cardSplitMarkdownThreshold: 3_500,
+      cardSplitToolThreshold: 8,
       workspacePresetsPath: path.join(tmpRoot, "workspace-presets.json"),
       workspacePresetsSeed: [],
       singleInstanceLockPath: path.join(tmpRoot, "bridge.lock"),
@@ -469,6 +471,24 @@ test("loadConfig 会解析 tmux ACP 后端与内置 server 配置", async () => 
       assert.equal(config.acp.tmuxServerEntry, "/tmp/tmux-acp-server.ts");
       assert.equal(config.acp.tmuxSessionStorePath, "/tmp/tmux-acp-sessions.json");
       assert.equal(config.acp.tmuxStartCommand, "cursor agent --yolo --approve-mcps");
+    },
+  );
+});
+
+test("loadConfig 会解析飞书卡片拆分阈值", async () => {
+  const tmpRoot = path.join(os.tmpdir(), "feishu-cursor-bridge-config-card-split-tests");
+  await withEnv(
+    {
+      FEISHU_APP_ID: "app-id",
+      FEISHU_APP_SECRET: "app-secret",
+      CURSOR_WORK_DIR: tmpRoot,
+      FEISHU_CARD_SPLIT_MARKDOWN_THRESHOLD: "4200",
+      FEISHU_CARD_SPLIT_TOOL_THRESHOLD: "12",
+    },
+    () => {
+      const config = loadConfig();
+      assert.equal(config.bridge.cardSplitMarkdownThreshold, 4200);
+      assert.equal(config.bridge.cardSplitToolThreshold, 12);
     },
   );
 });

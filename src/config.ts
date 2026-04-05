@@ -52,6 +52,10 @@ export interface Config {
     sessionIdleTimeoutMs: number;
     sessionStorePath: string;
     cardUpdateThrottleMs: number;
+    /** 单张飞书卡片的软上限，超过后滚动到下一张 */
+    cardSplitMarkdownThreshold: number;
+    /** 单张飞书卡片最多聚合的工具条目数，超过后滚动到下一张 */
+    cardSplitToolThreshold: number;
     /** `/new list` 等使用的快捷列表 JSON 路径 */
     workspacePresetsPath: string;
     /** 列表文件为空时，用环境变量种子初始化（绝对路径） */
@@ -170,6 +174,8 @@ function parseAcpBackend(raw: string | undefined): AcpBackend {
 const DEFAULT_SESSION_IDLE_TIMEOUT_MS = 7 * 24 * 60 * 60_000;
 
 const DEFAULT_MAX_SESSIONS_PER_USER = 10;
+const DEFAULT_CARD_SPLIT_MARKDOWN_THRESHOLD = 3_500;
+const DEFAULT_CARD_SPLIT_TOOL_THRESHOLD = 8;
 
 /** `0` 或负数表示不限制 */
 function parseMaxSessionsPerUser(raw: string | undefined): number {
@@ -193,6 +199,18 @@ function parseSessionIdleTimeoutMs(raw: string | undefined): number {
     return DEFAULT_SESSION_IDLE_TIMEOUT_MS;
   }
   return Math.max(60_000, parsed);
+}
+
+function parsePositiveIntegerThreshold(
+  raw: string | undefined,
+  defaultValue: number,
+  minValue = 1,
+): number {
+  const trimmed = raw?.trim();
+  if (!trimmed) return defaultValue;
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed) || parsed <= 0) return defaultValue;
+  return Math.max(minValue, Math.floor(parsed));
 }
 
 /**
@@ -336,6 +354,15 @@ export function loadConfig(): Config {
     200,
     Number(process.env["FEISHU_CARD_THROTTLE_MS"] ?? 800) || 800,
   );
+  const cardSplitMarkdownThreshold = parsePositiveIntegerThreshold(
+    process.env["FEISHU_CARD_SPLIT_MARKDOWN_THRESHOLD"],
+    DEFAULT_CARD_SPLIT_MARKDOWN_THRESHOLD,
+    500,
+  );
+  const cardSplitToolThreshold = parsePositiveIntegerThreshold(
+    process.env["FEISHU_CARD_SPLIT_TOOL_THRESHOLD"],
+    DEFAULT_CARD_SPLIT_TOOL_THRESHOLD,
+  );
 
   const showAcpAvailableCommands =
     (process.env["BRIDGE_SHOW_ACP_AVAILABLE_COMMANDS"] ?? "false").toLowerCase() ===
@@ -387,6 +414,8 @@ export function loadConfig(): Config {
       sessionIdleTimeoutMs,
       sessionStorePath,
       cardUpdateThrottleMs,
+      cardSplitMarkdownThreshold,
+      cardSplitToolThreshold,
       workspacePresetsPath,
       workspacePresetsSeed,
       singleInstanceLockPath,

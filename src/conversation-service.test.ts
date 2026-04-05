@@ -1,0 +1,256 @@
+import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
+import test from "node:test";
+import type { BridgeAcpEvent } from "./acp/types.js";
+import { ConversationService } from "./conversation-service.js";
+import type { Config } from "./config.js";
+import type { BridgeAcpRuntime } from "./acp/runtime-contract.js";
+import type { FeishuMessage } from "./feishu-bot.js";
+import type { UserSession } from "./session-manager.js";
+
+function createTestConfig(): Config {
+  return {
+    feishu: {
+      appId: "app-id",
+      appSecret: "app-secret",
+      domain: "feishu",
+    },
+    acp: {
+      backend: "official",
+      nodePath: process.execPath,
+      adapterEntry: "",
+      extraArgs: [],
+      officialAgentPath: "agent",
+      officialApiKey: undefined,
+      officialAuthToken: undefined,
+      tmuxTsxCliEntry: "/tmp/tsx-cli.mjs",
+      tmuxServerEntry: "/tmp/tmux-acp-server.ts",
+      tmuxSessionStorePath: "/tmp/tmux-acp-sessions.json",
+      tmuxStartCommand: undefined,
+      workspaceRoot: "/tmp",
+      allowedWorkspaceRoots: ["/tmp"],
+      adapterSessionDir: "/tmp/acp-sessions",
+    },
+    bridge: {
+      maxSessionsPerUser: 10,
+      sessionIdleTimeoutMs: 60_000,
+      sessionStorePath: "/tmp/sessions.json",
+      cardUpdateThrottleMs: 0,
+      cardSplitMarkdownThreshold: 3_500,
+      cardSplitToolThreshold: 8,
+      workspacePresetsPath: "/tmp/workspace-presets.json",
+      workspacePresetsSeed: [],
+      singleInstanceLockPath: "/tmp/bridge.lock",
+      allowMultipleInstances: false,
+      experimentalLogToFile: false,
+      experimentalLogFilePath: "/tmp/bridge.log",
+      showAcpAvailableCommands: false,
+    },
+    autoApprovePermissions: false,
+    bridgeDebug: false,
+    acpReloadTraceLog: false,
+    logLevel: "info",
+  };
+}
+
+function createMessage(): FeishuMessage {
+  return {
+    chatId: "chat-1",
+    messageId: "msg-1",
+    content: "hello",
+    contentType: "text",
+    mentions: [],
+    inlineMentionIds: [],
+    senderId: "user-1",
+    senderType: "user",
+    chatType: "p2p",
+    replyInThread: false,
+  } as unknown as FeishuMessage;
+}
+
+function createSession(): UserSession {
+  return {
+    sessionId: "session-1",
+    workspaceRoot: "/tmp",
+    chatId: "chat-1",
+    userId: "user-1",
+    chatType: "p2p",
+    createdAt: Date.now(),
+    lastActiveAt: Date.now(),
+  };
+}
+
+function createHarness(
+  events: BridgeAcpEvent[],
+  configOverrides?: Partial<Config["bridge"]>,
+) {
+  const bridgeClient = new EventEmitter();
+  const sendCardCalls: Array<{ id: string; content: string }> = [];
+  const updateCardCalls: Array<{ id: string; content: string }> = [];
+
+  const feishu = {
+    async sendCard(_chatId: string, content: string): Promise<string> {
+      const id = `card-${sendCardCalls.length + 1}`;
+      sendCardCalls.push({ id, content });
+      return id;
+    },
+    async updateCard(id: string, content: string): Promise<void> {
+      updateCardCalls.push({ id, content });
+    },
+  };
+
+  const runtime: BridgeAcpRuntime = {
+    backend: "official",
+    bridgeClient: bridgeClient as any,
+    initializeResult: null,
+    supportsLoadSession: true,
+    async start(): Promise<void> {},
+    async initializeAndAuth(): Promise<void> {},
+    async newSession() {
+      return { sessionId: "session-1" };
+    },
+    async loadSession(): Promise<void> {},
+    async prompt(): Promise<{ stopReason: string }> {
+      for (const ev of events) {
+        bridgeClient.emit("acp", ev);
+      }
+      return { stopReason: "end_turn" };
+    },
+    async setSessionMode(): Promise<void> {},
+    getSessionModeState() {
+      return undefined;
+    },
+    async setSessionModel(): Promise<void> {},
+    getSessionModelState() {
+      return undefined;
+    },
+    async cancelSession(): Promise<void> {},
+    async closeSession(): Promise<void> {},
+    supportsCloseSession() {
+      return false;
+    },
+    async stop(): Promise<void> {},
+  } satisfies BridgeAcpRuntime;
+
+  const config = createTestConfig();
+  if (configOverrides) {
+    Object.assign(config.bridge, configOverrides);
+  }
+
+  const service = new ConversationService(config, runtime, feishu as any);
+
+  return { service, sendCardCalls, updateCardCalls };
+}
+
+test("ConversationService 会把交错的工具事件持续合并到同一张卡片", async () => {
+  const { service, sendCardCalls, updateCardCalls } = createHarness([
+    {
+      type: "tool_call",
+      sessionId: "session-1",
+      toolCallId: "tool-1",
+      title: "读取文件",
+      status: "pending",
+    },
+    {
+      type: "tool_call_update",
+      sessionId: "session-1",
+      toolCallId: "tool-1",
+      status: "running",
+    },
+    {
+      type: "agent_message_chunk",
+      sessionId: "session-1",
+      text: "第一段回答。",
+    },
+    {
+      type: "tool_call",
+      sessionId: "session-1",
+      toolCallId: "tool-2",
+      title: "写入文件",
+      status: "pending",
+    },
+    {
+      type: "tool_call_update",
+      sessionId: "session-1",
+      toolCallId: "tool-2",
+      status: "completed",
+    },
+    {
+      type: "agent_message_chunk",
+      sessionId: "session-1",
+      text: "第二段回答。",
+    },
+  ]);
+
+  const reply = await service.handleUserPrompt(createMessage(), createSession());
+
+  assert.equal(sendCardCalls.length, 1);
+  assert.equal(updateCardCalls.every((call) => call.id === "card-1"), true);
+  assert.match(reply ?? "", /\*\*工具\*\*/);
+  assert.match(reply ?? "", /读取文件 — running/);
+  assert.match(reply ?? "", /写入文件 — completed/);
+  assert.match(reply ?? "", /\*\*回答\*\*/);
+  assert.match(reply ?? "", /第一段回答。第二段回答。/);
+});
+
+test("ConversationService 会在工具累计超过阈值后再拆成多张卡片", async () => {
+  const events: BridgeAcpEvent[] = [];
+  for (let i = 1; i <= 9; i += 1) {
+    events.push({
+      type: "tool_call",
+      sessionId: "session-1",
+      toolCallId: `tool-${i}`,
+      title: `工具 ${i}`,
+      status: "pending",
+    });
+  }
+
+  const { service, sendCardCalls, updateCardCalls } = createHarness(events);
+  const reply = await service.handleUserPrompt(createMessage(), createSession());
+
+  assert.equal(sendCardCalls.length, 2);
+  assert.equal(sendCardCalls[1]?.content.includes("工具 9"), true);
+  assert.equal(updateCardCalls.some((call) => call.id === "card-2"), true);
+  assert.match(reply ?? "", /工具 1 — pending/);
+  assert.match(reply ?? "", /工具 8 — pending/);
+  assert.match(reply ?? "", /工具 9 — pending/);
+});
+
+test("ConversationService 在长回答拆卡时仍保留完整 reply 内容", async () => {
+  const longAnswer = "这是一段很长的回答。".repeat(40);
+  const { service, sendCardCalls, updateCardCalls } = createHarness(
+    [
+      {
+        type: "tool_call",
+        sessionId: "session-1",
+        toolCallId: "tool-1",
+        title: "读取文件",
+        status: "completed",
+      },
+      {
+        type: "agent_message_chunk",
+        sessionId: "session-1",
+        text: longAnswer,
+      },
+    ],
+    {
+      cardSplitMarkdownThreshold: 180,
+    },
+  );
+
+  const reply = await service.handleUserPrompt(createMessage(), createSession());
+  const finalCard1 = updateCardCalls.filter((call) => call.id === "card-1").at(-1)?.content ?? "";
+
+  assert.equal(sendCardCalls.length >= 3, true);
+  assert.equal(
+    updateCardCalls.some((call) => call.id === sendCardCalls.at(-1)?.id),
+    true,
+  );
+  assert.match(finalCard1, /\*\*工具\*\*/);
+  assert.equal(
+    sendCardCalls.slice(1).some((call) => call.content.includes("**回答**")),
+    true,
+  );
+  assert.equal(reply?.includes(longAnswer), true);
+  assert.equal(reply?.includes("读取文件 — completed"), true);
+});

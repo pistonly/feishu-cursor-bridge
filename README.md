@@ -170,6 +170,8 @@ Notes:
 | `BRIDGE_SINGLE_INSTANCE_LOCK` | Single-instance lock file (refuse start if PID alive) | `~/.feishu-cursor-bridge/bridge.lock` |
 | `BRIDGE_ALLOW_MULTIPLE_INSTANCES` | `true` disables single-instance lock (debug only) | `false` |
 | `FEISHU_CARD_THROTTLE_MS` | Card update throttle | `800` |
+| `FEISHU_CARD_SPLIT_MARKDOWN_THRESHOLD` | Roll over to a new card when a card gets this long | `3500` |
+| `FEISHU_CARD_SPLIT_TOOL_THRESHOLD` | Roll over to a new card when tool rows exceed this count | `8` |
 | `AUTO_APPROVE_PERMISSIONS` | Auto-pick allow-style permission options | `true` |
 | `LOG_LEVEL` | `debug` / `info` / `warn` / `error` | `info` |
 | `BRIDGE_DEBUG` | Verbose logs + `/status` details | `false` |
@@ -383,6 +385,8 @@ docker-compose -f docker/compose.yaml run --rm tmux-acp-cancel-smoke
 | `BRIDGE_SINGLE_INSTANCE_LOCK` | 单实例锁文件路径（已存在且 PID 存活则拒绝启动） | `~/.feishu-cursor-bridge/bridge.lock` |
 | `BRIDGE_ALLOW_MULTIPLE_INSTANCES` | `true` 时禁用单实例锁（仅调试） | `false` |
 | `FEISHU_CARD_THROTTLE_MS` | 卡片更新节流 | `800` |
+| `FEISHU_CARD_SPLIT_MARKDOWN_THRESHOLD` | 单张卡片内容达到该长度后滚动到下一张 | `3500` |
+| `FEISHU_CARD_SPLIT_TOOL_THRESHOLD` | 单张卡片工具条目超过该数量后滚动到下一张 | `8` |
 | `AUTO_APPROVE_PERMISSIONS` | 自动选择允许类权限选项 | `true` |
 | `LOG_LEVEL` | `debug` / `info` / `warn` / `error` | `info` |
 | `BRIDGE_DEBUG` | 调试日志与 `/status` 详情 | `false` |
