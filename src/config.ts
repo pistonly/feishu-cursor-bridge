@@ -49,11 +49,13 @@ export interface Config {
     tmuxSessionStorePath: string;
     /** tmux backend 启动交互式 Cursor Agent 的命令 */
     tmuxStartCommand?: string;
-    /** Cursor 工作区根目录（ACP cwd / 客户端文件沙箱默认根） */
+    /**
+     * ACP 子进程 spawn 使用的 `cwd`（取 `CURSOR_WORK_ALLOWLIST` 中第一项）；
+     * `session/new` 仍传入各 session 自己的工作区路径。
+     */
     workspaceRoot: string;
     /**
-     * 允许作为会话 cwd 的根路径列表（绝对路径）。
-     * 未设置 `CURSOR_WORK_ALLOWLIST` 时仅包含 `workspaceRoot`。
+     * 允许作为会话 cwd 的根路径列表（绝对路径），须由环境变量显式配置，至少一项。
      */
     allowedWorkspaceRoots: string[];
     /** 传给适配器的会话存储目录 */
@@ -230,25 +232,27 @@ function parsePositiveIntegerThreshold(
 }
 
 /**
- * ACP 子进程 `spawn(..., { cwd: workspaceRoot })` 要求 cwd 必须存在；若目录缺失，Node 会报
- * `spawn <node 路径> ENOENT`，易误判为 Node 可执行文件丢失。
+ * 允许列表中的每个根须为目录；不存在则 `mkdir -p`（与旧版单一路径行为一致）。
+ * ACP 子进程 `spawn(..., { cwd })` 要求 cwd 必须存在。
  */
-function ensureWorkspaceRootReady(workspaceRoot: string): void {
-  try {
-    if (fs.existsSync(workspaceRoot)) {
-      if (!fs.statSync(workspaceRoot).isDirectory()) {
-        throw new Error(`CURSOR_WORK_DIR 不是目录: ${workspaceRoot}`);
+function ensureAllowedWorkspaceRootsReady(roots: string[]): void {
+  for (const workspaceRoot of roots) {
+    try {
+      if (fs.existsSync(workspaceRoot)) {
+        if (!fs.statSync(workspaceRoot).isDirectory()) {
+          throw new Error(`CURSOR_WORK_ALLOWLIST 项不是目录: ${workspaceRoot}`);
+        }
+        continue;
       }
-      return;
+      fs.mkdirSync(workspaceRoot, { recursive: true });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      throw new Error(
+        `CURSOR_WORK_ALLOWLIST 路径不可用: ${workspaceRoot}\n` +
+          `请创建该目录或修正 .env。若 cwd 不存在，子进程会启动失败（常被误报为 Node ENOENT）。\n` +
+          `底层原因: ${msg}`,
+      );
     }
-    fs.mkdirSync(workspaceRoot, { recursive: true });
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    throw new Error(
-      `CURSOR_WORK_DIR 不可用: ${workspaceRoot}\n` +
-        `请创建该目录或修正 .env。若 cwd 不存在，子进程会启动失败（常被误报为 Node ENOENT）。\n` +
-        `底层原因: ${msg}`,
-    );
   }
 }
 
@@ -260,22 +264,27 @@ export function loadConfig(): Config {
     );
   }
 
-  const workspaceRoot = path.resolve(
-    expandHome(process.env["CURSOR_WORK_DIR"]?.trim() || process.cwd()),
-  );
-  ensureWorkspaceRootReady(workspaceRoot);
   const backend = parseAcpBackend(process.env["ACP_BACKEND"]);
 
   const allowlistRaw = process.env["CURSOR_WORK_ALLOWLIST"]?.trim();
-  let allowedWorkspaceRoots = allowlistRaw
-    ? allowlistRaw
-        .split(",")
-        .map((s) => path.resolve(expandHome(s.trim())))
-        .filter((p) => p.length > 0)
-    : [workspaceRoot];
-  if (allowedWorkspaceRoots.length === 0) {
-    allowedWorkspaceRoots = [workspaceRoot];
+  if (!allowlistRaw) {
+    throw new Error(
+      "必须设置环境变量 CURSOR_WORK_ALLOWLIST（逗号分隔的绝对路径，至少一个）。\n" +
+        "已移除 CURSOR_WORK_DIR：允许的工作区根须显式列出；请用 /new list 与 /new <序号> 或 /new <路径> 创建 session。",
+    );
   }
+  const allowedWorkspaceRoots = allowlistRaw
+    .split(",")
+    .map((s) => path.resolve(expandHome(s.trim())))
+    .filter((p) => p.length > 0);
+  if (allowedWorkspaceRoots.length === 0) {
+    throw new Error(
+      "CURSOR_WORK_ALLOWLIST 解析后为空，请提供至少一个有效路径（逗号分隔的绝对路径）。",
+    );
+  }
+  ensureAllowedWorkspaceRootsReady(allowedWorkspaceRoots);
+
+  const workspaceRoot = allowedWorkspaceRoots[0]!;
 
   const defaultAdapterSession = path.join(
     os.homedir(),

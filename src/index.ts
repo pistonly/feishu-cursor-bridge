@@ -79,9 +79,8 @@ async function main() {
       `[main] tmux ACP start command: ${config.acp.tmuxStartCommand ?? "cursor agent"}`,
     );
   }
-  console.log(`[main] Default workspace (CURSOR_WORK_DIR): ${config.acp.workspaceRoot}`);
   console.log(
-    `[main] Allowed workspace roots: ${config.acp.allowedWorkspaceRoots.join(", ")}`,
+    `[main] CURSOR_WORK_ALLOWLIST (${config.acp.allowedWorkspaceRoots.length}): ${config.acp.allowedWorkspaceRoots.join(", ")} — ACP spawn cwd: ${config.acp.workspaceRoot}`,
   );
   console.log(`[main] Bridge session store: ${config.bridge.sessionStorePath}`);
   console.log(`[main] Workspace presets file: ${config.bridge.workspacePresetsPath}`);

@@ -58,7 +58,9 @@ export interface SlotListItem {
 
 export interface SessionManagerOptions {
   debug?: boolean;
-  /** 未指定会话目录时的默认 cwd（通常即 CURSOR_WORK_DIR） */
+  /**
+   * 持久化记录缺少 `workspaceRoot` 时的回退 cwd；亦为与 ACP 子进程 spawn 对齐的首个允许根。
+   */
   defaultWorkspaceRoot: string;
   /** 每个 key 最多保留的 slot 数量 */
   maxSlotsPerKey?: number;
@@ -144,15 +146,15 @@ export class SessionManager {
   }
 
   // -------------------------------------------------------------------------
-  // Core: get or create active session
+  // Core: get active session（不自动新建；无 session 时返回 null）
   // -------------------------------------------------------------------------
 
-  async getOrCreateSession(
+  async getActiveSession(
     chatId: string,
     userId: string,
     chatTypeRaw: string,
     threadId?: string,
-  ): Promise<UserSession> {
+  ): Promise<UserSession | null> {
     const chatType = this.chatType(chatTypeRaw);
     const key = this.makeKey(chatId, userId, chatType, threadId);
     const now = Date.now();
@@ -196,33 +198,7 @@ export class SessionManager {
       }
     }
 
-    // No group or no valid slot — create fresh group with slot #1
-    this.assertCanAddUserSession(userId, now);
-    const { sessionId, cursorCliChatId } = await this.acp.newSession(
-      this.defaultWorkspaceRoot,
-    );
-    const session = this.makeSession(
-      sessionId,
-      this.defaultWorkspaceRoot,
-      chatId,
-      userId,
-      chatType,
-      now,
-      cursorCliChatId,
-      threadId,
-    );
-    const newGroup: UserSessionGroup = {
-      slots: [{ slotIndex: 1, session }],
-      activeSlotIndex: 1,
-      nextSlotIndex: 2,
-    };
-    this.onSessionWorkspace?.(sessionId, session.workspaceRoot);
-    this.groups.set(key, newGroup);
-    this.persistGroup(key, newGroup);
-    if (this.debug) {
-      console.log(`[session] new key=${key} slot=#1 sessionId=${sessionId}`);
-    }
-    return session;
+    return null;
   }
 
   // -------------------------------------------------------------------------
@@ -233,7 +209,7 @@ export class SessionManager {
     chatId: string,
     userId: string,
     chatTypeRaw: string,
-    workspaceRoot?: string,
+    workspaceRoot: string,
     name?: string,
     threadId?: string,
   ): Promise<{ slotIndex: number; name?: string; sessionId: string; workspaceRoot: string }> {
@@ -264,7 +240,13 @@ export class SessionManager {
       this.ensureSlotNameAvailable(group, normalizedName);
     }
 
-    const cwd = workspaceRoot ? path.resolve(workspaceRoot) : this.defaultWorkspaceRoot;
+    const trimmedRoot = workspaceRoot.trim();
+    if (!trimmedRoot) {
+      throw new Error(
+        "创建 session 必须指定工作区。请发送 `/new list` 查看列表后使用 `/new <序号>`，或使用 `/new <目录绝对路径>`。",
+      );
+    }
+    const cwd = path.resolve(trimmedRoot);
     const { sessionId, cursorCliChatId } = await this.acp.newSession(cwd);
     const session = this.makeSession(
       sessionId,
@@ -329,7 +311,9 @@ export class SessionManager {
       restoredFromStore = group != null;
     }
     if (!group || group.slots.length === 0) {
-      throw new Error("当前没有任何 session，请先发送消息创建一个。");
+      throw new Error(
+        "当前没有任何 session。请先使用 `/new list` 查看工作区列表，再用 `/new <序号>` 或 `/new <路径>` 创建。",
+      );
     }
 
     const slot = this.resolveSlot(group, target);
@@ -370,7 +354,9 @@ export class SessionManager {
       restoredFromStore = group != null;
     }
     if (!group || group.slots.length === 0) {
-      throw new Error("当前没有任何 session，请先发送消息创建一个。");
+      throw new Error(
+        "当前没有任何 session。请先使用 `/new list` 查看工作区列表，再用 `/new <序号>` 或 `/new <路径>` 创建。",
+      );
     }
 
     const slot = this.findPreviousSlot(group);

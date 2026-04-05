@@ -124,7 +124,8 @@ test("loadSession 失败后会优先复用已持久化的 CLI resume ID", async 
   );
 
   await manager.init();
-  const session = await manager.getOrCreateSession(CHAT_ID, USER_ID, "p2p");
+  const session = await manager.getActiveSession(CHAT_ID, USER_ID, "p2p");
+  assert.ok(session);
 
   assert.equal(session.sessionId, "acp-restored");
   assert.equal(session.cursorCliChatId, "cli-old");
@@ -163,7 +164,8 @@ test("无法保留旧 CLI resume ID 时会生成绑定变更提醒", async () =>
   );
 
   await manager.init();
-  const session = await manager.getOrCreateSession(CHAT_ID, USER_ID, "p2p");
+  const session = await manager.getActiveSession(CHAT_ID, USER_ID, "p2p");
+  assert.ok(session);
   const notices = manager.consumePendingNotices(CHAT_ID, USER_ID, "p2p");
 
   assert.equal(session.sessionId, "acp-rebound");
@@ -204,7 +206,10 @@ test("活跃 slot 的 ACP session 被上游清理后会自动重建并保留 CLI
     },
     async loadSession(sessionId: string): Promise<void> {
       loadSessionCalls.push(sessionId);
-      throw new Error(`Session not found: ${sessionId}`);
+      // 第一次 getActiveSession 会 probe load；第二次模拟上游已丢弃 session
+      if (loadSessionCalls.length >= 2) {
+        throw new Error(`Session not found: ${sessionId}`);
+      }
     },
     async cancelSession(): Promise<void> {},
     async closeSession(): Promise<void> {},
@@ -220,14 +225,17 @@ test("活跃 slot 的 ACP session 被上游清理后会自动重建并保留 CLI
   );
 
   await manager.init();
-  const first = await manager.getOrCreateSession(CHAT_ID, USER_ID, "p2p");
-  const second = await manager.getOrCreateSession(CHAT_ID, USER_ID, "p2p");
+  await manager.createNewSlot(CHAT_ID, USER_ID, "p2p", WORKSPACE_ROOT);
+  const first = await manager.getActiveSession(CHAT_ID, USER_ID, "p2p");
+  assert.ok(first);
+  const second = await manager.getActiveSession(CHAT_ID, USER_ID, "p2p");
+  assert.ok(second);
 
   assert.equal(first.sessionId, "acp-live");
   assert.equal(first.cursorCliChatId, "cli-old");
   assert.equal(second.sessionId, "acp-rebound");
   assert.equal(second.cursorCliChatId, "cli-old");
-  assert.deepEqual(loadSessionCalls, ["acp-live"]);
+  assert.deepEqual(loadSessionCalls, ["acp-live", "acp-live"]);
   assert.deepEqual(newSessionCalls, [
     { cwd: WORKSPACE_ROOT, cursorCliChatId: undefined },
     { cwd: WORKSPACE_ROOT, cursorCliChatId: "cli-old" },
@@ -266,7 +274,9 @@ test("getSlot 可读取当前活跃 slot 或按名称读取指定 slot", async (
   );
 
   await manager.init();
-  const first = await manager.getOrCreateSession(CHAT_ID, USER_ID, "p2p");
+  await manager.createNewSlot(CHAT_ID, USER_ID, "p2p", WORKSPACE_ROOT);
+  const first = await manager.getActiveSession(CHAT_ID, USER_ID, "p2p");
+  assert.ok(first);
   manager.setSlotLastTurn(
     CHAT_ID,
     USER_ID,

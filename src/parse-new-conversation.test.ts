@@ -29,3 +29,10 @@ test("parseNewConversationCommand 支持 /mode 查询或切换模式", () => {
     modeId: "plan",
   });
 });
+
+test("parseNewConversationCommand 将裸 /new 解析为 list", () => {
+  assert.deepEqual(parseNewConversationCommand("/new"), {
+    kind: "new",
+    variant: "list",
+  });
+});
