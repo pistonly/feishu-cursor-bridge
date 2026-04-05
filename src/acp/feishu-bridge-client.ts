@@ -7,6 +7,7 @@ import type {
   RequestPermissionResponse,
   SessionNotification,
   SessionUpdate,
+  ToolKind,
   WriteTextFileRequest,
   WriteTextFileResponse,
 } from "@agentclientprotocol/sdk";
@@ -147,12 +148,21 @@ export class FeishuBridgeClient
       typeof tc?.toolCallId === "string" && tc.toolCallId.length > 0
         ? tc.toolCallId
         : "permission";
+    const permissionKind: ToolKind | undefined =
+      tc &&
+      typeof tc === "object" &&
+      "kind" in tc &&
+      tc.kind != null &&
+      typeof tc.kind === "string"
+        ? (tc.kind as ToolKind)
+        : undefined;
     this.emit("acp", {
       type: "tool_call",
       sessionId: params.sessionId,
       toolCallId: tcId,
       title: `等待批准: ${toolTitle}`,
       status: "permission_required",
+      ...(permissionKind !== undefined ? { kind: permissionKind } : {}),
     });
 
     const optionId =

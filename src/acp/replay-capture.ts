@@ -1,3 +1,6 @@
+import type { ToolKind } from "@agentclientprotocol/sdk";
+import { formatThoughtBlockInline } from "../feishu-renderer.js";
+import { emojiForToolKind } from "../tool-kind-emoji.js";
 import type { FeishuBridgeClient } from "./feishu-bridge-client.js";
 import type { BridgeAcpEvent } from "./types.js";
 
@@ -5,7 +8,7 @@ type LabelBuf = { label: string; text: string } | null;
 
 /**
  * 在 `session/load` 等会触发适配器「历史回放」的操作期间，订阅 `acp` 事件并折叠为可读 markdown。
- * 连续同角色（用户/助手/思考）的块会合并，避免重复小标题。
+ * 连续同角色（用户/助手/思考）的块会合并；思考块为行内 🤔…💡，其余角色仍用 **标签**。
  */
 export async function captureAcpReplayDuring(
   client: FeishuBridgeClient,
@@ -17,10 +20,18 @@ export async function captureAcpReplayDuring(
   let cur: LabelBuf = null;
   const blocks: string[] = [];
   const extras: string[] = [];
+  const toolKindById = new Map<string, ToolKind>();
 
   const flush = (): void => {
     if (!cur) return;
-    blocks.push(`**${cur.label}**\n${cur.text}`);
+    if (cur.label === "思考") {
+      const md = formatThoughtBlockInline(cur.text);
+      if (md) {
+        blocks.push(md);
+      }
+    } else {
+      blocks.push(`**${cur.label}**\n${cur.text}`);
+    }
     cur = null;
   };
 
@@ -51,13 +62,24 @@ export async function captureAcpReplayDuring(
         break;
       case "tool_call":
         flush();
-        extras.push(`• 工具 \`${ev.title}\` — ${ev.status}`);
+        if (ev.kind !== undefined) {
+          toolKindById.set(ev.toolCallId, ev.kind);
+        }
+        extras.push(
+          `• ${emojiForToolKind(ev.kind)} \`${ev.title}\` — ${ev.status}`,
+        );
         break;
       case "tool_call_update":
         flush();
-        extras.push(
-          `• 工具更新 \`${ev.toolCallId}\`${ev.title ? ` (${ev.title})` : ""} — ${ev.status}`,
-        );
+        {
+          const k = ev.kind ?? toolKindById.get(ev.toolCallId);
+          if (ev.kind !== undefined) {
+            toolKindById.set(ev.toolCallId, ev.kind);
+          }
+          extras.push(
+            `• ${emojiForToolKind(k)} 工具更新 \`${ev.toolCallId}\`${ev.title ? ` (${ev.title})` : ""} — ${ev.status}`,
+          );
+        }
         break;
       case "available_commands_update":
         if (showAvailableCommands) {

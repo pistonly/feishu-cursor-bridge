@@ -134,6 +134,7 @@ test("FeishuBridgeClient 会发出 permission_required 并选择允许选项", a
       toolCallId: "tool-1",
       title: "等待批准: 写入文件",
       status: "permission_required",
+      kind: "edit",
     },
   ]);
   assert.deepEqual(result, {

@@ -20,7 +20,7 @@ const MISLEADING_AUTH_TIMEOUT_MS = 110_000;
 const AUTH_TIMEOUT_HINT_BODY =
   "⏱️ 本次请求在长时间执行后被中断，更可能是 Cursor CLI 超时（约 120 秒），而不是登录失效。\n\n请先尝试把任务拆小后重试；若短请求也出现同样报错，再执行 `cursor-agent login`。";
 
-const AUTH_TIMEOUT_USER_MARKDOWN = `**回答**\n\n${AUTH_TIMEOUT_HINT_BODY}`;
+const AUTH_TIMEOUT_USER_MARKDOWN = AUTH_TIMEOUT_HINT_BODY;
 
 function normalizeText(text: string): string {
   return text.toLowerCase().replace(/\r/g, "").trim();

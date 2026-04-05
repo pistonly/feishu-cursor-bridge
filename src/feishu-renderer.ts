@@ -1,4 +1,26 @@
+import type { ToolKind } from "@agentclientprotocol/sdk";
 import type { BridgeAcpEvent } from "./acp/types.js";
+import { emojiForToolKind } from "./tool-kind-emoji.js";
+
+/**
+ * 思考块：🤔 与段落首行开头同行，💡 与末行结尾同行（不单独占行）。
+ * 供飞书卡片与 replay 折叠共用。
+ */
+export function formatThoughtBlockInline(body: string): string {
+  const t = body.trim();
+  if (!t) return "";
+  const lines = t.split(/\r?\n/);
+  if (lines.length === 1) {
+    return `🤔 ${lines[0]} 💡`;
+  }
+  const first = `🤔 ${lines[0]}`;
+  const lastLine = lines[lines.length - 1]!;
+  const last = `${lastLine} 💡`;
+  if (lines.length === 2) {
+    return `${first}\n${last}`;
+  }
+  return `${first}\n${lines.slice(1, -1).join("\n")}\n${last}`;
+}
 
 export function isRenderableEvent(
   ev: BridgeAcpEvent,
@@ -33,7 +55,13 @@ type RenderSection = {
 type TimelineEntry =
   | { k: "thought"; text: string }
   | { k: "main"; text: string }
-  | { k: "tool"; toolCallId: string; title: string; status: string }
+  | {
+      k: "tool";
+      toolCallId: string;
+      title: string;
+      status: string;
+      toolKind?: ToolKind;
+    }
   | { k: "mode"; markdown: string }
   | { k: "plan"; text: string }
   | { k: "commands"; text: string };
@@ -76,16 +104,19 @@ export class FeishuCardState {
           toolCallId: ev.toolCallId,
           title: ev.title,
           status: ev.status,
+          ...(ev.kind !== undefined ? { toolKind: ev.kind } : {}),
         });
         break;
       case "tool_call_update": {
         const prev = this.lastToolState(ev.toolCallId);
         const title = ev.title ?? prev?.title ?? ev.toolCallId;
+        const toolKind = ev.kind ?? prev?.toolKind;
         this.timeline.push({
           k: "tool",
           toolCallId: ev.toolCallId,
           title,
           status: ev.status,
+          ...(toolKind !== undefined ? { toolKind } : {}),
         });
         break;
       }
@@ -96,11 +127,15 @@ export class FeishuCardState {
 
   private lastToolState(
     toolCallId: string,
-  ): { title: string; status: string } | undefined {
+  ): { title: string; status: string; toolKind?: ToolKind } | undefined {
     for (let i = this.timeline.length - 1; i >= 0; i--) {
       const e = this.timeline[i]!;
       if (e.k === "tool" && e.toolCallId === toolCallId) {
-        return { title: e.title, status: e.status };
+        return {
+          title: e.title,
+          status: e.status,
+          ...(e.toolKind !== undefined ? { toolKind: e.toolKind } : {}),
+        };
       }
     }
     return undefined;
@@ -205,7 +240,7 @@ export class FeishuCardState {
     })[0]!;
   }
 
-  /** 按时间线顺序展开为带类型标题的区块（同类型连续条目会先合并再切分长度）。 */
+  /** 按时间线顺序展开为区块（思考为行内 🤔/💡；同类型连续条目先合并再切分长度）。 */
   private buildSections(opts: CardChunkOptions): RenderSection[] {
     const parts: RenderSection[] = [];
     let i = 0;
@@ -253,9 +288,7 @@ export class FeishuCardState {
           body += (tl[i] as Extract<TimelineEntry, { k: "thought" }>).text;
         }
         parts.push(
-          ...this.splitFencedSection(
-            "thought",
-            "**思考**",
+          ...this.splitThoughtWrappedSection(
             body.trim(),
             opts.maxMarkdownLength,
           ),
@@ -271,12 +304,7 @@ export class FeishuCardState {
           body += (tl[i] as Extract<TimelineEntry, { k: "main" }>).text;
         }
         parts.push(
-          ...this.splitPlainSection(
-            "main",
-            "**回答**",
-            body.trim(),
-            opts.maxMarkdownLength,
-          ),
+          ...this.splitMainBodySections(body.trim(), opts.maxMarkdownLength),
         );
         i++;
         continue;
@@ -286,11 +314,12 @@ export class FeishuCardState {
         const lines: string[] = [];
         while (i < tl.length && tl[i]!.k === "tool") {
           const t = tl[i] as Extract<TimelineEntry, { k: "tool" }>;
-          lines.push(`${t.title} — ${t.status}`);
+          const emoji = emojiForToolKind(t.toolKind);
+          lines.push(`${emoji} ${t.title} — ${t.status}`);
           i++;
         }
         parts.push(
-          ...this.splitToolLinesIntoSections(
+          ...this.splitToolPlainSections(
             lines,
             opts.maxMarkdownLength,
             opts.maxTools,
@@ -327,6 +356,50 @@ export class FeishuCardState {
     return chunks;
   }
 
+  /**
+   * 思考：行内 🤔…💡；过长时按字符切段，每段 `🤔 slice 💡` 便于拆卡。
+   */
+  private splitThoughtWrappedSection(
+    body: string,
+    maxMarkdownLength: number,
+  ): RenderSection[] {
+    const t = body.trim();
+    if (!t) return [];
+    const wrapped = formatThoughtBlockInline(t);
+    if (wrapped.length <= maxMarkdownLength) {
+      return [{ kind: "thought", markdown: wrapped }];
+    }
+    const overhead = "🤔 ".length + " 💡".length;
+    const innerMax = Math.max(1, maxMarkdownLength - overhead);
+    const chunks: RenderSection[] = [];
+    for (let j = 0; j < t.length; j += innerMax) {
+      chunks.push({
+        kind: "thought",
+        markdown: `🤔 ${t.slice(j, j + innerMax)} 💡`,
+      });
+    }
+    return chunks;
+  }
+
+  /** 助手正文：无「回答」标题。 */
+  private splitMainBodySections(
+    body: string,
+    maxMarkdownLength: number,
+  ): RenderSection[] {
+    if (!body) return [];
+    if (body.length <= maxMarkdownLength) {
+      return [{ kind: "main", markdown: body }];
+    }
+    const chunks: RenderSection[] = [];
+    for (let j = 0; j < body.length; j += maxMarkdownLength) {
+      chunks.push({
+        kind: "main",
+        markdown: body.slice(j, j + maxMarkdownLength),
+      });
+    }
+    return chunks;
+  }
+
   private splitFencedSection(
     kind: RenderSection["kind"],
     title: string,
@@ -353,18 +426,15 @@ export class FeishuCardState {
     return chunks;
   }
 
-  /** 按时间顺序传入的工具行（每条对应一次 tool_call / tool_call_update）。 */
-  private splitToolLinesIntoSections(
+  /**
+   * 工具行：行首 ACP `kind` 对应 emoji + 标题与状态；无 **工具** 标题与代码块，便于省空间。
+   * 每条对应一次 tool_call / tool_call_update。
+   */
+  private splitToolPlainSections(
     lines: string[],
     maxMarkdownLength: number,
     maxTools: number,
   ): RenderSection[] {
-    const prefix = "**工具**\n\n```\n";
-    const suffix = "\n```";
-    const maxBodyLength = Math.max(
-      1,
-      maxMarkdownLength - prefix.length - suffix.length,
-    );
     const sections: RenderSection[] = [];
     let currentLines: string[] = [];
 
@@ -372,17 +442,20 @@ export class FeishuCardState {
       if (currentLines.length === 0) return;
       sections.push({
         kind: "tool",
-        markdown: `${prefix}${currentLines.join("\n")}${suffix}`,
+        markdown: currentLines.join("\n"),
       });
       currentLines = [];
     };
 
     for (const line of lines) {
-      if (line.length > maxBodyLength) {
+      if (line.length > maxMarkdownLength) {
         pushCurrent();
-        sections.push(
-          ...this.splitFencedSection("tool", "**工具**", line, maxMarkdownLength),
-        );
+        for (let j = 0; j < line.length; j += maxMarkdownLength) {
+          sections.push({
+            kind: "tool",
+            markdown: line.slice(j, j + maxMarkdownLength),
+          });
+        }
         continue;
       }
 
@@ -390,7 +463,7 @@ export class FeishuCardState {
       const nextBody = nextLines.join("\n");
       if (
         currentLines.length > 0 &&
-        (nextLines.length > maxTools || nextBody.length > maxBodyLength)
+        (nextLines.length > maxTools || nextBody.length > maxMarkdownLength)
       ) {
         pushCurrent();
         currentLines = [line];

@@ -54,7 +54,15 @@ export function mapSessionUpdateToBridgeEvents(
       const title = update.title;
       const toolCallId = update.toolCallId;
       const status = String(update.status ?? "pending");
-      out.push({ type: "tool_call", sessionId, toolCallId, title, status });
+      const kind = update.kind ?? undefined;
+      out.push({
+        type: "tool_call",
+        sessionId,
+        toolCallId,
+        title,
+        status,
+        ...(kind !== undefined ? { kind } : {}),
+      });
       break;
     }
     case "tool_call_update": {
@@ -62,12 +70,14 @@ export function mapSessionUpdateToBridgeEvents(
       const status = String(update.status ?? "?");
       const title =
         typeof update.title === "string" ? update.title : undefined;
+      const kind = update.kind ?? undefined;
       out.push({
         type: "tool_call_update",
         sessionId,
         toolCallId,
         status,
         title,
+        ...(kind !== undefined ? { kind } : {}),
       });
       break;
     }

@@ -150,6 +150,7 @@ test("ConversationService 会把交错的工具事件持续合并到同一张卡
       toolCallId: "tool-1",
       title: "读取文件",
       status: "pending",
+      kind: "read",
     },
     {
       type: "tool_call_update",
@@ -168,6 +169,7 @@ test("ConversationService 会把交错的工具事件持续合并到同一张卡
       toolCallId: "tool-2",
       title: "写入文件",
       status: "pending",
+      kind: "edit",
     },
     {
       type: "tool_call_update",
@@ -186,10 +188,8 @@ test("ConversationService 会把交错的工具事件持续合并到同一张卡
 
   assert.equal(sendCardCalls.length, 1);
   assert.equal(updateCardCalls.every((call) => call.id === "card-1"), true);
-  assert.match(reply ?? "", /\*\*工具\*\*/);
-  assert.match(reply ?? "", /读取文件 — running/);
-  assert.match(reply ?? "", /写入文件 — completed/);
-  assert.match(reply ?? "", /\*\*回答\*\*/);
+  assert.match(reply ?? "", /📖 读取文件 — running/);
+  assert.match(reply ?? "", /✏️ 写入文件 — completed/);
   assert.match(reply ?? "", /第一段回答。/);
   assert.match(reply ?? "", /第二段回答。/);
   const r = reply ?? "";
@@ -213,8 +213,8 @@ test("ConversationService 飞书 markdown 按 ACP 到达顺序排列思考与回
     },
   ]).service.handleUserPrompt(createMessage(), createSession());
 
-  const a1 = replyEarlyThought?.indexOf("**思考**") ?? -1;
-  const b1 = replyEarlyThought?.indexOf("**回答**") ?? -1;
+  const a1 = replyEarlyThought?.indexOf("🤔") ?? -1;
+  const b1 = replyEarlyThought?.indexOf("后回答") ?? -1;
   assert.ok(a1 >= 0 && b1 >= 0);
   assert.ok(a1 < b1, "先到的思考应排在回答前");
 
@@ -231,8 +231,8 @@ test("ConversationService 飞书 markdown 按 ACP 到达顺序排列思考与回
     },
   ]).service.handleUserPrompt(createMessage(), createSession());
 
-  const a2 = replyEarlyAnswer?.indexOf("**回答**") ?? -1;
-  const b2 = replyEarlyAnswer?.indexOf("**思考**") ?? -1;
+  const a2 = replyEarlyAnswer?.indexOf("先回答") ?? -1;
+  const b2 = replyEarlyAnswer?.indexOf("🤔") ?? -1;
   assert.ok(a2 >= 0 && b2 >= 0);
   assert.ok(a2 < b2, "先到的回答应排在思考前");
 });
@@ -255,9 +255,9 @@ test("ConversationService 会在工具累计超过阈值后再拆成多张卡片
   assert.equal(sendCardCalls.length, 2);
   assert.equal(sendCardCalls[1]?.content.includes("工具 9"), true);
   assert.equal(updateCardCalls.some((call) => call.id === "card-2"), true);
-  assert.match(reply ?? "", /工具 1 — pending/);
-  assert.match(reply ?? "", /工具 8 — pending/);
-  assert.match(reply ?? "", /工具 9 — pending/);
+  assert.match(reply ?? "", /🔧 工具 1 — pending/);
+  assert.match(reply ?? "", /🔧 工具 8 — pending/);
+  assert.match(reply ?? "", /🔧 工具 9 — pending/);
 });
 
 test("ConversationService 在长回答拆卡时仍保留完整 reply 内容", async () => {
@@ -270,6 +270,7 @@ test("ConversationService 在长回答拆卡时仍保留完整 reply 内容", as
         toolCallId: "tool-1",
         title: "读取文件",
         status: "completed",
+        kind: "read",
       },
       {
         type: "agent_message_chunk",
@@ -290,11 +291,13 @@ test("ConversationService 在长回答拆卡时仍保留完整 reply 内容", as
     updateCardCalls.some((call) => call.id === sendCardCalls.at(-1)?.id),
     true,
   );
-  assert.match(finalCard1, /\*\*工具\*\*/);
+  assert.match(finalCard1, /📖 读取文件 — completed/);
   assert.equal(
-    sendCardCalls.slice(1).some((call) => call.content.includes("**回答**")),
+    sendCardCalls
+      .slice(1)
+      .some((call) => call.content.includes(longAnswer.slice(0, 30))),
     true,
   );
   assert.equal(reply?.includes(longAnswer), true);
-  assert.equal(reply?.includes("读取文件 — completed"), true);
+  assert.equal(reply?.includes("📖 读取文件 — completed"), true);
 });
