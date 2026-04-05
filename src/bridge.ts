@@ -26,6 +26,10 @@ import {
   resolveSessionModeInput,
 } from "./mode-switch.js";
 
+/** 无活跃 session 时，普通对话与部分命令的统一提示 */
+const NO_SESSION_HINT =
+  "当前没有可用的 session。请先发送 `/new list` 查看工作区列表，再用 `/new <序号>` 或 `/new <目录绝对路径>` 创建 session。";
+
 function formatDurationMs(ms: number): string {
   if (!Number.isFinite(ms)) {
     return "永不过期";
@@ -305,12 +309,21 @@ export class Bridge {
         // /resume — ACP session/load
         // ----------------------------------------------------------------
         if (bridgeManagedCommand.kind === "resume") {
-          const session = await this.sessionManager.getOrCreateSession(
+          const session = await this.sessionManager.getActiveSession(
             msg.chatId,
             msg.senderId,
             msg.chatType,
             this.threadScope(msg),
           );
+          if (!session) {
+            await this.feishuBot.sendText(
+              msg.chatId,
+              `❌ ${NO_SESSION_HINT}`,
+              msg.messageId,
+              this.threadReplyOpts(msg),
+            );
+            return;
+          }
           await this.flushPendingSessionNotices(msg);
           if (!this.acpRuntime.supportsLoadSession) {
             await this.feishuBot.sendText(
@@ -397,12 +410,21 @@ export class Bridge {
           }
           let sessionId: string | undefined;
           try {
-            const session = await this.sessionManager.getOrCreateSession(
+            const session = await this.sessionManager.getActiveSession(
               msg.chatId,
               msg.senderId,
               msg.chatType,
               this.threadScope(msg),
             );
+            if (!session) {
+              await this.feishuBot.sendText(
+                msg.chatId,
+                `❌ ${NO_SESSION_HINT}`,
+                msg.messageId,
+                this.threadReplyOpts(msg),
+              );
+              return;
+            }
             sessionId = session.sessionId;
             await this.flushPendingSessionNotices(msg);
             const modeState = this.acpRuntime.getSessionModeState(session.sessionId);
@@ -590,7 +612,7 @@ export class Bridge {
               .join("、");
             await this.feishuBot.sendText(
               msg.chatId,
-              `✅ 已关闭本组全部 ${closed.length} 个 session：${summary}\n\n已释放全局配额；下次发消息会新建 session。`,
+              `✅ 已关闭本组全部 ${closed.length} 个 session：${summary}\n\n已释放全局配额。请使用 \`/new list\` 与 \`/new <序号或路径>\` 重新创建 session。`,
               msg.messageId,
               this.threadReplyOpts(msg),
             );
@@ -606,7 +628,7 @@ export class Bridge {
           await this.flushPendingSessionNotices(msg);
           const label = closed.name ? ` (${closed.name})` : "";
           const tail = removedEntireGroup
-            ? "\n\n该聊天/话题下已无 session，已释放全局配额；下次发消息会新建 session。"
+            ? "\n\n该聊天/话题下已无 session，已释放全局配额。请使用 `/new list` 与 `/new <序号或路径>` 重新创建。"
             : "";
           await this.feishuBot.sendText(
             msg.chatId,
@@ -687,27 +709,19 @@ export class Bridge {
             );
             return;
           }
-        }
 
-        // ----------------------------------------------------------------
-        // /new (default / workspace / preset) — create new slot
-        // /reset — reset active slot
-        // ----------------------------------------------------------------
-        let workspaceAbs: string | undefined;
-        let slotName: string | undefined;
-
-        if (bridgeManagedCommand.kind === "reset") {
-          if (bridgeManagedCommand.path) {
-            workspaceAbs = await resolveAllowedWorkspaceDir(
-              bridgeManagedCommand.path,
-              this.config,
-            );
-          }
-        } else if (bridgeManagedCommand.kind === "new") {
-          slotName = bridgeManagedCommand.name;
+          // /new — default（仅 --name 无路径）/ workspace / preset：新建 slot 并切换
+          let workspaceAbs: string;
+          const slotName = bridgeManagedCommand.name;
           switch (bridgeManagedCommand.variant) {
             case "default":
-              break;
+              await this.feishuBot.sendText(
+                msg.chatId,
+                "❌ 创建 session 须指定工作区。请 `/new list` 查看列表后用 `/new <序号>`，或使用 `/new <目录绝对路径>`（可与 `--name` 组合，例如 `/new 1 --name backend`）。",
+                msg.messageId,
+                this.threadReplyOpts(msg),
+              );
+              return;
             case "workspace":
               workspaceAbs = await resolveAllowedWorkspaceDir(
                 bridgeManagedCommand.path,
@@ -741,26 +755,7 @@ export class Bridge {
             default:
               return;
           }
-        }
 
-        if (bridgeManagedCommand.kind === "reset") {
-          await this.sessionManager.resetSession(
-            msg.chatId,
-            msg.senderId,
-            msg.chatType,
-            workspaceAbs,
-            this.threadScope(msg),
-          );
-          await this.flushPendingSessionNotices(msg);
-          const cwdLine = workspaceAbs ?? this.config.acp.workspaceRoot;
-          await this.feishuBot.sendText(
-            msg.chatId,
-            `✅ 当前 session 已重置，工作区：\n\`${cwdLine}\``,
-            msg.messageId,
-            this.threadReplyOpts(msg),
-          );
-        } else {
-          // /new — create a new slot and auto-switch
           const result = await this.sessionManager.createNewSlot(
             msg.chatId,
             msg.senderId,
@@ -844,7 +839,7 @@ export class Bridge {
                 .map((mode) => mode.modeId)
                 .join(", ")
             : "";
-        body += `\n\n[调试 BRIDGE_DEBUG]\n• ACP 后端: ${this.acpRuntime.backend}\n• sessionKey: ${snap?.sessionKey ?? "(尚无)"}\n• threadId: ${this.threadScope(msg) ?? "（主会话区）"}\n• 活跃 slot: #${slot?.slotIndex ?? "—"}${slot?.name ? ` (${slot.name})` : ""}\n• ACP sessionId: ${slot?.session.sessionId ?? "—"}\n• 当前模式: ${currentModeId ?? "—"}\n• 可用模式: ${availableModeIds || "—"}\n• 会话 cwd: ${slot?.session.workspaceRoot ?? "—"}\n• 空闲过期约: ${idleLabel}\n• 会话策略: ${backendPolicy}\n• 默认工作区 (CURSOR_WORK_DIR): ${this.config.acp.workspaceRoot}\n• 允许根 (CURSOR_WORK_ALLOWLIST): ${this.config.acp.allowedWorkspaceRoots.join(", ")}\n• 映射文件: ${this.config.bridge.sessionStorePath}\n• loadSession: ${this.acpRuntime.supportsLoadSession}\n• LOG_LEVEL: ${this.config.logLevel}`;
+        body += `\n\n[调试 BRIDGE_DEBUG]\n• ACP 后端: ${this.acpRuntime.backend}\n• sessionKey: ${snap?.sessionKey ?? "(尚无)"}\n• threadId: ${this.threadScope(msg) ?? "（主会话区）"}\n• 活跃 slot: #${slot?.slotIndex ?? "—"}${slot?.name ? ` (${slot.name})` : ""}\n• ACP sessionId: ${slot?.session.sessionId ?? "—"}\n• 当前模式: ${currentModeId ?? "—"}\n• 可用模式: ${availableModeIds || "—"}\n• 会话 cwd: ${slot?.session.workspaceRoot ?? "—"}\n• 空闲过期约: ${idleLabel}\n• 会话策略: ${backendPolicy}\n• ACP 子进程 cwd（allowlist 首项）: ${this.config.acp.workspaceRoot}\n• 允许根 CURSOR_WORK_ALLOWLIST: ${this.config.acp.allowedWorkspaceRoots.join(", ")}\n• 映射文件: ${this.config.bridge.sessionStorePath}\n• loadSession: ${this.acpRuntime.supportsLoadSession}\n• LOG_LEVEL: ${this.config.logLevel}`;
         if (this.config.acp.backend === "legacy") {
           body += `\n• 适配器会话目录: ${this.config.acp.adapterSessionDir}`;
         } else if (this.config.acp.backend === "official") {
@@ -889,12 +884,21 @@ export class Bridge {
       let sessionId: string | undefined;
       const officialNumbered = this.acpRuntime.backend === "official";
       try {
-        const session = await this.sessionManager.getOrCreateSession(
+        const session = await this.sessionManager.getActiveSession(
           msg.chatId,
           msg.senderId,
           msg.chatType,
           this.threadScope(msg),
         );
+        if (!session) {
+          await this.feishuBot.sendText(
+            msg.chatId,
+            `❌ ${NO_SESSION_HINT}`,
+            msg.messageId,
+            this.threadReplyOpts(msg),
+          );
+          return;
+        }
         sessionId = session.sessionId;
         await this.flushPendingSessionNotices(msg);
         const modelState = this.acpRuntime.getSessionModelState(session.sessionId);
@@ -958,12 +962,21 @@ export class Bridge {
     try {
       this.activePrompts.add(promptKey);
 
-      const session = await this.sessionManager.getOrCreateSession(
+      const session = await this.sessionManager.getActiveSession(
         msg.chatId,
         msg.senderId,
         msg.chatType,
         this.threadScope(msg),
       );
+      if (!session) {
+        await this.feishuBot.sendText(
+          msg.chatId,
+          NO_SESSION_HINT,
+          msg.messageId,
+          this.threadReplyOpts(msg),
+        );
+        return;
+      }
       await this.flushPendingSessionNotices(msg);
 
       const msgForPrompt: FeishuMessage = {
@@ -1012,7 +1025,7 @@ export class Bridge {
     if (slots.length === 0) {
       await this.feishuBot.sendText(
         msg.chatId,
-        "当前没有任何 session。发送任意消息自动创建。",
+        NO_SESSION_HINT,
         msg.messageId,
         this.threadReplyOpts(msg),
       );
@@ -1030,7 +1043,7 @@ export class Bridge {
     });
     await this.feishuBot.sendText(
       msg.chatId,
-      `📋 当前所有 session（共 ${slots.length} 个；# 为槽位编号，关闭后不会复用，故可能与数量连续不一致）：\n\n${lines.join("\n\n")}\n\n• \`/new\` — 新建 session\n• \`/switch <编号或名称>\` — 切换\n• \`/reply [编号或名称]\` — 重发上一轮缓存回复\n• \`/resume\` — 对当前 session 执行 ACP \`session/load\`（测试/恢复）\n• \`/mode <模式ID>\` — 切换当前 session 模式\n• \`/rename <新名字>\` — 重命名当前 session\n• \`/rename <编号或名称> <新名字>\` — 重命名指定 session\n• \`/close <编号或名称>\` — 关闭\n• \`/close all\` — 关闭本组全部\n• \`/reset\` — 重置当前 session\n• \`/topic …\` — 仅发飞书、不发给 Agent（便于话题内写标题）`,
+      `📋 当前所有 session（共 ${slots.length} 个；# 为槽位编号，关闭后不会复用，故可能与数量连续不一致）：\n\n${lines.join("\n\n")}\n\n• \`/new list\` / \`/new <序号>\` / \`/new <路径>\` — 新建 session\n• \`/switch <编号或名称>\` — 切换\n• \`/reply [编号或名称]\` — 重发上一轮缓存回复\n• \`/resume\` — 对当前 session 执行 ACP \`session/load\`（测试/恢复）\n• \`/mode <模式ID>\` — 切换当前 session 模式\n• \`/rename <新名字>\` — 重命名当前 session\n• \`/rename <编号或名称> <新名字>\` — 重命名指定 session\n• \`/close <编号或名称>\` — 关闭\n• \`/close all\` — 关闭本组全部\n• \`/topic …\` — 仅发飞书、不发给 Agent（便于话题内写标题）`,
       msg.messageId,
       this.threadReplyOpts(msg),
     );

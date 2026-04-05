@@ -4,10 +4,10 @@
 
 ## 概览
 
-| 用途 | 环境变量 | 默认位置 |
-|------|----------|----------|
-| Cursor / ACP 工作区根（新会话默认 `cwd`、读文件沙箱根） | `CURSOR_WORK_DIR` | 启动进程的**当前工作目录**（`process.cwd()`，再 `path.resolve`） |
-| 允许 `/reset`、`/new` 指定的工作区根列表 | `CURSOR_WORK_ALLOWLIST` | 仅包含上述工作区根一项 |
+| 用途 | 环境变量 | 默认 / 说明 |
+|------|----------|-------------|
+| 允许作为会话工作区的根路径列表（**必填**） | `CURSOR_WORK_ALLOWLIST` | 无默认值；须显式配置逗号分隔绝对路径，至少一项；不存在则尝试 `mkdir -p` |
+| ACP 子进程 `spawn` 的 `cwd` | （派生） | 取 **`CURSOR_WORK_ALLOWLIST` 中第一项**；与各 session 的 `cwd` 独立 |
 | ACP 后端选择 | `ACP_BACKEND` | `official` |
 | 官方 ACP 命令 | `CURSOR_AGENT_PATH` | `agent` |
 | `cursor-agent-acp` 适配器会话目录（仅 `legacy`） | `CURSOR_ACP_SESSION_DIR` | `~/.feishu-cursor-bridge/cursor-acp-sessions` |
@@ -19,16 +19,12 @@
 
 ## 分条说明
 
-### 工作区根 `CURSOR_WORK_DIR`
-
-- **默认**：未设置或为空时，取**启动桥接服务时的当前工作目录**，并解析为绝对路径。
-- **含义**：ACP 新会话的默认工作目录、客户端文件沙箱的默认根目录；`/status`（调试）里也会显示为「默认工作区」。
-- **注意**：若用 `npm start` 在项目根启动，默认通常是**项目仓库根目录**；若在其它目录执行，默认即为那个目录。
-
 ### 工作区白名单 `CURSOR_WORK_ALLOWLIST`
 
-- **默认**：未设置时，列表里**只有** `CURSOR_WORK_DIR` 解析后的那一个根路径。
-- **含义**：`/reset`、`/new` 里填写的工作区路径必须落在某个允许根之下（见 `src/workspace-policy.ts`）。
+- **必填**：未设置或解析后为空时，桥接**拒绝启动**。
+- **含义**：`/new <路径>`、快捷列表中的目录、读文件沙箱校验等，均要求路径落在**某一个**允许根之下（见 `src/workspace-policy.ts`）。用户须先用 `/new list` / `/new <序号>` 或 `/new <路径>` **显式创建 session**，普通消息不会在无 session 时自动建会话。
+- **目录**：列表中每一项若尚不存在，启动时会尝试 `mkdir -p`（与旧版单一路径行为一致）；若创建失败则启动报错。
+- **顺序**：列表**第一项**同时用作拉起官方/legacy ACP 子进程时的 `cwd`（与具体 Agent 会话的工作区是两套概念）。
 
 ### ACP 后端 `ACP_BACKEND` / `CURSOR_AGENT_PATH`
 
@@ -43,7 +39,7 @@
 
 ### 飞书会话映射 `BRIDGE_SESSION_STORE`
 
-- **默认**：`~/.feishu-cursor-bridge/.feishu-bridge-sessions.json`（与用户级配置同目录，不随 `CURSOR_WORK_DIR` 变化）。
+- **默认**：`~/.feishu-cursor-bridge/.feishu-bridge-sessions.json`
 - **含义**：持久化「飞书会话 → ACP `sessionId`」等映射，便于进程重启后在支持 `loadSession` 时恢复。
 
 ### 快捷工作区列表 `CURSOR_WORK_PRESETS_FILE` 与 `CURSOR_WORK_PRESETS`

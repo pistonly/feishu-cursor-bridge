@@ -14,7 +14,8 @@
 - **Multiple sessions**: up to **5** concurrent sessions per user per chat, each with its own context and workspace; `/switch` between them; inactive sessions keep their ACP connection
 - **Max live sessions per user**: default **10** across all DMs / groups / threads (tune with `BRIDGE_MAX_SESSIONS_PER_USER`; `0` means unlimited), reducing idle ACP connection buildup when idle timeout is infinite
 - Group chats: @ the bot (or no @ when “only one human + the bot”); DMs: talk directly
-- Built-in commands: `/new`, `/sessions`, `/switch`, `/close` (incl. `/close all`), `/rename`, `/reset` (incl. shortcuts like `/new list`, `/new <index>`), `/status`, `/mode`, `/model`; **`/topic` + text** is display-only (not sent to the Agent — see `docs/feishu-commands.md`)
+- **Explicit sessions**: set **`CURSOR_WORK_ALLOWLIST`** (required); create a session with `/new list` then `/new <index or path>` before normal chat; bare `/new` lists presets
+- Built-in commands: `/new`, `/sessions`, `/switch`, `/close` (incl. `/close all`), `/rename` (incl. `/new list`, `/new <index>`, `/new <path>`), `/status`, `/mode`, `/model`; **`/topic` + text** is display-only (not sent to the Agent — see `docs/feishu-commands.md`)
 - Persistent Feishu ↔ ACP mapping: after restart, if the Agent reports `loadSession`, `session/load` can recover
 - **CLI resume ID (`legacy` / in-repo adapter only)**: with `ACP_BACKEND=legacy`, `/status` shows the CLI chat id for the active session; official ACP does not expose an equivalent field today
 
@@ -160,7 +161,7 @@ Notes:
 | `CURSOR_AGENT_PATH` | Official ACP command path | `agent` |
 | `CURSOR_API_KEY` | Official ACP API key (optional) | empty |
 | `CURSOR_AUTH_TOKEN` | Official ACP auth token (optional) | empty |
-| `CURSOR_WORK_DIR` | Workspace absolute path (ACP `cwd`, sandbox root) | cwd |
+| `CURSOR_WORK_ALLOWLIST` | **Required.** Comma-separated absolute workspace roots; session dirs must sit under one of them; ACP child `cwd` = first entry | — |
 | `ACP_NODE_PATH` | Node binary used to spawn **in-repo** `cursor-agent-acp` (`legacy` only) | `process.execPath` |
 | `CURSOR_ACP_SESSION_DIR` | Passed to `cursor-agent-acp` as `--session-dir` (`legacy` only) | `~/.feishu-cursor-bridge/cursor-acp-sessions` |
 | `CURSOR_ACP_EXTRA_ARGS` | Extra args for `cursor-agent-acp` CLI (`legacy` only, space-separated) | empty |
@@ -182,10 +183,9 @@ Proxy precedence: `wss_proxy` / `ws_proxy` > `https_proxy` / `http_proxy` / `all
 
 ## Usage
 
-- **DM**: send a message directly
+- **DM / group**: after you **create a session** with `/new list` then `/new <index or path>` (paths must fall under `CURSOR_WORK_ALLOWLIST`), normal messages go to Cursor; without a session the bot asks you to `/new` first
 - **Group**: @ the bot + content ( **`im:message.group_msg`** must be enabled or group events won’t arrive); in **topic** groups, each `thread_id` maps to its own ACP session (not shared with the main group chat)
-- **Multi-session**: `/new` creates and switches (old session stays connected); `/sessions` lists; `/switch <index or name>` switches active (no arg → last used); `/close` closes one; `/rename` helps name-based switching. Full syntax: `docs/feishu-commands.md`
-- `/reset` resets **only the active** session (new ACP session in the same slot); other sessions unchanged
+- **Multi-session**: `/new <index or path>` creates and switches (old session stays connected); bare `/new` lists presets; `/sessions` lists; `/switch <index or name>` switches active (no arg → last used); `/close` closes one; `/rename` helps name-based switching. Full syntax: `docs/feishu-commands.md`
 - `/status` or `/状态`: session stats, always shows ACP backend; `official` / `legacy` also show known mode for the active session; `tmux` does not show a bridge-faked mode; **legacy** adds CLI resume ID for the active slot; with `BRIDGE_DEBUG=true`, adds ACP `sessionId`, paths, modes, etc.
 - `/mode <id>`: `official` / `legacy` use ACP `session/set_mode`; `tmux` forwards `/mode ...` verbatim to the real Cursor CLI pane
 - `/model <id>`: `legacy` / `official` use ACP `session/set_model` (`official` follows selector from ACP); `tmux` forwards to CLI pane; only `official` supports bridge-side `/model <index>`
@@ -193,9 +193,9 @@ Proxy precedence: `wss_proxy` / `ws_proxy` > `https_proxy` / `http_proxy` / `all
 ## Manual smoke checklist
 
 1. `npm run build` succeeds
-2. DM once — card shows an “answer” block
+2. DM: `/new list` then `/new <index or allowed path>` — then send a message; card shows an “answer” block
 3. Multi-turn — same session reused (`BRIDGE_DEBUG`: stable `sessionId`)
-4. After `/reset`, active slot’s ACP `sessionId` changes; with multiple `/new` sessions, `/switch` keeps contexts independent
+4. With multiple `/new` sessions, `/switch` keeps contexts independent
 5. When tools run, card “tools” updates (depends on Agent output)
 6. `/status` shows backend + mode; with `BRIDGE_DEBUG=true`, `sessionId` / workspace, etc.; **CLI resume ID** appears only with `ACP_BACKEND=legacy`
 
@@ -229,7 +229,8 @@ Proxy precedence: `wss_proxy` / `ws_proxy` > `https_proxy` / `http_proxy` / `all
 - **多 session**：同一用户在同一聊天中可同时持有多个 session（最多 5 个），各自独立上下文与工作区；可用 `/switch` 在它们之间切换，未活跃的 session 仍保持 ACP 连接
 - **每用户存活 session 上限**：同一飞书用户跨所有私聊/群/话题的存活 session 总数默认最多 **10**（可用 `BRIDGE_MAX_SESSIONS_PER_USER` 调整；`0` 表示不限制），避免将空闲过期设为无限时进程堆积过多 ACP 连接
 - 群聊 @ 机器人触发（或满足「仅 1 用户 + 1 机器人」时可免 @）；私聊直接对话
-- 内置命令：`/new`、`/sessions`、`/switch`、`/close`（含 `/close all`）、`/rename`、`/reset`（含快捷列表 `/new list`、`/new <序号>` 等）、`/status`、`/mode`、`/model`；另有 **`/topic` + 话题内容** 的纯展示命令（不发给 Agent，见 `docs/feishu-commands.md`）
+- **须显式建 session**：配置必填 **`CURSOR_WORK_ALLOWLIST`**；先用 `/new list` 再 `/new <序号或路径>` 才能对话；裸 `/new` 等同列表
+- 内置命令：`/new`、`/sessions`、`/switch`、`/close`（含 `/close all`）、`/rename`（含 `/new list`、`/new <序号>`、`/new <路径>` 等）、`/status`、`/mode`、`/model`；另有 **`/topic` + 话题内容** 的纯展示命令（不发给 Agent，见 `docs/feishu-commands.md`）
 - 会话映射持久化：进程重启后若 Agent 声明 `loadSession`，可 `session/load` 恢复
 - **CLI resume ID（legacy only）**：若切到 `ACP_BACKEND=legacy`，`/status` 会展示当前活跃 session 对应的 CLI chat id；官方 ACP 当前未暴露等价字段
 
@@ -375,7 +376,7 @@ docker-compose -f docker/compose.yaml run --rm tmux-acp-cancel-smoke
 | `CURSOR_AGENT_PATH` | 官方 ACP 命令路径 | `agent` |
 | `CURSOR_API_KEY` | 官方 ACP API key（可选） | 空 |
 | `CURSOR_AUTH_TOKEN` | 官方 ACP auth token（可选） | 空 |
-| `CURSOR_WORK_DIR` | 工作区绝对路径（ACP `cwd`、读文件沙箱根） | 当前目录 |
+| `CURSOR_WORK_ALLOWLIST` | **必填**，逗号分隔的绝对路径根；会话工作区须落在其下；ACP 子进程 `cwd` 取列表首项 | — |
 | `ACP_NODE_PATH` | 用于启动本仓 `cursor-agent-acp` 子进程的 Node（仅 `legacy`） | `process.execPath` |
 | `CURSOR_ACP_SESSION_DIR` | 传给 `cursor-agent-acp` 的 `--session-dir`（仅 `legacy`） | `~/.feishu-cursor-bridge/cursor-acp-sessions` |
 | `CURSOR_ACP_EXTRA_ARGS` | 透传 `cursor-agent-acp` CLI 的额外参数（仅 `legacy`，空格分隔） | 空 |
@@ -398,10 +399,9 @@ docker-compose -f docker/compose.yaml run --rm tmux-acp-cancel-smoke
 
 ## 使用方式
 
-- **私聊**：直接发消息
+- **私聊 / 群聊**：须先用 **`/new list`** 再 **`/new <序号或路径>`** 创建 session（路径须在 `CURSOR_WORK_ALLOWLIST` 下），之后普通消息才会进 Agent；无 session 时机器人会提示先 `/new`
 - **群聊**：@机器人 + 内容（开发平台须为应用开通 **`im:message.group_msg`**，否则群消息事件不会投递到机器人）；**话题群**内不同话题（`thread_id`）会**分别**映射 ACP 会话，与群主页会话互不共享
-- **多 session 切换**：`/new` 新建并切到该 session（旧 session 保持连接）；`/sessions` 列表；`/switch <编号或名称>` 切换活跃 session（无参数时切到上一次用过的）；`/close` 关闭指定；`/rename` 便于用名称切换。完整语法与快捷列表见 `docs/feishu-commands.md`
-- `/reset` 仅重置**当前活跃** session（同槽位换新 ACP 会话），不关闭其它 session
+- **多 session 切换**：`/new <序号或路径>` 新建并切到该 session（裸 `/new` 等同列表）；`/sessions` 列表；`/switch <编号或名称>` 切换活跃 session（无参数时切到上一次用过的）；`/close` 关闭指定；`/rename` 便于用名称切换。完整语法与快捷列表见 `docs/feishu-commands.md`
 - `/status` 或 `/状态`：会话统计，始终展示当前 ACP 后端；`official` / `legacy` 下还会展示当前活跃 session 已知 mode，`tmux` 下不再显示 bridge 侧伪造的 mode；若是 `legacy`，会额外显示当前活跃 slot 的 CLI resume ID；`BRIDGE_DEBUG=true` 时额外含 ACP `sessionId`、路径、可用模式等调试信息
 - `/mode <模式ID>`：`official` / `legacy` 下通过 ACP `session/set_mode` 切换当前活跃 session 的 mode；`tmux` 下则把 `/mode ...` 原样发给真实 Cursor CLI pane，由 CLI 自己处理
 - `/model <模型ID>`：`legacy` / `official` 后端下通过 ACP `session/set_model` 切换当前活跃 session 的模型；其中 `official` 以当前 ACP session 返回的 selector 为准；`tmux` 后端下则把 `/model ...` 原样发给真实 Cursor CLI pane，由 CLI 自己处理；仅 `official` 支持桥接侧 `/model <序号>`
@@ -409,9 +409,9 @@ docker-compose -f docker/compose.yaml run --rm tmux-acp-cancel-smoke
 ## 最小验证清单（手工）
 
 1. `npm run build` 通过
-2. 私聊发送一条消息，卡片出现「回答」区块
+2. 私聊：先 `/new list` 再 `/new <序号或允许路径>`，然后发一条普通消息，卡片出现「回答」区块
 3. 连续多轮对话，确认复用同一会话（`BRIDGE_DEBUG` 下 sessionId 不变）
-4. `/reset` 后再次提问，当前活跃 slot 的 ACP sessionId 变化；若已用 `/new` 建多个 session，可用 `/switch` 在编号间切换且各 session 独立
+4. 若已用 `/new` 建多个 session，可用 `/switch` 在编号间切换且各 session 独立
 5. 触发工具调用时，卡片「工具」列表有更新（视 Agent 输出而定）
 6. 发送 `/status`，确认显示当前 ACP 后端与当前 mode；若 `BRIDGE_DEBUG=true`，再确认返回里包含 `sessionId`、工作区路径等调试信息；只有切到 `ACP_BACKEND=legacy` 时，才会额外出现 **CLI resume ID**
 

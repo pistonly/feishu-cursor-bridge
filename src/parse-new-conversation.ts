@@ -1,7 +1,6 @@
 import { parseShellLikeArgs } from "./config.js";
 
 export type NewConversationCommand =
-  | { kind: "reset"; path?: string }
   | { kind: "mode"; modeId?: string }
   | { kind: "new"; variant: "default"; name?: string }
   | { kind: "new"; variant: "workspace"; path: string; name?: string }
@@ -20,7 +19,7 @@ export type NewConversationCommand =
 
 /**
  * 解析重置/会话类命令：
- * - `/reset`、`/new`（含 `/new 1`、`/new list`、`/new add-list`、`/new remove-list`、`/new --name`）
+ * - `/new`（裸 `/new` 同 `list`；另含 `/new 1`、`/new add-list`、`/new remove-list`、`/new --name`+路径 等）
  * - `/switch [编号或名称]`
  * - `/reply [编号或名称]`
  * - `/rename <新名字>`、`/rename <编号或名称> <新名字>`
@@ -42,7 +41,6 @@ export function parseNewConversationCommand(
   const cmd = tokens[0].toLowerCase();
 
   if (
-    cmd !== "reset" &&
     cmd !== "new" &&
     cmd !== "switch" &&
     cmd !== "reply" &&
@@ -118,14 +116,8 @@ export function parseNewConversationCommand(
     return { kind: "close", target: isNaN(num) ? arg : num };
   }
 
-  // /reset
-  if (cmd === "reset") {
-    if (tokens.length === 1) return { kind: "reset" };
-    return { kind: "reset", path: tokens.slice(1).join(" ").trim() };
-  }
-
-  // /new ...
-  if (tokens.length === 1) return { kind: "new", variant: "default" };
+  // /new（无参数）等价于 /new list
+  if (tokens.length === 1) return { kind: "new", variant: "list" };
 
   // Extract optional --name <value> from remaining tokens (can appear anywhere after cmd)
   const { name, remainingTokens } = extractNameFlag(tokens.slice(1));

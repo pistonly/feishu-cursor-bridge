@@ -42,9 +42,9 @@
 
 ### 1. 新建 session（`/new`）
 
-**等价命令**：`/new`、`/new <路径>`、`/new <快捷序号>`
+**等价命令**：`/new`（同 `/new list`）、`/new list`、`/new <路径>`、`/new <快捷序号>`
 
-**作用**：在当前聊天下**新建一个 session** 并自动切换到它，旧 session 保持 ACP 连接。
+**作用**：在当前聊天下**新建一个 session** 并自动切换到它，旧 session 保持 ACP 连接。工作区须落在环境变量 **`CURSOR_WORK_ALLOWLIST`** 配置的允许根之下。
 
 **用法**：
 
@@ -52,10 +52,11 @@
 /new
 ```
 
-使用默认工作区（`CURSOR_WORK_DIR`）新建一个 session：
+与 **`/new list`** 相同，列出快捷工作区列表（不创建 session）：
 
 ```text
 /new
+/new list
 ```
 
 指定本地目录为该 session 的工作区：
@@ -89,7 +90,7 @@
 
 | 命令 | 说明 |
 |------|------|
-| `/new list` | 列出当前快捷列表及序号（`1.`、`2.` …）。 |
+| `/new list` | 列出当前快捷列表及序号（`1.`、`2.` …）；裸 `/new` 与此相同。 |
 | `/new add-list <路径>` | 将**已存在且允许**的目录加入列表；重复路径不会重复添加。 |
 | `/new remove-list <序号>` | 按序号从列表中删除一项（不影响当前 session）。 |
 
@@ -193,33 +194,7 @@
 
 ---
 
-### 7. 重置当前 session（`/reset`）
-
-```text
-/reset
-/reset <路径>
-```
-
-**等价命令**：`/reset`
-
-**作用**：关闭当前活跃 session 的 ACP 连接，在**相同 session 槽**中创建新的 ACP 会话，不影响其他 session。可选指定新的工作区目录。
-
-**用法**：
-
-```text
-/reset
-/reset /home/you/project
-/reset ~/projects/my-app
-```
-
-**权限范围**：
-
-- 默认仅允许 **`CURSOR_WORK_DIR`** 及其子目录作为工作区。
-- 若需使用其它目录（例如 `/data/repos/foo`），请在环境变量 **`CURSOR_WORK_ALLOWLIST`** 中配置允许的**根路径**（逗号分隔）；会话目录必须落在**某一个根**之下。
-
----
-
-### 8. 切换模式（`/mode`）
+### 7. 切换模式（`/mode`）
 
 ```text
 /mode
@@ -253,7 +228,7 @@
 
 ---
 
-### 9. 状态（`/status`）
+### 8. 状态（`/status`）
 
 **等价命令**：`/status`、`/状态`
 
@@ -263,14 +238,14 @@
 
 - 当前 `sessionKey`、活跃 slot 编号与名称、ACP `sessionId`
 - 当前 session **cwd**（工作区绝对路径）
-- 空闲过期时间（若 `SESSION_IDLE_TIMEOUT_MS=0` 或 `infinity` 则显示为“永不过期”）、默认 `CURSOR_WORK_DIR`、允许的 `CURSOR_WORK_ALLOWLIST` 根列表
+- 空闲过期时间（若 `SESSION_IDLE_TIMEOUT_MS=0` 或 `infinity` 则显示为“永不过期”）、`CURSOR_WORK_ALLOWLIST` 根列表与 ACP 子进程 spawn cwd（列表首项）
 - 适配器会话目录、映射文件路径、`loadSession` 能力、日志级别等
 
 同一环境下，群聊因未 @ 被忽略时的**服务端日志**字段说明见下文「群聊 @ 与调试日志」。
 
 ---
 
-### 10. 切换模型（`/model`）
+### 9. 切换模型（`/model`）
 
 **格式**：
 
@@ -310,9 +285,10 @@
 ## 典型多 Session 工作流
 
 ```
-你：（发送第一条消息，自动创建 session #1）
+你：/new list            → 查看快捷工作区列表
+你：/new 1               → 用列表第 1 项创建 session #1（须已在 allowlist 内）
 你：/sessions            → 查看当前 session 列表
-你：/new ~/proj-b --name proj-b   → 新建 session #2，工作区为 ~/proj-b
+你：/new ~/proj-b --name proj-b   → 新建 session #2，工作区为 ~/proj-b（须在 allowlist 下）
 你：（对话，针对 proj-b）
 你：/switch 1            → 切回 session #1（proj-b 保持 ACP 连接）
 你：（继续对话，针对原来的工作区）
@@ -324,7 +300,7 @@
 
 ## 非命令消息
 
-不以以上命令开头的文本，会进入正常对话流程（流式卡片、Cursor Agent 等）。若适配器在 Cursor 侧注册了 `/plan` 等斜杠命令，通常需**整段消息**以 `/命令` 开头发送；具体以 `cursor-agent-acp` 与 Cursor CLI 行为为准，本桥接不对其做单独解析。
+不以以上命令开头的文本，在**当前聊天/话题下已有活跃 session** 时进入正常对话流程（流式卡片、Cursor Agent 等）。**若无 session**，机器人会提示先用 `/new list` 与 `/new <序号或路径>` 创建。若适配器在 Cursor 侧注册了 `/plan` 等斜杠命令，通常需**整段消息**以 `/命令` 开头发送；具体以 `cursor-agent-acp` 与 Cursor CLI 行为为准，本桥接不对其做单独解析。
 
 ## 群聊 @ 与调试日志（`BRIDGE_DEBUG`）
 
@@ -344,8 +320,7 @@
 
 | 变量 | 与命令的关系 |
 |------|----------------|
-| `CURSOR_WORK_DIR` | `/reset`、`/new` 等不带路径时的默认工作区；也是读文件沙箱的默认根。 |
-| `CURSOR_WORK_ALLOWLIST` | 可选；指定允许作为工作区的根路径列表（逗号分隔），用于 `/reset /某路径`、`/new /某路径` 等。 |
+| `CURSOR_WORK_ALLOWLIST` | **必填**；逗号分隔的绝对路径，会话工作区必须落在某一允许根下；ACP 子进程 spawn 的 cwd 为列表首项。 |
 | `CURSOR_WORK_PRESETS_FILE` | 可选；`/new list` 使用的快捷列表 JSON 路径。 |
 | `CURSOR_WORK_PRESETS` | 可选；列表文件为空时用于首次写入的初始路径（逗号分隔）。 |
 | `SESSION_IDLE_TIMEOUT_MS` | 可选；控制 session 空闲多久后视为过期。设为 `0` 或 `infinity` 表示永不过期。 |
