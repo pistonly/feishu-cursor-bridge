@@ -47,9 +47,45 @@ read_lock_pid() {
   fi
 }
 
-is_running() {
+can_signal_pid() {
   local pid="$1"
   [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
+}
+
+pid_exists() {
+  local pid="$1"
+  [[ -n "$pid" ]] && ps -p "$pid" -o pid= >/dev/null 2>&1
+}
+
+is_permission_denied_pid() {
+  local pid="$1"
+  pid_exists "$pid" && ! can_signal_pid "$pid"
+}
+
+is_running() {
+  local pid="$1"
+  [[ -n "$pid" ]] || return 1
+  # kill -0 在 EPERM 时也会返回失败；再用 ps 判断，避免误删他人进程锁。
+  if can_signal_pid "$pid"; then
+    return 0
+  fi
+  pid_exists "$pid"
+}
+
+wait_for_lock_ready() {
+  local max_tries=50 # 5s
+  local i=0
+  local pid
+  while [[ $i -lt $max_tries ]]; do
+    pid="$(read_lock_pid)"
+    if [[ -n "$pid" ]] && is_running "$pid"; then
+      echo "$pid"
+      return 0
+    fi
+    sleep 0.1
+    i=$((i + 1))
+  done
+  return 1
 }
 
 stop_bridge() {
@@ -67,6 +103,10 @@ stop_bridge() {
     rm -f "$LOCK_FILE"
     return 0
   fi
+  if is_permission_denied_pid "$pid"; then
+    echo "[bridge-dev] PID $pid exists but current user cannot signal it; keeping lock: $LOCK_FILE" >&2
+    return 1
+  fi
   echo "[bridge-dev] Stopping bridge PID $pid ..."
   kill -TERM "$pid" 2>/dev/null || true
   local i=0
@@ -78,6 +118,10 @@ stop_bridge() {
     echo "[bridge-dev] Force killing PID $pid ..."
     kill -KILL "$pid" 2>/dev/null || true
     sleep 0.2
+  fi
+  if is_running "$pid"; then
+    echo "[bridge-dev] Failed to stop PID $pid; keeping lock: $LOCK_FILE" >&2
+    return 1
   fi
   rm -f "$LOCK_FILE" 2>/dev/null || true
   echo "[bridge-dev] Stopped."
@@ -95,8 +139,12 @@ case "$cmd" in
       echo "[bridge-dev] Not running (no lock or empty: $LOCK_FILE)"
       exit 1
     fi
-    if is_running "$pid"; then
+    if can_signal_pid "$pid"; then
       echo "[bridge-dev] Running PID $pid (lock: $LOCK_FILE)"
+      exit 0
+    fi
+    if is_permission_denied_pid "$pid"; then
+      echo "[bridge-dev] Running PID $pid but permission denied for signal check (lock: $LOCK_FILE)"
       exit 0
     fi
     echo "[bridge-dev] Stale lock (PID $pid dead): $LOCK_FILE"
@@ -108,9 +156,7 @@ case "$cmd" in
     echo "[bridge-dev] Starting in background: npm run dev"
     echo "[bridge-dev] Log file: $LOG_FILE"
     nohup npm run dev >>"$LOG_FILE" 2>&1 &
-    sleep 0.5
-    pid="$(read_lock_pid)"
-    if [[ -n "$pid" ]] && is_running "$pid"; then
+    if pid="$(wait_for_lock_ready)"; then
       echo "[bridge-dev] Started PID $pid"
       exit 0
     fi
