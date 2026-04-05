@@ -6,6 +6,7 @@
  */
 
 import { spawn, ChildProcess } from 'child_process';
+import type { ToolCallLocation, ToolKind } from '@agentclientprotocol/sdk';
 import {
   CursorError,
   type AdapterConfig,
@@ -43,6 +44,10 @@ interface CursorStreamJsonEvent {
   type: string;
   subtype?: string;
   session_id?: string;
+  /** When present, pairs started/completed tool events (preferred over synthetic ids). */
+  call_id?: string;
+  tool_call_id?: string;
+  id?: string;
   text?: string;
   result?: string;
   error?: string;
@@ -70,30 +75,48 @@ function stripThinkingTimers(text: string): string {
   return t;
 }
 
-/** Mutable state while scanning stream-json lines (assistant dedupe + tool spacing). */
+/** Mutable state while scanning stream-json lines (assistant dedupe + tool correlation). */
 interface CursorStreamAccumState {
   assistantText: string;
-  toolStatusEmitted: boolean;
+  /** Monotonic ids for stream-json tools when the CLI omits `call_id`. */
+  streamToolSeq: number;
+  /** LIFO stack: `completed` without id pops the latest synthetic id from `started`. */
+  pendingStreamToolStack: string[];
   cursorStreamSessionId?: string;
   lastThinkingRaw?: string;
   lastThinkingNormalized?: string;
 }
 
-const STREAM_TOOL_LABELS: Record<string, string> = {
-  read: '📖 读取',
-  write: '✏️ 写入',
-  strReplace: '✏️ 编辑',
-  shell: '⚡ 执行',
-  grep: '🔍 搜索',
-  glob: '📂 查找',
-  semanticSearch: '🔎 语义搜索',
-  webSearch: '🌐 搜索网页',
-  webFetch: '🌐 抓取网页',
-  delete: '🗑️ 删除',
-  editNotebook: '📓 编辑笔记本',
-  callMcpTool: '🔌 MCP工具',
-  task: '🤖 子任务',
-};
+/** English label from stream-json tool key (`semanticSearch` → `Semantic search`). */
+function streamJsonToolDisplayName(internalName: string): string {
+  const spaced = internalName.replace(/([a-z])([A-Z])/g, '$1 $2');
+  if (!spaced) return 'Tool call';
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
+
+function streamJsonToolNameToAcpKind(internalName: string): ToolKind {
+  switch (internalName) {
+    case 'read':
+      return 'read';
+    case 'write':
+    case 'strReplace':
+    case 'editNotebook':
+      return 'edit';
+    case 'delete':
+      return 'delete';
+    case 'shell':
+      return 'execute';
+    case 'grep':
+    case 'glob':
+    case 'semanticSearch':
+      return 'search';
+    case 'webSearch':
+    case 'webFetch':
+      return 'fetch';
+    default:
+      return 'other';
+  }
+}
 
 export class CursorCliBridge {
   private config: AdapterConfig;
@@ -620,46 +643,52 @@ export class CursorCliBridge {
     return parts[parts.length - 1] || p;
   }
 
-  private describeStreamToolCall(
-    tc: Record<string, { args?: Record<string, unknown> }>,
-  ): string {
+  /**
+   * Human title + ACP tool kind for stream-json `tool_call` (no emojis; clients render icons).
+   */
+  private buildPlainStreamToolMeta(tc: Record<string, { args?: Record<string, unknown> }>): {
+    title: string;
+    kind: ToolKind;
+    locations?: ToolCallLocation[];
+    rawInput: unknown;
+  } {
     for (const [key, val] of Object.entries(tc)) {
-      const name = key.replace(/ToolCall$/, '');
-      const label = STREAM_TOOL_LABELS[name] || `🔧 ${name}`;
+      const internalName = key.replace(/ToolCall$/, '');
+      const label = streamJsonToolDisplayName(internalName);
+      const kind = streamJsonToolNameToAcpKind(internalName);
       const a = val?.args;
-      if (!a) {
-        return label;
+      let title = label;
+      const locations: ToolCallLocation[] | undefined =
+        a && typeof a['path'] === 'string'
+          ? [{ path: a['path'] as string }]
+          : undefined;
+
+      if (a) {
+        if (a['path']) {
+          title = `${label} ${this.streamPathBasename(String(a['path']))}`;
+        } else if (a['command']) {
+          title = `${label} ${String(a['command']).slice(0, 80)}`;
+        } else if (a['pattern']) {
+          title = `${label} "${a['pattern']}"${a['path'] ? ` in ${this.streamPathBasename(String(a['path']))}` : ''}`;
+        } else if (a['glob_pattern']) {
+          title = `${label} ${a['glob_pattern']}`;
+        } else if (a['query']) {
+          title = `${label} ${String(a['query']).slice(0, 60)}`;
+        } else if (a['search_term']) {
+          title = `${label} ${String(a['search_term']).slice(0, 60)}`;
+        } else if (a['url']) {
+          title = `${label} ${String(a['url']).slice(0, 60)}`;
+        } else if (a['description']) {
+          title = `${label} ${String(a['description']).slice(0, 60)}`;
+        }
       }
-      if (a['path']) {
-        return `${label} ${this.streamPathBasename(String(a['path']))}`;
-      }
-      if (a['command']) {
-        return `${label} ${String(a['command']).slice(0, 80)}`;
-      }
-      if (a['pattern']) {
-        return `${label} "${a['pattern']}"${a['path'] ? ` in ${this.streamPathBasename(String(a['path']))}` : ''}`;
-      }
-      if (a['glob_pattern']) {
-        return `${label} ${a['glob_pattern']}`;
-      }
-      if (a['query']) {
-        return `${label} ${String(a['query']).slice(0, 60)}`;
-      }
-      if (a['search_term']) {
-        return `${label} ${String(a['search_term']).slice(0, 60)}`;
-      }
-      if (a['url']) {
-        return `${label} ${String(a['url']).slice(0, 60)}`;
-      }
-      if (a['description']) {
-        return `${label} ${String(a['description']).slice(0, 60)}`;
-      }
-      return label;
+
+      return { title, kind, ...(locations && { locations }), rawInput: tc };
     }
-    return '🔧 工具调用';
+    return { title: 'Tool call', kind: 'other', rawInput: tc };
   }
 
-  private describeStreamToolResult(
+  private parseStreamToolResultBrief(
     tc: Record<
       string,
       {
@@ -667,22 +696,41 @@ export class CursorCliBridge {
         result?: Record<string, { content?: string }>;
       }
     >,
-  ): string {
+  ): { ok: boolean; text?: string; error?: string } | undefined {
     for (const val of Object.values(tc)) {
       const r = val?.result;
       if (!r) {
-        return '';
+        continue;
       }
       const success = r['success'] as Record<string, unknown> | undefined;
       if (success?.['content']) {
-        return String(success['content']).slice(0, 200);
+        const one = String(success['content']).slice(0, 200);
+        const line = one
+          .split('\n')
+          .filter((l) => l.trim())
+          .slice(0, 2)
+          .join(' | ');
+        return { ok: true, text: line.slice(0, 120) };
       }
       const err = r['error'] as Record<string, unknown> | undefined;
       if (err?.['message']) {
-        return `❌ ${String(err['message']).slice(0, 150)}`;
+        return { ok: false, error: String(err['message']).slice(0, 150) };
       }
     }
-    return '';
+    return undefined;
+  }
+
+  private explicitStreamToolCallId(ev: CursorStreamJsonEvent): string | undefined {
+    if (typeof ev.call_id === 'string' && ev.call_id.length > 0) {
+      return ev.call_id;
+    }
+    if (typeof ev.tool_call_id === 'string' && ev.tool_call_id.length > 0) {
+      return ev.tool_call_id;
+    }
+    if (typeof ev.id === 'string' && ev.id.length > 0) {
+      return ev.id;
+    }
+    return undefined;
   }
 
   /**
@@ -745,30 +793,66 @@ export class CursorCliBridge {
 
       case 'tool_call':
         if (ev.tool_call && onChunk) {
+          const meta = this.buildPlainStreamToolMeta(ev.tool_call);
+          const explicitId = this.explicitStreamToolCallId(ev);
+
           if (ev.subtype === 'started') {
-            const desc = this.describeStreamToolCall(ev.tool_call);
-            const prefix = streamState.toolStatusEmitted ? '\n' : '';
-            streamState.toolStatusEmitted = true;
-            await onChunk({
-              type: 'content',
-              data: { type: 'text', text: `${prefix}${desc}` },
-            });
-          } else if (ev.subtype === 'completed') {
-            const brief = this.describeStreamToolResult(ev.tool_call);
-            if (brief) {
-              const oneLiner = brief
-                .split('\n')
-                .filter((l) => l.trim())
-                .slice(0, 2)
-                .join(' | ');
-              await onChunk({
-                type: 'content',
-                data: {
-                  type: 'text',
-                  text: `  → ${oneLiner.slice(0, 120)}`,
-                },
-              });
+            const toolCallId =
+              explicitId ?? `stream-json-tool-${++streamState.streamToolSeq}`;
+            if (!explicitId) {
+              streamState.pendingStreamToolStack.push(toolCallId);
             }
+            const chunk: StreamChunk = {
+              type: 'tool_call',
+              data: {
+                toolCallId,
+                title: meta.title,
+                kind: meta.kind,
+                status: 'in_progress',
+                rawInput: meta.rawInput,
+                ...(meta.locations && { locations: meta.locations }),
+              },
+            };
+            await onChunk(chunk);
+          } else if (ev.subtype === 'completed') {
+            const toolCallId =
+              explicitId ??
+              streamState.pendingStreamToolStack.pop() ??
+              undefined;
+            if (!toolCallId) {
+              this.logger.warn('stream-json tool_call completed without id', {
+                preview: JSON.stringify(ev).slice(0, 200),
+              });
+              break;
+            }
+
+            const brief = this.parseStreamToolResultBrief(ev.tool_call);
+            const baseTitle = meta.title;
+            let finalTitle = baseTitle;
+            let status: 'completed' | 'failed' = 'completed';
+            let rawOut: unknown | undefined;
+
+            if (brief?.ok === false && brief.error) {
+              status = 'failed';
+              finalTitle = `${baseTitle} → ${brief.error}`;
+              rawOut = brief.error;
+            } else if (brief?.ok === true && brief.text) {
+              finalTitle = `${baseTitle} → ${brief.text}`;
+              rawOut = brief.text;
+            } else if (brief?.ok === true) {
+              finalTitle = baseTitle;
+            }
+
+            await onChunk({
+              type: 'tool_call_update',
+              data: {
+                toolCallId,
+                status,
+                title: finalTitle,
+                kind: meta.kind,
+                ...(rawOut !== undefined && { rawOutput: rawOut }),
+              },
+            });
           }
         }
         break;
@@ -1099,7 +1183,8 @@ export class CursorCliBridge {
       let streamBuffer = '';
       const streamState: CursorStreamAccumState = {
         assistantText: '',
-        toolStatusEmitted: false,
+        streamToolSeq: 0,
+        pendingStreamToolStack: [],
       };
 
       const processStreamLine = async (rawLine: string) => {

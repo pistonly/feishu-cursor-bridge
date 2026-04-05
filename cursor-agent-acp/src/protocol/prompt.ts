@@ -1452,6 +1452,45 @@ export class PromptHandler {
                 },
               });
             }
+          } else if (chunk.type === 'tool_call') {
+            const d = chunk.data;
+            this.sendNotification({
+              jsonrpc: '2.0',
+              method: 'session/update',
+              params: {
+                sessionId,
+                update: {
+                  sessionUpdate: 'tool_call',
+                  toolCallId: d.toolCallId,
+                  title: d.title,
+                  kind: d.kind,
+                  status: d.status,
+                  ...(d.rawInput !== undefined && { rawInput: d.rawInput }),
+                  ...(d.locations !== undefined &&
+                    d.locations.length > 0 && { locations: d.locations }),
+                },
+              },
+            });
+          } else if (chunk.type === 'tool_call_update') {
+            const d = chunk.data;
+            this.sendNotification({
+              jsonrpc: '2.0',
+              method: 'session/update',
+              params: {
+                sessionId,
+                update: {
+                  sessionUpdate: 'tool_call_update',
+                  toolCallId: d.toolCallId,
+                  ...(d.status !== undefined &&
+                    d.status !== null && { status: d.status }),
+                  ...(d.title !== undefined &&
+                    d.title !== null && { title: d.title }),
+                  ...(d.kind !== undefined &&
+                    d.kind !== null && { kind: d.kind }),
+                  ...(d.rawOutput !== undefined && { rawOutput: d.rawOutput }),
+                },
+              },
+            });
           } else if (chunk.type === 'error') {
             throw new ProtocolError(`Stream error: ${chunk.data}`);
           }

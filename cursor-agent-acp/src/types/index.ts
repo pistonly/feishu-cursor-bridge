@@ -15,6 +15,10 @@ import type {
   SessionMode,
   SessionModeId,
   SessionModeState,
+  ToolCallId,
+  ToolCallLocation,
+  ToolCallStatus,
+  ToolKind,
 } from '@agentclientprotocol/sdk';
 
 // ============================================================================
@@ -172,11 +176,39 @@ export interface ToolCall {
   parameters: Record<string, any>;
 }
 
-export interface StreamChunk {
-  type: 'content' | 'thought' | 'progress' | 'error' | 'done';
-  data?: any;
-  error?: string;
+/** Stream-json tool start → bridge emits ACP `session/update` `tool_call`. */
+export interface StreamToolCallChunk {
+  type: 'tool_call';
+  data: {
+    toolCallId: ToolCallId;
+    title: string;
+    kind: ToolKind;
+    status: ToolCallStatus;
+    rawInput?: unknown;
+    locations?: ToolCallLocation[];
+  };
 }
+
+/** Stream-json tool completion → ACP `tool_call_update`. */
+export interface StreamToolCallUpdateChunk {
+  type: 'tool_call_update';
+  data: {
+    toolCallId: ToolCallId;
+    status?: ToolCallStatus | null;
+    title?: string | null;
+    kind?: ToolKind | null;
+    rawOutput?: unknown;
+  };
+}
+
+export type StreamChunk =
+  | StreamToolCallChunk
+  | StreamToolCallUpdateChunk
+  | {
+      type: 'content' | 'thought' | 'progress' | 'error' | 'done';
+      data?: any;
+      error?: string;
+    };
 
 export interface StreamProgress {
   current: number;
