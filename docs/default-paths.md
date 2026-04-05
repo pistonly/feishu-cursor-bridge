@@ -7,7 +7,7 @@
 | 用途 | 环境变量 | 默认位置 |
 |------|----------|----------|
 | Cursor / ACP 工作区根（新会话默认 `cwd`、读文件沙箱根） | `CURSOR_WORK_DIR` | 启动进程的**当前工作目录**（`process.cwd()`，再 `path.resolve`） |
-| 允许 `/reset`、`/new` 指定的工作区根列表 | `CURSOR_WORK_ALLOWLIST` | 仅包含上述工作区根一项 |
+| 允许 `/new` 指定的工作区根列表 | `CURSOR_WORK_ALLOWLIST` | 仅包含上述工作区根一项 |
 | ACP 后端选择 | `ACP_BACKEND` | `official` |
 | 官方 ACP 命令 | `CURSOR_AGENT_PATH` | `agent` |
 | `cursor-agent-acp` 适配器会话目录（仅 `legacy`） | `CURSOR_ACP_SESSION_DIR` | `~/.feishu-cursor-bridge/cursor-acp-sessions` |
@@ -28,7 +28,7 @@
 ### 工作区白名单 `CURSOR_WORK_ALLOWLIST`
 
 - **默认**：未设置时，列表里**只有** `CURSOR_WORK_DIR` 解析后的那一个根路径。
-- **含义**：`/reset`、`/new` 里填写的工作区路径必须落在某个允许根之下（见 `src/workspace-policy.ts`）。
+- **含义**：`/new` 里填写的工作区路径必须落在某个允许根之下（见 `src/workspace-policy.ts`）。
 
 ### ACP 后端 `ACP_BACKEND` / `CURSOR_AGENT_PATH`
 

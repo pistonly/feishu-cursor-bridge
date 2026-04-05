@@ -193,33 +193,7 @@
 
 ---
 
-### 7. 重置当前 session（`/reset`）
-
-```text
-/reset
-/reset <路径>
-```
-
-**等价命令**：`/reset`
-
-**作用**：关闭当前活跃 session 的 ACP 连接，在**相同 session 槽**中创建新的 ACP 会话，不影响其他 session。可选指定新的工作区目录。
-
-**用法**：
-
-```text
-/reset
-/reset /home/you/project
-/reset ~/projects/my-app
-```
-
-**权限范围**：
-
-- 默认仅允许 **`CURSOR_WORK_DIR`** 及其子目录作为工作区。
-- 若需使用其它目录（例如 `/data/repos/foo`），请在环境变量 **`CURSOR_WORK_ALLOWLIST`** 中配置允许的**根路径**（逗号分隔）；会话目录必须落在**某一个根**之下。
-
----
-
-### 8. 切换模式（`/mode`）
+### 7. 切换模式（`/mode`）
 
 ```text
 /mode
@@ -253,7 +227,7 @@
 
 ---
 
-### 9. 状态（`/status`）
+### 8. 状态（`/status`）
 
 **等价命令**：`/status`、`/状态`
 
@@ -270,7 +244,7 @@
 
 ---
 
-### 10. 切换模型（`/model`）
+### 9. 切换模型（`/model`）
 
 **格式**：
 
@@ -344,8 +318,8 @@
 
 | 变量 | 与命令的关系 |
 |------|----------------|
-| `CURSOR_WORK_DIR` | `/reset`、`/new` 等不带路径时的默认工作区；也是读文件沙箱的默认根。 |
-| `CURSOR_WORK_ALLOWLIST` | 可选；指定允许作为工作区的根路径列表（逗号分隔），用于 `/reset /某路径`、`/new /某路径` 等。 |
+| `CURSOR_WORK_DIR` | `/new` 等不带路径时的默认工作区；也是读文件沙箱的默认根。 |
+| `CURSOR_WORK_ALLOWLIST` | 可选；指定允许作为工作区的根路径列表（逗号分隔），用于 `/new /某路径` 等。 |
 | `CURSOR_WORK_PRESETS_FILE` | 可选；`/new list` 使用的快捷列表 JSON 路径。 |
 | `CURSOR_WORK_PRESETS` | 可选；列表文件为空时用于首次写入的初始路径（逗号分隔）。 |
 | `SESSION_IDLE_TIMEOUT_MS` | 可选；控制 session 空闲多久后视为过期。设为 `0` 或 `infinity` 表示永不过期。 |

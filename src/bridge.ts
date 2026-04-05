@@ -687,24 +687,10 @@ export class Bridge {
             );
             return;
           }
-        }
 
-        // ----------------------------------------------------------------
-        // /new (default / workspace / preset) — create new slot
-        // /reset — reset active slot
-        // ----------------------------------------------------------------
-        let workspaceAbs: string | undefined;
-        let slotName: string | undefined;
-
-        if (bridgeManagedCommand.kind === "reset") {
-          if (bridgeManagedCommand.path) {
-            workspaceAbs = await resolveAllowedWorkspaceDir(
-              bridgeManagedCommand.path,
-              this.config,
-            );
-          }
-        } else if (bridgeManagedCommand.kind === "new") {
-          slotName = bridgeManagedCommand.name;
+          // /new — default / workspace / preset：新建 slot 并切换
+          let workspaceAbs: string | undefined;
+          const slotName = bridgeManagedCommand.name;
           switch (bridgeManagedCommand.variant) {
             case "default":
               break;
@@ -741,26 +727,7 @@ export class Bridge {
             default:
               return;
           }
-        }
 
-        if (bridgeManagedCommand.kind === "reset") {
-          await this.sessionManager.resetSession(
-            msg.chatId,
-            msg.senderId,
-            msg.chatType,
-            workspaceAbs,
-            this.threadScope(msg),
-          );
-          await this.flushPendingSessionNotices(msg);
-          const cwdLine = workspaceAbs ?? this.config.acp.workspaceRoot;
-          await this.feishuBot.sendText(
-            msg.chatId,
-            `✅ 当前 session 已重置，工作区：\n\`${cwdLine}\``,
-            msg.messageId,
-            this.threadReplyOpts(msg),
-          );
-        } else {
-          // /new — create a new slot and auto-switch
           const result = await this.sessionManager.createNewSlot(
             msg.chatId,
             msg.senderId,
@@ -1030,7 +997,7 @@ export class Bridge {
     });
     await this.feishuBot.sendText(
       msg.chatId,
-      `📋 当前所有 session（共 ${slots.length} 个；# 为槽位编号，关闭后不会复用，故可能与数量连续不一致）：\n\n${lines.join("\n\n")}\n\n• \`/new\` — 新建 session\n• \`/switch <编号或名称>\` — 切换\n• \`/reply [编号或名称]\` — 重发上一轮缓存回复\n• \`/resume\` — 对当前 session 执行 ACP \`session/load\`（测试/恢复）\n• \`/mode <模式ID>\` — 切换当前 session 模式\n• \`/rename <新名字>\` — 重命名当前 session\n• \`/rename <编号或名称> <新名字>\` — 重命名指定 session\n• \`/close <编号或名称>\` — 关闭\n• \`/close all\` — 关闭本组全部\n• \`/reset\` — 重置当前 session\n• \`/topic …\` — 仅发飞书、不发给 Agent（便于话题内写标题）`,
+      `📋 当前所有 session（共 ${slots.length} 个；# 为槽位编号，关闭后不会复用，故可能与数量连续不一致）：\n\n${lines.join("\n\n")}\n\n• \`/new\` — 新建 session\n• \`/switch <编号或名称>\` — 切换\n• \`/reply [编号或名称]\` — 重发上一轮缓存回复\n• \`/resume\` — 对当前 session 执行 ACP \`session/load\`（测试/恢复）\n• \`/mode <模式ID>\` — 切换当前 session 模式\n• \`/rename <新名字>\` — 重命名当前 session\n• \`/rename <编号或名称> <新名字>\` — 重命名指定 session\n• \`/close <编号或名称>\` — 关闭\n• \`/close all\` — 关闭本组全部\n• \`/topic …\` — 仅发飞书、不发给 Agent（便于话题内写标题）`,
       msg.messageId,
       this.threadReplyOpts(msg),
     );

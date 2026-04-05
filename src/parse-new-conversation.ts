@@ -1,7 +1,6 @@
 import { parseShellLikeArgs } from "./config.js";
 
 export type NewConversationCommand =
-  | { kind: "reset"; path?: string }
   | { kind: "mode"; modeId?: string }
   | { kind: "new"; variant: "default"; name?: string }
   | { kind: "new"; variant: "workspace"; path: string; name?: string }
@@ -20,7 +19,7 @@ export type NewConversationCommand =
 
 /**
  * 解析重置/会话类命令：
- * - `/reset`、`/new`（含 `/new 1`、`/new list`、`/new add-list`、`/new remove-list`、`/new --name`）
+ * - `/new`（含 `/new 1`、`/new list`、`/new add-list`、`/new remove-list`、`/new --name`）
  * - `/switch [编号或名称]`
  * - `/reply [编号或名称]`
  * - `/rename <新名字>`、`/rename <编号或名称> <新名字>`
@@ -42,7 +41,6 @@ export function parseNewConversationCommand(
   const cmd = tokens[0].toLowerCase();
 
   if (
-    cmd !== "reset" &&
     cmd !== "new" &&
     cmd !== "switch" &&
     cmd !== "reply" &&
@@ -116,12 +114,6 @@ export function parseNewConversationCommand(
     }
     const num = parseInt(arg, 10);
     return { kind: "close", target: isNaN(num) ? arg : num };
-  }
-
-  // /reset
-  if (cmd === "reset") {
-    if (tokens.length === 1) return { kind: "reset" };
-    return { kind: "reset", path: tokens.slice(1).join(" ").trim() };
   }
 
   // /new ...
