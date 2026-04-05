@@ -35,6 +35,53 @@ export interface ProcessedContent {
   metadata: Record<string, any>;
 }
 
+/**
+ * One NDJSON object from `cursor-agent --output-format stream-json`.
+ * Shape aligned with feishu-cursor-claw `server.ts` StreamEvent.
+ */
+interface CursorStreamJsonEvent {
+  type: string;
+  subtype?: string;
+  session_id?: string;
+  text?: string;
+  result?: string;
+  error?: string;
+  message?: {
+    role: string;
+    content: Array<{ type: string; text?: string }>;
+  };
+  tool_call?: Record<
+    string,
+    {
+      args?: Record<string, unknown>;
+      result?: Record<string, { content?: string }>;
+    }
+  >;
+}
+
+/** Mutable state while scanning stream-json lines (assistant dedupe + tool spacing). */
+interface CursorStreamAccumState {
+  assistantText: string;
+  toolStatusEmitted: boolean;
+  cursorStreamSessionId?: string;
+}
+
+const STREAM_TOOL_LABELS: Record<string, string> = {
+  read: '📖 读取',
+  write: '✏️ 写入',
+  strReplace: '✏️ 编辑',
+  shell: '⚡ 执行',
+  grep: '🔍 搜索',
+  glob: '📂 查找',
+  semanticSearch: '🔎 语义搜索',
+  webSearch: '🌐 搜索网页',
+  webFetch: '🌐 抓取网页',
+  delete: '🗑️ 删除',
+  editNotebook: '📓 编辑笔记本',
+  callMcpTool: '🔌 MCP工具',
+  task: '🤖 子任务',
+};
+
 export class CursorCliBridge {
   private config: AdapterConfig;
   private logger: Logger;
@@ -542,6 +589,181 @@ export class CursorCliBridge {
     return `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
   }
 
+  /** Same idea as feishu-cursor-claw `tryParseJson`: only object lines, trim. */
+  private tryParseStreamJsonLine(line: string): CursorStreamJsonEvent | null {
+    const trimmed = line.trim();
+    if (!trimmed || !trimmed.startsWith('{')) {
+      return null;
+    }
+    try {
+      return JSON.parse(trimmed) as CursorStreamJsonEvent;
+    } catch {
+      return null;
+    }
+  }
+
+  private streamPathBasename(p: string): string {
+    const parts = p.split(/[/\\]/);
+    return parts[parts.length - 1] || p;
+  }
+
+  private describeStreamToolCall(
+    tc: Record<string, { args?: Record<string, unknown> }>,
+  ): string {
+    for (const [key, val] of Object.entries(tc)) {
+      const name = key.replace(/ToolCall$/, '');
+      const label = STREAM_TOOL_LABELS[name] || `🔧 ${name}`;
+      const a = val?.args;
+      if (!a) {
+        return label;
+      }
+      if (a['path']) {
+        return `${label} ${this.streamPathBasename(String(a['path']))}`;
+      }
+      if (a['command']) {
+        return `${label} ${String(a['command']).slice(0, 80)}`;
+      }
+      if (a['pattern']) {
+        return `${label} "${a['pattern']}"${a['path'] ? ` in ${this.streamPathBasename(String(a['path']))}` : ''}`;
+      }
+      if (a['glob_pattern']) {
+        return `${label} ${a['glob_pattern']}`;
+      }
+      if (a['query']) {
+        return `${label} ${String(a['query']).slice(0, 60)}`;
+      }
+      if (a['search_term']) {
+        return `${label} ${String(a['search_term']).slice(0, 60)}`;
+      }
+      if (a['url']) {
+        return `${label} ${String(a['url']).slice(0, 60)}`;
+      }
+      if (a['description']) {
+        return `${label} ${String(a['description']).slice(0, 60)}`;
+      }
+      return label;
+    }
+    return '🔧 工具调用';
+  }
+
+  private describeStreamToolResult(
+    tc: Record<
+      string,
+      {
+        args?: Record<string, unknown>;
+        result?: Record<string, { content?: string }>;
+      }
+    >,
+  ): string {
+    for (const val of Object.values(tc)) {
+      const r = val?.result;
+      if (!r) {
+        return '';
+      }
+      const success = r['success'] as Record<string, unknown> | undefined;
+      if (success?.['content']) {
+        return String(success['content']).slice(0, 200);
+      }
+      const err = r['error'] as Record<string, unknown> | undefined;
+      if (err?.['message']) {
+        return `❌ ${String(err['message']).slice(0, 150)}`;
+      }
+    }
+    return '';
+  }
+
+  /**
+   * Dispatch one parsed stream-json event (feishu-cursor-claw–style switch on `type`).
+   */
+  private async dispatchCursorStreamEvent(
+    ev: CursorStreamJsonEvent,
+    streamState: CursorStreamAccumState,
+    onChunk?: (chunk: StreamChunk) => Promise<void>,
+  ): Promise<void> {
+    if (ev.session_id && !streamState.cursorStreamSessionId) {
+      streamState.cursorStreamSessionId = ev.session_id;
+    }
+
+    switch (ev.type) {
+      case 'thinking':
+        if (ev.text && onChunk) {
+          await onChunk({
+            type: 'content',
+            data: { type: 'text', text: ev.text },
+          });
+        }
+        break;
+
+      case 'assistant': {
+        const blocks = this.extractStreamingContentBlocks(ev, streamState);
+        if (onChunk) {
+          for (const block of blocks) {
+            await onChunk({ type: 'content', data: block });
+          }
+        }
+        break;
+      }
+
+      case 'tool_call':
+        if (ev.tool_call && onChunk) {
+          if (ev.subtype === 'started') {
+            const desc = this.describeStreamToolCall(ev.tool_call);
+            const prefix = streamState.toolStatusEmitted ? '\n' : '';
+            streamState.toolStatusEmitted = true;
+            await onChunk({
+              type: 'content',
+              data: { type: 'text', text: `${prefix}${desc}` },
+            });
+          } else if (ev.subtype === 'completed') {
+            const brief = this.describeStreamToolResult(ev.tool_call);
+            if (brief) {
+              const oneLiner = brief
+                .split('\n')
+                .filter((l) => l.trim())
+                .slice(0, 2)
+                .join(' | ');
+              await onChunk({
+                type: 'content',
+                data: {
+                  type: 'text',
+                  text: `  → ${oneLiner.slice(0, 120)}`,
+                },
+              });
+            }
+          }
+        }
+        break;
+
+      case 'result':
+        if (onChunk) {
+          if (ev.result != null && typeof ev.result === 'string') {
+            const text = this.normalizeStreamingAssistantText(
+              ev.result,
+              streamState,
+            );
+            if (text) {
+              await onChunk({
+                type: 'content',
+                data: { type: 'text', text },
+              });
+            }
+          }
+          if (ev.subtype === 'error' && ev.error) {
+            await onChunk({
+              type: 'content',
+              data: { type: 'text', text: ev.error },
+            });
+          }
+        }
+        break;
+
+      default:
+        this.logger.debug('Unrecognized stream-json event type', {
+          type: ev.type,
+        });
+    }
+  }
+
   private normalizeStreamingAssistantText(
     text: string,
     state: { assistantText: string }
@@ -836,53 +1058,28 @@ export class CursorCliBridge {
       let responseContent = '';
       let processedChunks = 0;
       let streamBuffer = '';
-      const streamState = { assistantText: '' };
+      const streamState: CursorStreamAccumState = {
+        assistantText: '',
+        toolStatusEmitted: false,
+      };
 
       const processStreamLine = async (rawLine: string) => {
-        const line = rawLine.trim();
-        if (!line) {
+        const ev = this.tryParseStreamJsonLine(rawLine);
+        if (!ev) {
+          const preview = rawLine.trim().slice(0, 120);
+          if (preview) {
+            this.logger.debug('Skipping non-stream-json line', { preview });
+          }
           return;
         }
         processedChunks++;
-        try {
-          const jsonChunk = JSON.parse(line) as unknown;
-          const contentBlocks = this.extractStreamingContentBlocks(
-            jsonChunk,
-            streamState
-          );
-          if (onChunk) {
-            for (const contentBlock of contentBlocks) {
-              await onChunk({
-                type: 'content',
-                data: contentBlock,
-              });
-            }
-          }
-        } catch (error) {
-          this.logger.debug(
-            'Failed to parse stream-json line, forwarding as text',
-            {
-              error: error instanceof Error ? error.message : String(error),
-              linePreview: line.substring(0, 160),
-            }
-          );
-          const text = this.normalizeStreamingAssistantText(line, streamState);
-          if (!text) {
-            return;
-          }
-          if (onChunk) {
-            await onChunk({
-              type: 'content',
-              data: text,
-            });
-          }
-        }
+        await this.dispatchCursorStreamEvent(ev, streamState, onChunk);
         if (onProgress) {
           onProgress({
             step: 'streaming',
             current: processedChunks,
             progress: processedChunks,
-            message: `Received chunk ${processedChunks}`,
+            message: `Received stream event ${processedChunks} (${ev.type})`,
           });
         }
       };
@@ -933,6 +1130,9 @@ export class CursorCliBridge {
           contentLength: content.value.length,
           chunks: processedChunks,
           streaming: true,
+          ...(streamState.cursorStreamSessionId && {
+            cursorStreamSessionId: streamState.cursorStreamSessionId,
+          }),
         },
       };
     } catch (error) {
