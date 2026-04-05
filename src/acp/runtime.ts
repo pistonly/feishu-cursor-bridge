@@ -11,7 +11,7 @@ import type {
 import { SdkAcpRuntimeBase } from "./sdk-runtime-base.js";
 
 /**
- * 上游 @blowmage/cursor-agent-acp 在 `session/prompt` 链路里识别 `stream` 开关，走
+ * 上游 legacy 适配器在 `session/prompt` 链路里识别 `stream` 开关，走
  * cursor-agent `stream-json` + `--stream-partial-output`。但官方 SDK 的 PromptRequest
  * schema 不包含顶层 `stream`，Agent 侧校验会把未知键剥掉；因此桥接把该标记放进 `_meta.stream`
  *（并保留顶层 `stream` 以兼容未做 schema 剥离的实现）。
@@ -51,7 +51,7 @@ export function resolveAdapterSessionTimeoutMs(config: Config): string {
 }
 
 /**
- * 子进程运行 @blowmage/cursor-agent-acp，通过官方 SDK ClientSideConnection 对接标准 ACP stdio。
+ * 子进程运行本仓库 cursor-agent-acp 适配器，通过官方 SDK ClientSideConnection 对接标准 ACP stdio。
  */
 export class AcpRuntime extends SdkAcpRuntimeBase {
   readonly backend = "legacy" as const;

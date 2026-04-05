@@ -219,7 +219,7 @@ Proxy precedence: `wss_proxy` / `ws_proxy` > `https_proxy` / `http_proxy` / `all
 
 ## 这是什么
 
-独立服务，通过飞书机器人控制 Cursor AI Agent。桥接进程作为 **ACP Client**，默认子进程运行 Cursor 官方 **`agent acp`**；同时保留 `ACP_BACKEND=legacy` 回滚到 **`@blowmage/cursor-agent-acp`** 的能力，便于紧急兜底。
+独立服务，通过飞书机器人控制 Cursor AI Agent。桥接进程作为 **ACP Client**，默认子进程运行 Cursor 官方 **`agent acp`**；同时保留 `ACP_BACKEND=legacy` 使用本仓库 **`packages/cursor-agent-acp`**（源自 [@blowmage/cursor-agent-acp](https://www.npmjs.com/package/@blowmage/cursor-agent-acp)）的能力，便于紧急兜底与定制。
 
 ## 功能特性
 
@@ -418,7 +418,7 @@ docker-compose -f docker/compose.yaml run --rm tmux-acp-cancel-smoke
 ## 技术栈
 
 - **Cursor `agent acp`** — 默认 ACP 服务端
-- **[@blowmage/cursor-agent-acp](https://www.npmjs.com/package/@blowmage/cursor-agent-acp)** — legacy 回滚后端
+- **`packages/cursor-agent-acp`** — legacy 适配器源码（随仓库维护；上游 [npm](https://www.npmjs.com/package/@blowmage/cursor-agent-acp)）
 - **[@agentclientprotocol/sdk](https://www.npmjs.com/package/@agentclientprotocol/sdk)** — 官方 ACP Client 连接与类型
 - **@larksuiteoapi/node-sdk** — 飞书长连接与消息 API
 - **TypeScript + Node.js**

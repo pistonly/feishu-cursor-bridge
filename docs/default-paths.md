@@ -14,7 +14,7 @@
 | 飞书 ↔ ACP 会话映射持久化 JSON | `BRIDGE_SESSION_STORE` | `~/.feishu-cursor-bridge/.feishu-bridge-sessions.json` |
 | `/new list`、`/new <序号>` 使用的快捷工作区列表 JSON | `CURSOR_WORK_PRESETS_FILE` | `~/.feishu-cursor-bridge/workspace-presets.json` |
 | 快捷列表为空时的种子路径（仅首次初始化） | `CURSOR_WORK_PRESETS` | 无默认；不设置则不从环境变量注入种子 |
-| `cursor-agent-acp` 入口脚本（仅 `legacy`） | `CURSOR_ACP_ADAPTER_ENTRY` | 包内解析：`node_modules/@blowmage/cursor-agent-acp/dist/bin/cursor-agent-acp.js`（通过 `require.resolve` 定位包目录） |
+| `cursor-agent-acp` 入口脚本（仅 `legacy`） | `CURSOR_ACP_ADAPTER_ENTRY` | 包内解析：`node_modules/@feishu-cursor-bridge/cursor-agent-acp/dist/bin/cursor-agent-acp.js`（`npm install` 后由 `postinstall` 构建 `dist/`；通过 `require.resolve` 定位） |
 | 启动 legacy 适配器用的 Node 可执行文件 | `ACP_NODE_PATH` | 当前进程的 Node（`process.execPath`） |
 
 ## 分条说明
@@ -53,7 +53,7 @@
 
 ### 适配器入口与 Node `CURSOR_ACP_ADAPTER_ENTRY` / `ACP_NODE_PATH`
 
-- **适配器脚本默认路径**：仅在 `ACP_BACKEND=legacy` 时，从已安装的 `@blowmage/cursor-agent-acp` 包目录解析出 `dist/bin/cursor-agent-acp.js`（实现见 `src/acp/paths.ts`）。
+- **适配器脚本默认路径**：仅在 `ACP_BACKEND=legacy` 时，从本仓库 workspace 包 `@feishu-cursor-bridge/cursor-agent-acp` 解析出 `dist/bin/cursor-agent-acp.js`（实现见 `src/acp/paths.ts`；克隆后需 `npm install` 以触发构建）。
 - **Node 默认**：当前运行桥接进程的 Node 可执行文件路径，仅用于启动 legacy 适配器。
 
 ## 与 README 的关系

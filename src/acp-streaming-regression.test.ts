@@ -27,7 +27,7 @@ type CursorCliBridgeConstructor = new (
 ) => TestCursorCliBridge;
 
 const { CursorCliBridge } = require(
-  "@blowmage/cursor-agent-acp/dist/cursor/cli-bridge.js",
+  "@feishu-cursor-bridge/cursor-agent-acp/dist/cursor/cli-bridge.js",
 ) as {
   CursorCliBridge: CursorCliBridgeConstructor;
 };

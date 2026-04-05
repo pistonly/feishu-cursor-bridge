@@ -4,9 +4,11 @@ import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
 
-/** 解析已安装的 @blowmage/cursor-agent-acp CLI 脚本路径 */
+/** 解析本仓库 packages/cursor-agent-acp 构建产物的 CLI 入口 */
 export function resolveBundledAdapterEntry(): string {
-  const pkgJson = require.resolve("@blowmage/cursor-agent-acp/package.json");
+  const pkgJson = require.resolve(
+    "@feishu-cursor-bridge/cursor-agent-acp/package.json",
+  );
   return path.join(path.dirname(pkgJson), "dist", "bin", "cursor-agent-acp.js");
 }
 

@@ -14,7 +14,7 @@ export interface Config {
     appSecret: string;
     domain: string;
   };
-  /** 上游 @blowmage/cursor-agent-acp 子进程与工作区 */
+  /** 上游 legacy 适配器（本仓库 packages/cursor-agent-acp）子进程与工作区 */
   acp: {
     backend: AcpBackend;
     nodePath: string;
