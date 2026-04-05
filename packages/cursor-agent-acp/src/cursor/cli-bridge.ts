@@ -686,10 +686,22 @@ export class CursorCliBridge {
 
     switch (ev.type) {
       case 'thinking':
-        if (ev.text && onChunk) {
+        // Cursor CLI repeats the same status line with growing "(Ns)" timers; forwarding
+        // each event makes Feishu show a long useless English blob. Claw keeps thinking
+        // for progress UI only, not as final user-visible transcript.
+        if (
+          String(process.env['ACP_ADAPTER_FORWARD_STREAM_THINKING'] || '')
+            .toLowerCase() === 'true' &&
+          ev.text &&
+          onChunk
+        ) {
           await onChunk({
             type: 'content',
             data: { type: 'text', text: ev.text },
+          });
+        } else if (ev.text) {
+          this.logger.debug('stream-json thinking (not forwarded to client)', {
+            preview: ev.text.slice(0, 120),
           });
         }
         break;

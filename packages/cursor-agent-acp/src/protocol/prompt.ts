@@ -787,47 +787,21 @@ export class PromptHandler {
         this.sessionManager.markSessionProcessing(sessionId);
 
         let heartbeatCount = 0;
-        const processingText = this.getRandomProcessingText();
+        /**
+         * Optional English "processing" quips every 12s as agent_thought_chunk.
+         * Feishu bridge *appends* each chunk into the card 「思考」 section, so this
+         * becomes a long repetitive blob (e.g. "Teaching... (12s)(24s)...").
+         * Enable only for clients that want Zed-style liveness text.
+         */
+        const thoughtHeartbeatEnabled =
+          String(process.env['ACP_ADAPTER_THOUGHT_HEARTBEAT'] || '')
+            .toLowerCase() === 'true';
 
-        // Send initial thought chunk to indicate processing has started
-        // Per ACP spec: agent_thought_chunk is for progress updates
-        this.sendNotification({
-          jsonrpc: '2.0',
-          method: 'session/update',
-          params: {
-            sessionId: promptParams.sessionId,
-            update: {
-              sessionUpdate: 'agent_thought_chunk',
-              content: {
-                type: 'text',
-                text: processingText,
-              },
-            },
-          },
-        });
+        let heartbeatInterval: ReturnType<typeof setInterval> | undefined;
 
-        // Set up periodic heartbeat to keep client aware of ongoing activity
-        // Sends agent_thought_chunk progress messages every 12 seconds
-        // Also updates session activity to prevent expiration during long-running operations
-        const heartbeatInterval = setInterval(async () => {
-          heartbeatCount++;
-          const elapsed = heartbeatCount * 12;
+        if (thoughtHeartbeatEnabled) {
+          const processingText = this.getRandomProcessingText();
 
-          // Update session activity to prevent expiration during processing
-          try {
-            // Touch the session to update lastActivity without changing metadata
-            await this.sessionManager.updateSession(sessionId, {});
-          } catch (error) {
-            // If session no longer exists, stop heartbeat
-            this.logger.warn('Session not found during heartbeat', {
-              sessionId,
-              error: error instanceof Error ? error.message : String(error),
-            });
-            clearInterval(heartbeatInterval);
-            return;
-          }
-
-          // Send progress update via agent_thought_chunk with enhanced metadata
           this.sendNotification({
             jsonrpc: '2.0',
             method: 'session/update',
@@ -837,19 +811,50 @@ export class PromptHandler {
                 sessionUpdate: 'agent_thought_chunk',
                 content: {
                   type: 'text',
-                  text: `${processingText} (${elapsed}s)`,
-                  annotations: {
-                    _meta: {
-                      heartbeat: true,
-                      elapsedSeconds: elapsed,
-                      heartbeatNumber: heartbeatCount,
-                    },
-                  },
+                  text: processingText,
                 },
               },
             },
           });
-        }, 12000); // 12 seconds
+
+          heartbeatInterval = setInterval(async () => {
+            heartbeatCount++;
+            const elapsed = heartbeatCount * 12;
+
+            try {
+              await this.sessionManager.updateSession(sessionId, {});
+            } catch (error) {
+              this.logger.warn('Session not found during heartbeat', {
+                sessionId,
+                error: error instanceof Error ? error.message : String(error),
+              });
+              clearInterval(heartbeatInterval);
+              return;
+            }
+
+            this.sendNotification({
+              jsonrpc: '2.0',
+              method: 'session/update',
+              params: {
+                sessionId: promptParams.sessionId,
+                update: {
+                  sessionUpdate: 'agent_thought_chunk',
+                  content: {
+                    type: 'text',
+                    text: `${processingText} (${elapsed}s)`,
+                    annotations: {
+                      _meta: {
+                        heartbeat: true,
+                        elapsedSeconds: elapsed,
+                        heartbeatNumber: heartbeatCount,
+                      },
+                    },
+                  },
+                },
+              },
+            });
+          }, 12000);
+        }
 
         try {
           // Process and AWAIT completion to get stopReason and metadata
@@ -953,8 +958,9 @@ export class PromptHandler {
           });
           throw error;
         } finally {
-          // Always clear the heartbeat interval
-          clearInterval(heartbeatInterval);
+          if (heartbeatInterval) {
+            clearInterval(heartbeatInterval);
+          }
           // Always unmark session as processing
           this.sessionManager.unmarkSessionProcessing(sessionId);
         }
