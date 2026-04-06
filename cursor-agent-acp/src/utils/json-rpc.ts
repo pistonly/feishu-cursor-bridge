@@ -99,10 +99,10 @@ export function validateObjectParams(
  * Creates a JSON-RPC 2.0 error response
  *
  * Uses SDK's Result type structure for type safety and consistency with ACP specification.
- * Note: We use RequestId (null | bigint | string) instead of AnyResponse.id (string | number | null)
+ * Note: We use RequestId (null | number | string) instead of AnyResponse.id (string | number | null)
  * to match ACP SDK types.
  *
- * @param id - The request ID (per ACP SDK: null | bigint | string)
+ * @param id - The request ID (per ACP SDK: null | number | string)
  * @param error - The error object (ACP Error type)
  * @returns JSON-RPC error response with ACP-compliant RequestId
  */
@@ -122,20 +122,19 @@ export function createErrorResponse(
 }
 
 /**
- * Converts a request ID from AnyRequest format (string | number | null) to RequestId (null | bigint | string)
+ * Converts a request ID from AnyRequest format (string | number | null) to RequestId (null | number | string)
  * Per JSON-RPC 2.0 spec, request IDs can be string, number, or null
- * Per ACP SDK, RequestId is null | bigint | string
+ * Per ACP SDK, RequestId is null | number | string
  *
- * This function bridges the gap between AnyRequest.id (which uses number) and RequestId (which uses bigint).
- * Numeric IDs are converted to bigint; fractional numeric IDs are truncated to their integer part before
- * conversion, and a warning is logged to make this behavior explicit.
+ * Numeric IDs are returned as finite integers; fractional numeric IDs are truncated to their integer part,
+ * and a warning is logged to make this behavior explicit.
  */
 export function toRequestId(id: string | number | null | undefined): RequestId {
   if (id === null || id === undefined) {
     return null;
   }
   if (typeof id === 'number') {
-    // Validate numeric ID before converting to bigint to avoid silent, surprising behavior.
+    // Validate numeric ID before normalizing to an integer RequestId.
     if (!Number.isFinite(id)) {
       throw new TypeError(
         'JSON-RPC request id must be a finite number when provided as a numeric value.'
@@ -147,12 +146,11 @@ export function toRequestId(id: string | number | null | undefined): RequestId {
       // so that this potentially surprising behavior is visible at runtime.
 
       console.warn(
-        `Fractional JSON-RPC request id '${id}' received; truncating to integer part before bigint conversion.`
+        `Fractional JSON-RPC request id '${id}' received; truncating to integer part.`
       );
     }
 
-    const truncated = Math.trunc(id);
-    return BigInt(truncated);
+    return Math.trunc(id);
   }
   return id;
 }
@@ -161,10 +159,10 @@ export function toRequestId(id: string | number | null | undefined): RequestId {
  * Creates a JSON-RPC 2.0 success response
  *
  * Uses SDK's Result type structure for type safety and consistency with ACP specification.
- * Note: We use RequestId (null | bigint | string) instead of AnyResponse.id (string | number | null)
+ * Note: We use RequestId (null | number | string) instead of AnyResponse.id (string | number | null)
  * to match ACP SDK types.
  *
- * @param id - The request ID (per ACP SDK: null | bigint | string)
+ * @param id - The request ID (per ACP SDK: null | number | string)
  * @param result - The result object
  * @returns JSON-RPC success response with ACP-compliant RequestId, conforming to Result<T> structure
  */

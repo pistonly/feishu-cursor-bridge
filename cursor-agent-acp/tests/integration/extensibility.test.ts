@@ -536,7 +536,7 @@ describe('Extensibility Integration', () => {
       });
 
       expect(response.jsonrpc).toBe('2.0');
-      expect(response.id).toBe(1n);
+      expect(response.id).toBe(1);
       expect(response.error).toBeDefined();
       expect(response.error?.code).toBe(-32601);
       expect(response.error?.message).toBeDefined();

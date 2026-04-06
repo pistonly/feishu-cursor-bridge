@@ -315,18 +315,7 @@ export class ContentProcessor {
       value += `Type: ${block.mimeType}\n`;
     }
     if (block.size !== undefined && block.size !== null) {
-      if (typeof block.size === 'bigint') {
-        const maxSafe = BigInt(Number.MAX_SAFE_INTEGER);
-        const minSafe = BigInt(Number.MIN_SAFE_INTEGER);
-        if (block.size <= maxSafe && block.size >= minSafe) {
-          value += `Size: ${this.formatDataSize(Number(block.size))}\n`;
-        } else {
-          // Avoid precision loss by not converting very large bigint to number
-          value += `Size: ${block.size.toString()} bytes\n`;
-        }
-      } else {
-        value += `Size: ${this.formatDataSize(block.size)}\n`;
-      }
+      value += `Size: ${this.formatDataSize(block.size)}\n`;
     }
 
     return {
@@ -1055,14 +1044,12 @@ export class ContentProcessor {
         ) {
           errors.push(`Block ${index}: mimeType must be a string or null`);
         }
-        // Per ACP SDK: size is bigint | null (not number)
         if (
           block.size !== undefined &&
           block.size !== null &&
-          typeof block.size !== 'bigint' &&
-          typeof block.size !== 'number' // Accept number for backwards compatibility
+          (typeof block.size !== 'number' || !Number.isFinite(block.size))
         ) {
-          errors.push(`Block ${index}: size must be a bigint or null`);
+          errors.push(`Block ${index}: size must be a finite number or null`);
         }
         break;
       default:

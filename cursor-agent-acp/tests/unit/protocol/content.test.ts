@@ -712,7 +712,7 @@ That should work!`;
             type: 'resource_link',
             uri: 'https://example.com',
             name: 'Example',
-            size: '100', // ❌ Should be bigint per ACP SDK
+            size: '100', // ❌ Should be number per ACP SDK
           },
         ];
 
@@ -720,7 +720,7 @@ That should work!`;
 
         expect(result.valid).toBe(false);
         expect(result.errors).toContain(
-          'Block 0: size must be a bigint or null'
+          'Block 0: size must be a finite number or null'
         );
       });
 

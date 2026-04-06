@@ -442,41 +442,37 @@ export class TerminalManager {
    * @returns The validated output byte limit (may be capped to maximum)
    * @throws ToolError if requested limit is negative
    */
-  private validateOutputByteLimit(
-    requested?: number | bigint
-  ): bigint | undefined {
-    // If not requested, use default
+  private validateOutputByteLimit(requested?: number): number | undefined {
     if (requested === undefined) {
-      return this.config.defaultOutputByteLimit !== undefined
-        ? BigInt(this.config.defaultOutputByteLimit)
-        : undefined;
+      return this.config.defaultOutputByteLimit;
     }
 
-    // Convert to bigint if needed
-    const requestedBigInt =
-      typeof requested === 'bigint' ? requested : BigInt(requested);
+    if (!Number.isFinite(requested) || !Number.isInteger(requested)) {
+      throw new ToolError(
+        'Output byte limit must be a finite non-negative integer',
+        'terminal'
+      );
+    }
 
-    // Validate it's a positive number
-    if (requestedBigInt < 0n) {
+    if (requested < 0) {
       throw new ToolError(
         'Output byte limit must be a positive number',
         'terminal'
       );
     }
 
-    // Apply maximum limit if configured
     if (
       this.config.maxOutputByteLimit !== undefined &&
-      requestedBigInt > BigInt(this.config.maxOutputByteLimit)
+      requested > this.config.maxOutputByteLimit
     ) {
       this.logger.warn('Output byte limit capped to maximum', {
-        requested: requestedBigInt.toString(),
+        requested,
         max: this.config.maxOutputByteLimit,
       });
-      return BigInt(this.config.maxOutputByteLimit);
+      return this.config.maxOutputByteLimit;
     }
 
-    return requestedBigInt;
+    return requested;
   }
 
   /**
