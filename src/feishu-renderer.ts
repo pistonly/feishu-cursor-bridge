@@ -1,5 +1,6 @@
 import type { ToolKind } from "@agentclientprotocol/sdk";
 import type { BridgeAcpEvent } from "./acp/types.js";
+import { stripFeishuSendFileDirectives } from "./feishu-send-file.js";
 import { emojiForToolKind } from "./tool-kind-emoji.js";
 
 /**
@@ -180,6 +181,20 @@ export class FeishuCardState {
       .join("");
   }
 
+  /**
+   * 从正文时间线里去掉 `FEISHU_SEND_FILE:` 指令行，返回待发送的原始路径列表（相对或绝对，由上层结合 workspace 解析）。
+   */
+  extractAndStripFeishuSendFileDirectives(): string[] {
+    const paths: string[] = [];
+    for (const e of this.timeline) {
+      if (e.k !== "main") continue;
+      const { cleaned, rawPaths } = stripFeishuSendFileDirectives(e.text);
+      e.text = cleaned;
+      paths.push(...rawPaths);
+    }
+    return paths;
+  }
+
   setMainText(text: string): void {
     this.timeline = [{ k: "main", text }];
   }
@@ -206,27 +221,20 @@ export class FeishuCardState {
     const sections = this.buildSections(opts);
     const chunks: string[] = [];
     let current = "";
-    /** 仅禁止「紧挨着的两个工具区块」合并；时间线里可出现 工具→回答→工具，中间有回答时仍应能落在同一张卡片。 */
-    let lastMergedKind: RenderSection["kind"] | undefined;
 
     for (const section of sections) {
       if (!section.markdown) continue;
       if (!current) {
         current = section.markdown;
-        lastMergedKind = section.kind;
         continue;
       }
       const next = `${current}\n\n${section.markdown}`;
-      const consecutiveToolBlocks =
-        section.kind === "tool" && lastMergedKind === "tool";
-      if (!consecutiveToolBlocks && next.length <= opts.maxMarkdownLength) {
+      if (next.length <= opts.maxMarkdownLength) {
         current = next;
-        lastMergedKind = section.kind;
         continue;
       }
       chunks.push(current);
       current = section.markdown;
-      lastMergedKind = section.kind;
     }
 
     if (current) chunks.push(current);

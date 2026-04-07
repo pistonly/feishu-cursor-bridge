@@ -1,6 +1,13 @@
 import { EventEmitter } from "node:events";
+import * as fs from "node:fs";
+import * as fsp from "node:fs/promises";
+import * as path from "node:path";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { HttpsProxyAgent } from "https-proxy-agent";
+import {
+  FEISHU_IM_FILE_MAX_BYTES,
+  feishuImFileTypeForPath,
+} from "./feishu-send-file.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -452,6 +459,70 @@ export class FeishuBot extends EventEmitter {
         receive_id: chatId,
         msg_type: "post",
         content: payload,
+      },
+    });
+    return res.data?.message_id ?? "";
+  }
+
+  /**
+   * 上传本地文件并发送飞书「文件」类消息（需机器人能力、单文件 ≤30MB）。
+   * @returns 最后一条消息 id
+   */
+  async uploadAndSendLocalFile(
+    absFilePath: string,
+    chatId: string,
+    replyToMessageId?: string,
+    opts?: FeishuSendReplyOptions,
+  ): Promise<string> {
+    const st = await fsp.stat(absFilePath);
+    if (!st.isFile()) {
+      throw new Error(`不是常规文件: ${absFilePath}`);
+    }
+    if (st.size === 0) {
+      throw new Error("飞书不允许上传空文件");
+    }
+    if (st.size > FEISHU_IM_FILE_MAX_BYTES) {
+      throw new Error(
+        `文件超过飞书限制 (${FEISHU_IM_FILE_MAX_BYTES} 字节): ${absFilePath}`,
+      );
+    }
+
+    const fileName = path.basename(absFilePath);
+    const file_type = feishuImFileTypeForPath(absFilePath);
+    const upload = await this.client.im.file.create({
+      data: {
+        file_type,
+        file_name: fileName,
+        file: fs.createReadStream(absFilePath),
+      },
+    });
+    const u = upload as { file_key?: string; data?: { file_key?: string } } | null;
+    const fileKey = u?.file_key ?? u?.data?.file_key;
+    if (!fileKey) {
+      throw new Error("im.file.create 未返回 file_key");
+    }
+
+    const content = JSON.stringify({ file_key: fileKey });
+    const replyInThread = opts?.replyInThread === true;
+
+    if (replyToMessageId) {
+      const res = await this.client.im.message.reply({
+        path: { message_id: replyToMessageId },
+        data: {
+          msg_type: "file",
+          content,
+          ...(replyInThread ? { reply_in_thread: true } : {}),
+        },
+      });
+      return res.data?.message_id ?? "";
+    }
+
+    const res = await this.client.im.message.create({
+      params: { receive_id_type: "chat_id" },
+      data: {
+        receive_id: chatId,
+        msg_type: "file",
+        content,
       },
     });
     return res.data?.message_id ?? "";

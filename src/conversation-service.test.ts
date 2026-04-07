@@ -237,7 +237,7 @@ test("ConversationService 飞书 markdown 按 ACP 到达顺序排列思考与回
   assert.ok(a2 < b2, "先到的回答应排在思考前");
 });
 
-test("ConversationService 会在工具累计超过阈值后再拆成多张卡片", async () => {
+test("ConversationService 工具数超过 maxTools 时分段渲染但仍可合并为单张卡片", async () => {
   const events: BridgeAcpEvent[] = [];
   for (let i = 1; i <= 9; i += 1) {
     events.push({
@@ -252,12 +252,38 @@ test("ConversationService 会在工具累计超过阈值后再拆成多张卡片
   const { service, sendCardCalls, updateCardCalls } = createHarness(events);
   const reply = await service.handleUserPrompt(createMessage(), createSession());
 
-  assert.equal(sendCardCalls.length, 2);
-  assert.equal(sendCardCalls[1]?.content.includes("工具 9"), true);
-  assert.equal(updateCardCalls.some((call) => call.id === "card-2"), true);
+  assert.equal(sendCardCalls.length, 1);
+  assert.equal(updateCardCalls.every((call) => call.id === "card-1"), true);
   assert.match(reply ?? "", /🔧 工具 1 — pending/);
   assert.match(reply ?? "", /🔧 工具 8 — pending/);
   assert.match(reply ?? "", /🔧 工具 9 — pending/);
+});
+
+test("ConversationService 连续工具块合并后若超长仍会拆成多张卡片", async () => {
+  const longTitle = "x".repeat(80);
+  const events: BridgeAcpEvent[] = [];
+  for (let i = 1; i <= 12; i += 1) {
+    events.push({
+      type: "tool_call",
+      sessionId: "session-1",
+      toolCallId: `tool-${i}`,
+      title: `${longTitle}-${i}`,
+      status: "pending",
+    });
+  }
+
+  const { service, sendCardCalls } = createHarness(events, {
+    cardSplitMarkdownThreshold: 400,
+    cardSplitToolThreshold: 8,
+  });
+  const reply = await service.handleUserPrompt(createMessage(), createSession());
+
+  assert.ok(
+    sendCardCalls.length >= 2,
+    "合并后总 markdown 超过阈值时应拆成多条飞书消息",
+  );
+  assert.match(reply ?? "", new RegExp(`${longTitle}-1`));
+  assert.match(reply ?? "", new RegExp(`${longTitle}-12`));
 });
 
 test("ConversationService 在长回答拆卡时仍保留完整 reply 内容", async () => {

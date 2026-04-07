@@ -1,4 +1,6 @@
+import * as path from "node:path";
 import type { Config } from "./config.js";
+import { assertPathInWorkspace } from "./acp/fs-sandbox.js";
 import type { BridgeAcpEvent } from "./acp/types.js";
 import type { BridgeAcpRuntime } from "./acp/runtime-contract.js";
 import { FeishuBot, type FeishuMessage } from "./feishu-bot.js";
@@ -196,6 +198,44 @@ export class ConversationService {
 
       syncRenderedCards(true, "[conversation] syncRenderedCards failed");
       await awaitPatchChain();
+
+      const filePathsRaw = state.extractAndStripFeishuSendFileDirectives();
+      if (filePathsRaw.length > 0) {
+        syncRenderedCards(true, "[conversation] sync after strip FEISHU_SEND_FILE");
+        await awaitPatchChain();
+        const root = session.workspaceRoot;
+        for (const raw of filePathsRaw) {
+          try {
+            const candidate = path.isAbsolute(raw)
+              ? raw
+              : path.resolve(root, raw);
+            const abs = assertPathInWorkspace(root, candidate);
+            await this.feishu.uploadAndSendLocalFile(
+              abs,
+              msg.chatId,
+              msg.messageId,
+              replyOpts,
+            );
+          } catch (err) {
+            console.warn(
+              `[conversation] FEISHU_SEND_FILE failed path=${raw} sessionId=${session.sessionId}`,
+              err instanceof Error ? err.message : err,
+            );
+            try {
+              await this.feishu.sendText(
+                msg.chatId,
+                `⚠️ 未能发送文件 \`${raw}\`：${
+                  err instanceof Error ? err.message : String(err)
+                }`,
+                msg.messageId,
+                replyOpts,
+              );
+            } catch {
+              /* ignore */
+            }
+          }
+        }
+      }
 
       const elapsedMs = Date.now() - startedAt;
       if (

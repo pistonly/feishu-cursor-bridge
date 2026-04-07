@@ -58,6 +58,12 @@ export class Bridge {
 
   constructor(config: Config) {
     this.config = config;
+    this.feishuBot = new FeishuBot({
+      appId: config.feishu.appId,
+      appSecret: config.feishu.appSecret,
+      domain: config.feishu.domain,
+      bridgeDebug: config.bridgeDebug,
+    });
     this.bridgeClient = new FeishuBridgeClient(config);
     this.acpRuntime = createAcpRuntime(config, this.bridgeClient);
     this.sessionStore = new SessionStore(config.bridge.sessionStorePath);
@@ -80,12 +86,6 @@ export class Bridge {
         },
       },
     );
-    this.feishuBot = new FeishuBot({
-      appId: config.feishu.appId,
-      appSecret: config.feishu.appSecret,
-      domain: config.feishu.domain,
-      bridgeDebug: config.bridgeDebug,
-    });
     this.conversation = new ConversationService(
       config,
       this.acpRuntime,
