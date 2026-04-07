@@ -8,7 +8,10 @@ import type { BridgeAcpRuntime } from "./acp/runtime-contract.js";
 import { FeishuBridgeClient } from "./acp/feishu-bridge-client.js";
 import { formatJsonRpcLikeError } from "./format-json-rpc-error.js";
 import { FeishuBot, type FeishuMessage } from "./feishu-bot.js";
-import { parseNewConversationCommand } from "./parse-new-conversation.js";
+import {
+  matchesInterruptUserCommand,
+  parseNewConversationCommand,
+} from "./parse-new-conversation.js";
 import { SessionManager, type SessionSlot } from "./session-manager.js";
 import { SessionStore } from "./session-store.js";
 import { ConversationService } from "./conversation-service.js";
@@ -25,6 +28,11 @@ import {
   formatModeUsage,
   resolveSessionModeInput,
 } from "./mode-switch.js";
+import {
+  parseSendfileUserMessage,
+  SENDFILE_USAGE_TEXT,
+  wrapSendfilePromptForAgent,
+} from "./sendfile-command.js";
 
 /** 无活跃 session 时，普通对话与部分命令的统一提示 */
 const NO_SESSION_HINT =
@@ -289,6 +297,20 @@ export class Bridge {
     }
 
     if (!content) return;
+
+    const sendfileParsed = parseSendfileUserMessage(content);
+    if (sendfileParsed.kind === "usage") {
+      await this.feishuBot.sendText(
+        msg.chatId,
+        SENDFILE_USAGE_TEXT,
+        msg.messageId,
+        this.threadReplyOpts(msg),
+      );
+      return;
+    }
+    if (sendfileParsed.kind === "prompt") {
+      content = wrapSendfilePromptForAgent(sendfileParsed.inner);
+    }
 
     const newConv = parseNewConversationCommand(content);
     const bridgeManagedCommand =
@@ -934,6 +956,57 @@ export class Bridge {
       return;
     }
 
+    if (matchesInterruptUserCommand(content)) {
+      const snap = this.sessionManager.getSessionSnapshot(
+        msg.chatId,
+        msg.senderId,
+        msg.chatType,
+        this.threadScope(msg),
+      );
+      if (!snap) {
+        await this.feishuBot.sendText(
+          msg.chatId,
+          NO_SESSION_HINT,
+          msg.messageId,
+          this.threadReplyOpts(msg),
+        );
+        return;
+      }
+      const sessionKey = snap.sessionKey;
+      const active = snap.activeSlot;
+      const promptKey = `${sessionKey}:${active.slotIndex}`;
+      if (!this.activePrompts.has(promptKey)) {
+        await this.feishuBot.sendText(
+          msg.chatId,
+          "ℹ️ 当前活跃 session 没有正在生成的回复。其它槽位若在生成，请先 `/switch` 到该槽位再发 `/stop`。",
+          msg.messageId,
+          this.threadReplyOpts(msg),
+        );
+        return;
+      }
+      await this.flushPendingSessionNotices(msg);
+      const errors: string[] = [];
+      try {
+        await this.acpRuntime.cancelSession(active.session.sessionId);
+      } catch (e) {
+        errors.push(
+          `#${active.slotIndex}: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+      const label = `#${active.slotIndex}${active.name ? ` (${active.name})` : ""}`;
+      let body = `✅ 已向进行中的任务发送中断请求（${label}），效果与在 Cursor / Cursor Agent 侧中断本轮生成类似；session 仍保留，可继续对话。`;
+      if (errors.length > 0) {
+        body += `\n\n⚠️ 中断失败：\n${errors.join("\n")}`;
+      }
+      await this.feishuBot.sendText(
+        msg.chatId,
+        body,
+        msg.messageId,
+        this.threadReplyOpts(msg),
+      );
+      return;
+    }
+
     // Prompt key is scoped to the active slot so different slots can run in parallel,
     // but the same slot is still serialized.
     const sessionKey = this.feishuSessionKey(msg);
@@ -1043,7 +1116,7 @@ export class Bridge {
     });
     await this.feishuBot.sendText(
       msg.chatId,
-      `📋 当前所有 session（共 ${slots.length} 个；# 为槽位编号，关闭后不会复用，故可能与数量连续不一致）：\n\n${lines.join("\n\n")}\n\n• \`/new list\` / \`/new <序号>\` / \`/new <路径>\` — 新建 session\n• \`/switch <编号或名称>\` — 切换\n• \`/reply [编号或名称]\` — 重发上一轮缓存回复\n• \`/resume\` — 对当前 session 执行 ACP \`session/load\`（测试/恢复）\n• \`/mode <模式ID>\` — 切换当前 session 模式\n• \`/rename <新名字>\` — 重命名当前 session\n• \`/rename <编号或名称> <新名字>\` — 重命名指定 session\n• \`/close <编号或名称>\` — 关闭\n• \`/close all\` — 关闭本组全部\n• \`/topic …\` — 仅发飞书、不发给 Agent（便于话题内写标题）`,
+      `📋 当前所有 session（共 ${slots.length} 个；# 为槽位编号，关闭后不会复用，故可能与数量连续不一致）：\n\n${lines.join("\n\n")}\n\n• \`/new list\` / \`/new <序号>\` / \`/new <路径>\` — 新建 session\n• \`/switch <编号或名称>\` — 切换\n• \`/reply [编号或名称]\` — 重发上一轮缓存回复\n• \`/sendfile <说明>\` — 向 Agent 附带「用 FEISHU_SEND_FILE 发文件」说明后再发你的任务\n• \`/stop\` / \`/cancel\` — 中断**当前活跃**槽位正在生成的回复（不关 session）\n• \`/resume\` — 对当前 session 执行 ACP \`session/load\`（测试/恢复）\n• \`/mode <模式ID>\` — 切换当前 session 模式\n• \`/rename <新名字>\` — 重命名当前 session\n• \`/rename <编号或名称> <新名字>\` — 重命名指定 session\n• \`/close <编号或名称>\` — 关闭\n• \`/close all\` — 关闭本组全部\n• \`/topic …\` — 仅发飞书、不发给 Agent（便于话题内写标题）`,
       msg.messageId,
       this.threadReplyOpts(msg),
     );

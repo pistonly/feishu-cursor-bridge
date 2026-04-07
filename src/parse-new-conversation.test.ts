@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseNewConversationCommand } from "./parse-new-conversation.js";
+import {
+  matchesInterruptUserCommand,
+  parseNewConversationCommand,
+} from "./parse-new-conversation.js";
 
 test("parseNewConversationCommand 支持 /reply 默认当前活跃 session", () => {
   assert.deepEqual(parseNewConversationCommand("/reply"), {
@@ -35,4 +38,23 @@ test("parseNewConversationCommand 将裸 /new 解析为 list", () => {
     kind: "new",
     variant: "list",
   });
+});
+
+test("matchesInterruptUserCommand 识别纯文本 /stop、/cancel", () => {
+  assert.equal(matchesInterruptUserCommand("/stop"), true);
+  assert.equal(matchesInterruptUserCommand("/cancel"), true);
+  assert.equal(matchesInterruptUserCommand(" /STOP \n"), true);
+  assert.equal(matchesInterruptUserCommand("／stop"), true);
+  assert.equal(matchesInterruptUserCommand("not /stop"), false);
+});
+
+test("matchesInterruptUserCommand 识别 post 常见的标题换行后再 /stop", () => {
+  assert.equal(matchesInterruptUserCommand("无标题\n/stop"), true);
+  assert.equal(matchesInterruptUserCommand("讨论\n/stop"), true);
+  assert.equal(matchesInterruptUserCommand("说明文字\n/st\nop"), false);
+});
+
+test("matchesInterruptUserCommand 不以 / 开头的行前不得含其它斜杠命令", () => {
+  assert.equal(matchesInterruptUserCommand("/new list\n/stop"), false);
+  assert.equal(matchesInterruptUserCommand("hello\n/stop"), true);
 });

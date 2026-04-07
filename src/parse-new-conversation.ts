@@ -1,5 +1,44 @@
 import { parseShellLikeArgs } from "./config.js";
 
+/**
+ * 是否应走桥接「中断本轮」逻辑（/stop、/cancel）。
+ *
+ * 飞书 **post** 等场景下，`extractPostText` 会得到「标题 + 换行 + 正文」，整段不再是单独的 `"/stop"`，
+ * 若仅用全字匹配会漏判，消息会落入普通对话并进入 Agent。此处支持：
+ * - 单行精确匹配（兼容全角斜杠 ／）
+ * - 仅由一个或多个空白行分隔的多行，且**每一非空行**均为 /stop 或 /cancel
+ * - **最后一行**为 /stop 或 /cancel，且前面各行均**不以 /** 开头（避免误匹配「/new …」+ 粘贴）
+ */
+export function matchesInterruptUserCommand(content: string): boolean {
+  const normalized = content
+    .replace(/^\uFEFF/, "")
+    .replace(/\uFF0F/g, "/")
+    .trim();
+  if (!normalized) return false;
+
+  const lines = normalized
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+  if (lines.length === 0) return false;
+
+  const interruptLine = /^\/(stop|cancel)$/i;
+
+  if (lines.length === 1) {
+    return interruptLine.test(lines[0]!);
+  }
+
+  if (lines.every((l) => interruptLine.test(l))) {
+    return true;
+  }
+
+  const last = lines[lines.length - 1]!;
+  if (!interruptLine.test(last)) return false;
+  const head = lines.slice(0, -1);
+  if (head.some((l) => l.startsWith("/"))) return false;
+  return true;
+}
+
 export type NewConversationCommand =
   | { kind: "mode"; modeId?: string }
   | { kind: "new"; variant: "default"; name?: string }
