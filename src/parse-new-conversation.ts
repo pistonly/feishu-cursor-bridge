@@ -39,6 +39,24 @@ export function matchesInterruptUserCommand(content: string): boolean {
   return true;
 }
 
+/**
+ * 是否应回复桥接内置「命令列表」（/help、/commands、单独 `/` 等），而不交给 Agent。
+ *
+ * 仅接受整段消息在去掉首尾空白、统一全角斜杠 `／` 后与帮助命令精确匹配，
+ * 避免把“普通文本 + 换行 + /help”之类消息误判为查看帮助。
+ */
+export function matchesBridgeHelpCommand(content: string): boolean {
+  const normalized = content
+    .replace(/^\uFEFF/, "")
+    .replace(/\uFF0F/g, "/")
+    .trim();
+  if (!normalized) return false;
+  if (normalized === "/" || normalized === "/帮助") return true;
+
+  const lower = normalized.toLowerCase();
+  return lower === "/help" || lower === "/commands";
+}
+
 export type NewConversationCommand =
   | { kind: "mode"; modeId?: string }
   | { kind: "new"; variant: "default"; name?: string }

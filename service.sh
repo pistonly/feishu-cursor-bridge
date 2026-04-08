@@ -2,7 +2,7 @@
 # feishu-cursor-bridge 服务管理
 # macOS: launchd（~/Library/LaunchAgents/）
 # Linux: systemd --user（~/.config/systemd/user/）
-# 用法: bash service.sh [install|uninstall|start|stop|restart|status|logs]
+# 用法: bash service.sh [install|update|uninstall|start|stop|restart|status|logs]
 set -e
 
 UNAME_S="$(uname -s)"
@@ -257,13 +257,17 @@ cmd_logs_linux() {
     journalctl --user -u "$UNIT_NAME" -f --no-pager
 }
 
-cmd_install() {
+run_npm_install_and_build() {
     echo "📦 依赖与构建..."
     (cd "$BOT_DIR" && "$NPM_BIN" install && "$NPM_BIN" run build)
     if [[ ! -f "$BOT_DIR/dist/index.js" ]]; then
         echo "❌ 构建失败：未生成 dist/index.js"
         exit 1
     fi
+}
+
+cmd_install() {
+    run_npm_install_and_build
     case "$UNAME_S" in
         Darwin) cmd_install_darwin ;;
         Linux)  cmd_install_linux ;;
@@ -272,6 +276,13 @@ cmd_install() {
             exit 1
             ;;
     esac
+}
+
+# 拉代码或改源码后：重装依赖、编译 dist、再重启，使新代码生效（无需改 plist / systemd 单元时可代替全量 install）
+cmd_update() {
+    echo "🔄 更新服务（npm install + build + restart）..."
+    run_npm_install_and_build
+    cmd_restart
 }
 
 cmd_uninstall() {
@@ -343,6 +354,7 @@ cmd_logs() {
 
 case "${1:-}" in
     install)   cmd_install ;;
+    update)    cmd_update ;;
     uninstall) cmd_uninstall ;;
     start)     cmd_start ;;
     stop)      cmd_stop ;;
@@ -357,10 +369,11 @@ case "${1:-}" in
         echo ""
         echo "命令:"
         echo "  install     npm install + build + 安装自启动并启动"
+        echo "  update      npm install + build + 重启（已 install 后改代码用此使新版本生效）"
         echo "  uninstall   卸载自启动并停止服务"
         echo "  start       启动服务"
         echo "  stop        停止服务"
-        echo "  restart     重启服务"
+        echo "  restart     仅重启进程（不编译；改代码后请用 update 或先 npm run build）"
         echo "  status      查看服务状态"
         echo "  logs        实时日志（macOS: 文件；Linux: journalctl -f）"
         ;;

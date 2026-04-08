@@ -25,6 +25,18 @@
 
 ## 桥接内置命令
 
+### 命令列表（`/commands`、`/help`、单独 `/`）
+
+**等价命令**：`/commands`、`/help`、`/帮助`。
+
+仅发送一个字符 **`/`**（ASCII U+002F）或全角 **`／`**（U+FF0F），且整段消息去掉首尾空白后**仅有该字符**时，与 `/help` 等价（便于快速唤起帮助）。
+
+**作用**：机器人回复本桥接内置命令的分类列表（精简版）；正文会说明当前 ACP 后端下 **`/model` / `/mode`** 是由桥接调 ACP，还是原样交给 Cursor CLI（`tmux` 后端）。回复内容由 `src/bridge-commands-help.ts` 中的 `formatBridgeCommandsHelp` 生成。
+
+**无需 session**：与 `/status` 类似，**没有活跃 session 也可使用**；无 session 时的统一提示里也会引导使用本组命令。
+
+---
+
 ### 话题标题（`/topic`）
 
 这是**普通文本命令**（与 `/sessions`、`/new` 一样由用户手打），格式为：
@@ -331,7 +343,7 @@
 
 ## 非命令消息
 
-不以以上命令开头的文本，在**当前聊天/话题下已有活跃 session** 时进入正常对话流程（流式卡片、Cursor Agent 等）。**若无 session**，机器人会提示先用 `/new list` 与 `/new <序号或路径>` 创建。若适配器在 Cursor 侧注册了 `/plan` 等斜杠命令，通常需**整段消息**以 `/命令` 开头发送；具体以 `cursor-agent-acp` 与 Cursor CLI 行为为准，本桥接不对其做单独解析。
+不以以上**桥接内置命令**（含单独 `/` / `／` 唤起命令列表）形式匹配的文本，在**当前聊天/话题下已有活跃 session** 时进入正常对话流程（流式卡片、Cursor Agent 等）。**若无 session**，机器人会提示先用 `/new list` 与 `/new <序号或路径>` 创建，并说明可用 `/commands`、`/help` 或只发 `/`（全角 `／` 亦可）查看全部桥接命令。若适配器在 Cursor 侧注册了 `/plan` 等斜杠命令，通常需**整段消息**以 `/命令` 开头发送；具体以 `cursor-agent-acp` 与 Cursor CLI 行为为准，本桥接不对其做单独解析。
 
 ## 群聊 @ 与调试日志（`BRIDGE_DEBUG`）
 

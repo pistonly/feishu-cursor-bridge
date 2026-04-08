@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  matchesBridgeHelpCommand,
   matchesInterruptUserCommand,
   parseNewConversationCommand,
 } from "./parse-new-conversation.js";
@@ -57,4 +58,16 @@ test("matchesInterruptUserCommand 识别 post 常见的标题换行后再 /stop"
 test("matchesInterruptUserCommand 不以 / 开头的行前不得含其它斜杠命令", () => {
   assert.equal(matchesInterruptUserCommand("/new list\n/stop"), false);
   assert.equal(matchesInterruptUserCommand("hello\n/stop"), true);
+});
+
+test("matchesBridgeHelpCommand 仅匹配整段帮助命令", () => {
+  assert.equal(matchesBridgeHelpCommand("/help"), true);
+  assert.equal(matchesBridgeHelpCommand("/HELP"), true);
+  assert.equal(matchesBridgeHelpCommand("／help"), true);
+  assert.equal(matchesBridgeHelpCommand("/commands"), true);
+  assert.equal(matchesBridgeHelpCommand("/"), true);
+  assert.equal(matchesBridgeHelpCommand("/帮助"), true);
+  assert.equal(matchesBridgeHelpCommand("请讲\n/help"), false);
+  assert.equal(matchesBridgeHelpCommand("讨论 /help"), false);
+  assert.equal(matchesBridgeHelpCommand("/new list\n/help"), false);
 });

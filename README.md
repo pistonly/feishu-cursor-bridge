@@ -75,6 +75,7 @@ To start the user service **at boot without an interactive login**, run once: **
 
 ```bash
 bash service.sh install    # npm install + build + install + start
+bash service.sh update     # after git pull / code edits: rebuild dist + restart
 bash service.sh status
 bash service.sh logs       # macOS: follow log file; Linux: journalctl -f
 ```
@@ -82,14 +83,15 @@ bash service.sh logs       # macOS: follow log file; Linux: journalctl -f
 | Command | Description |
 |---------|-------------|
 | `bash service.sh install` | `npm install` + `npm run build`, then install auto-start and launch |
+| `bash service.sh update` | `npm install` + `npm run build`, then **restart** (use after `git pull` or local edits so **`dist/`** matches new code) |
 | `bash service.sh uninstall` | Remove auto-start and stop |
 | `bash service.sh start` | Start |
 | `bash service.sh stop` | Stop |
-| `bash service.sh restart` | Restart |
+| `bash service.sh restart` | Restart the process only (**no build** — stale `dist/` will keep running old code) |
 | `bash service.sh status` | Status |
 | `bash service.sh logs` | Live logs |
 
-After code changes, run `npm run build` then **`bash service.sh restart`**; or **`bash service.sh install`** again to refresh deps, rebuild, and rewrite the plist / unit. If you change the Node binary path, re-run **`bash service.sh install`**.
+After code changes: prefer **`bash service.sh update`** so dependency + compile + restart happen in one step. Alternatively run `npm run build` then **`bash service.sh restart`**. Re-run **`bash service.sh install`** if you need to refresh the plist / systemd unit or your **Node binary path** changed.
 
 ### Docker dev setup
 
@@ -290,6 +292,7 @@ npm run build && npm start
 
 ```bash
 bash service.sh install    # npm install + build + 安装并启动
+bash service.sh update     # pull / 改代码后：install + build + 重启，使 dist 生效
 bash service.sh status
 bash service.sh logs       # macOS：跟日志文件；Linux：journalctl -f
 ```
@@ -297,14 +300,15 @@ bash service.sh logs       # macOS：跟日志文件；Linux：journalctl -f
 | 命令 | 说明 |
 |------|------|
 | `bash service.sh install` | `npm install` + `npm run build` + 安装自启动并启动 |
+| `bash service.sh update` | `npm install` + `npm run build` + **重启**（已 install 后更新代码用，保证 **`dist/`** 为新版本） |
 | `bash service.sh uninstall` | 卸载自启动并停止 |
 | `bash service.sh start` | 启动 |
 | `bash service.sh stop` | 停止 |
-| `bash service.sh restart` | 重启 |
+| `bash service.sh restart` | 仅重启进程（**不编译**；`dist/` 未更新则仍跑旧代码） |
 | `bash service.sh status` | 状态 |
 | `bash service.sh logs` | 实时日志 |
 
-代码更新后可 `npm run build` 再 **`bash service.sh restart`**；也可再次 **`bash service.sh install`** 以更新依赖、重建并**重写 plist / systemd unit**。更换 Node 路径后请重新 **`bash service.sh install`**。
+代码更新后优先 **`bash service.sh update`**（依赖 + 编译 + 重启一步完成）。也可手动 `npm run build` 再 **`bash service.sh restart`**。需要**重写 plist / systemd unit** 或更换 **Node 路径**时再执行 **`bash service.sh install`**。
 
 ### Docker 开发联调
 

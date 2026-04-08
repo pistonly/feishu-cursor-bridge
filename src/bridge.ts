@@ -9,6 +9,7 @@ import { FeishuBridgeClient } from "./acp/feishu-bridge-client.js";
 import { formatJsonRpcLikeError } from "./format-json-rpc-error.js";
 import { FeishuBot, type FeishuMessage } from "./feishu-bot.js";
 import {
+  matchesBridgeHelpCommand,
   matchesInterruptUserCommand,
   parseNewConversationCommand,
 } from "./parse-new-conversation.js";
@@ -33,10 +34,11 @@ import {
   SENDFILE_USAGE_TEXT,
   wrapSendfilePromptForAgent,
 } from "./sendfile-command.js";
+import { formatBridgeCommandsHelp } from "./bridge-commands-help.js";
 
 /** 无活跃 session 时，普通对话与部分命令的统一提示 */
 const NO_SESSION_HINT =
-  "当前没有可用的 session。请先发送 `/new list` 查看工作区列表，再用 `/new <序号>` 或 `/new <目录绝对路径>` 创建 session。";
+  "当前没有可用的 session。请先发送 `/new list` 查看工作区列表，再用 `/new <序号>` 或 `/new <目录绝对路径>` 创建 session。\n\n发送 `/commands`、`/help` 或只发 `/`（全角 `／` 亦可）可查看本桥接支持的全部命令，**无需先建 session**。";
 
 function formatDurationMs(ms: number): string {
   if (!Number.isFinite(ms)) {
@@ -273,6 +275,8 @@ export class Bridge {
     }
 
     let content = msg.content.trim();
+    /** 去掉 @ 后**保留换行**，用于 `/help`、`/stop` 等与 post「标题+换行+命令」一致的判定；`content` 仍为压成单行后的文本（解析斜杠命令、发往 Agent）。 */
+    let contentMultiline = content;
 
     if (msg.chatType === "group") {
       const mentioned = this.feishuBot.isBotMentioned(msg);
@@ -293,6 +297,9 @@ export class Bridge {
           msg.messageId,
         );
       }
+      contentMultiline = this.feishuBot
+        .stripBotMentionKeepLines(content, msg.mentions)
+        .trim();
       content = this.feishuBot.stripBotMention(content, msg.mentions).trim();
     }
 
@@ -310,6 +317,7 @@ export class Bridge {
     }
     if (sendfileParsed.kind === "prompt") {
       content = wrapSendfilePromptForAgent(sendfileParsed.inner);
+      contentMultiline = content;
     }
 
     const newConv = parseNewConversationCommand(content);
@@ -806,11 +814,18 @@ export class Bridge {
       return;
     }
 
+    if (matchesBridgeHelpCommand(contentMultiline)) {
+      await this.feishuBot.sendText(
+        msg.chatId,
+        formatBridgeCommandsHelp(this.acpRuntime.backend),
+        msg.messageId,
+        this.threadReplyOpts(msg),
+      );
+      return;
+    }
     const statusTrim = content.trim();
-    if (
-      statusTrim === "/状态" ||
-      statusTrim.toLowerCase() === "/status"
-    ) {
+    const statusLower = statusTrim.toLowerCase();
+    if (statusTrim === "/状态" || statusLower === "/status") {
       const stats = this.sessionManager.getStats();
       const snap = this.sessionManager.getSessionSnapshot(
         msg.chatId,
@@ -956,7 +971,7 @@ export class Bridge {
       return;
     }
 
-    if (matchesInterruptUserCommand(content)) {
+    if (matchesInterruptUserCommand(contentMultiline)) {
       const snap = this.sessionManager.getSessionSnapshot(
         msg.chatId,
         msg.senderId,
