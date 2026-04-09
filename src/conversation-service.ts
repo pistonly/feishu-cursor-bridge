@@ -178,6 +178,11 @@ export class ConversationService {
     };
 
     this.acp.bridgeClient.on("acp", onAcp);
+    this.acp.bridgeClient.setFeishuPromptContext(session.sessionId, {
+      chatId: msg.chatId,
+      messageId: msg.messageId,
+      ...(replyOpts ? { replyInThread: true } : {}),
+    });
 
     try {
       if (this.config.bridgeDebug) {
@@ -276,6 +281,7 @@ export class ConversationService {
 
       return state.toMarkdown();
     } finally {
+      this.acp.bridgeClient.setFeishuPromptContext(session.sessionId, undefined);
       this.acp.bridgeClient.off("acp", onAcp);
     }
   }

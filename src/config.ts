@@ -25,7 +25,7 @@ export interface Config {
     appSecret: string;
     domain: string;
   };
-  /** `ACP_BACKEND=legacy`：本仓库 `cursor-agent-acp/` 子进程与工作区 */
+  /** 多 backend 统一配置；默认 backend 由 `ACP_BACKEND` 指定。 */
   acp: {
     backend: AcpBackend;
     enabledBackends: AcpBackend[];
@@ -42,6 +42,9 @@ export interface Config {
     officialAgentPath: string;
     officialApiKey?: string;
     officialAuthToken?: string;
+    /** Claude ACP 子进程命令 */
+    claudeSpawnCommand: string;
+    claudeSpawnArgs: string[];
     /** 启动 tmux ACP server 时使用的 tsx CLI 入口 */
     tmuxTsxCliEntry: string;
     /** 仓库内置的 tmux ACP server TypeScript 入口 */
@@ -104,7 +107,19 @@ export interface Config {
 }
 
 const LOG_LEVELS = new Set(["debug", "info", "warn", "error"]);
-const ACP_BACKENDS = new Set<AcpBackend>(["legacy", "official", "tmux"]);
+const ACP_BACKENDS = new Set<AcpBackend>([
+  "cursor-official",
+  "cursor-legacy",
+  "cursor-tmux",
+  "claude",
+]);
+
+const LEGACY_BACKEND_ALIASES: Record<string, AcpBackend> = {
+  official: "cursor-official",
+  legacy: "cursor-legacy",
+  tmux: "cursor-tmux",
+  claude: "claude",
+};
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -126,7 +141,9 @@ export function expandHome(p: string): string {
  * 若 `ACP_NODE_PATH` 指向已删除或错误的路径（常见于换过 nvm 版本却仍保留旧路径），则回退为当前进程的 `process.execPath`，避免 `spawn ... ENOENT`。
  */
 function resolveNodeExecutablePath(): string {
-  const fromEnv = process.env["ACP_NODE_PATH"]?.trim();
+  const fromEnv =
+    process.env["CURSOR_LEGACY_NODE_PATH"]?.trim() ||
+    process.env["ACP_NODE_PATH"]?.trim();
   const raw = fromEnv ? expandHome(fromEnv) : process.execPath;
   const abs = path.resolve(raw);
   try {
@@ -186,8 +203,11 @@ function parseExtraArgs(raw: string | undefined): string[] {
 }
 
 function parseAcpBackend(raw: string | undefined): AcpBackend {
-  const normalized = (raw?.trim().toLowerCase() || "official") as AcpBackend;
-  return ACP_BACKENDS.has(normalized) ? normalized : "official";
+  const normalized = raw?.trim().toLowerCase() || "cursor-official";
+  const mapped = LEGACY_BACKEND_ALIASES[normalized] ?? normalized;
+  return ACP_BACKENDS.has(mapped as AcpBackend)
+    ? (mapped as AcpBackend)
+    : "cursor-official";
 }
 
 function parseEnabledAcpBackends(
@@ -201,6 +221,40 @@ function parseEnabledAcpBackends(
     .map((item) => parseAcpBackend(item))
     .filter((item, index, all) => all.indexOf(item) === index);
   return backends.length > 0 ? backends : [defaultBackend];
+}
+
+function resolveBundledClaudeAgentAcpEntry(): string | undefined {
+  const candidate = path.resolve(
+    process.cwd(),
+    "packages",
+    "claude-agent-acp",
+    "dist",
+    "index.js",
+  );
+  return fs.existsSync(candidate) ? candidate : undefined;
+}
+
+function resolveClaudeAgentAcpSpawn(): { command: string; args: string[] } {
+  const envRaw = process.env["CLAUDE_AGENT_ACP_COMMAND"]?.trim();
+  const extra = parseExtraArgs(process.env["CLAUDE_AGENT_ACP_EXTRA_ARGS"]);
+  if (envRaw) {
+    const tokens = parseShellLikeArgs(envRaw);
+    if (tokens.length === 0) {
+      throw new Error("CLAUDE_AGENT_ACP_COMMAND 解析为空");
+    }
+    return {
+      command: tokens[0]!,
+      args: [...tokens.slice(1), ...extra],
+    };
+  }
+  const bundled = resolveBundledClaudeAgentAcpEntry();
+  if (bundled) {
+    return { command: process.execPath, args: [bundled, ...extra] };
+  }
+  return {
+    command: "npx",
+    args: ["-y", "@agentclientprotocol/claude-agent-acp", ...extra],
+  };
 }
 
 const DEFAULT_SESSION_IDLE_TIMEOUT_MS = 7 * 24 * 60 * 60_000;
@@ -254,7 +308,7 @@ function ensureAllowedWorkspaceRootsReady(roots: string[]): void {
     try {
       if (fs.existsSync(workspaceRoot)) {
         if (!fs.statSync(workspaceRoot).isDirectory()) {
-          throw new Error(`CURSOR_WORK_ALLOWLIST 项不是目录: ${workspaceRoot}`);
+          throw new Error(`BRIDGE_WORK_ALLOWLIST 项不是目录: ${workspaceRoot}`);
         }
         continue;
       }
@@ -262,7 +316,7 @@ function ensureAllowedWorkspaceRootsReady(roots: string[]): void {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       throw new Error(
-        `CURSOR_WORK_ALLOWLIST 路径不可用: ${workspaceRoot}\n` +
+        `BRIDGE_WORK_ALLOWLIST 路径不可用: ${workspaceRoot}\n` +
           `请创建该目录或修正 .env。若 cwd 不存在，子进程会启动失败（常被误报为 Node ENOENT）。\n` +
           `底层原因: ${msg}`,
       );
@@ -289,11 +343,13 @@ export function loadConfig(): Config {
     );
   }
 
-  const allowlistRaw = process.env["CURSOR_WORK_ALLOWLIST"]?.trim();
+  const allowlistRaw =
+    process.env["BRIDGE_WORK_ALLOWLIST"]?.trim() ||
+    process.env["CURSOR_WORK_ALLOWLIST"]?.trim();
   if (!allowlistRaw) {
     throw new Error(
-      "必须设置环境变量 CURSOR_WORK_ALLOWLIST（逗号分隔的绝对路径，至少一个）。\n" +
-        "已移除 CURSOR_WORK_DIR：允许的工作区根须显式列出；请用 /new list 与 /new <序号> 或 /new <路径> 创建 session。",
+      "必须设置环境变量 BRIDGE_WORK_ALLOWLIST（推荐）或 CURSOR_WORK_ALLOWLIST（兼容）：\n" +
+        "逗号分隔的绝对路径，至少一个。请用 /new list 与 /new <序号> 或 /new <路径> 创建 session。",
     );
   }
   const allowedWorkspaceRoots = allowlistRaw
@@ -302,7 +358,7 @@ export function loadConfig(): Config {
     .filter((p) => p.length > 0);
   if (allowedWorkspaceRoots.length === 0) {
     throw new Error(
-      "CURSOR_WORK_ALLOWLIST 解析后为空，请提供至少一个有效路径（逗号分隔的绝对路径）。",
+      "工作区允许列表解析后为空，请提供至少一个有效路径。",
     );
   }
   ensureAllowedWorkspaceRootsReady(allowedWorkspaceRoots);
@@ -316,7 +372,9 @@ export function loadConfig(): Config {
   );
   const adapterSessionDir = path.resolve(
     expandHome(
-      process.env["CURSOR_ACP_SESSION_DIR"]?.trim() || defaultAdapterSession,
+        process.env["CURSOR_LEGACY_SESSION_DIR"]?.trim() ||
+        process.env["CURSOR_ACP_SESSION_DIR"]?.trim() ||
+        defaultAdapterSession,
     ),
   );
 
@@ -378,11 +436,15 @@ export function loadConfig(): Config {
   );
   const workspacePresetsPath = path.resolve(
     expandHome(
-      process.env["CURSOR_WORK_PRESETS_FILE"]?.trim() || defaultPresetsFile,
+      process.env["BRIDGE_WORK_PRESETS_FILE"]?.trim() ||
+        process.env["CURSOR_WORK_PRESETS_FILE"]?.trim() ||
+        defaultPresetsFile,
     ),
   );
 
-  const presetsSeedRaw = process.env["CURSOR_WORK_PRESETS"]?.trim();
+  const presetsSeedRaw =
+    process.env["BRIDGE_WORK_PRESETS"]?.trim() ||
+    process.env["CURSOR_WORK_PRESETS"]?.trim();
   const workspacePresetsSeed = presetsSeedRaw
     ? presetsSeedRaw
         .split(",")
@@ -421,7 +483,7 @@ export function loadConfig(): Config {
   let adapterEntry = "";
   let adapterTsxCli: string | undefined;
 
-  if (enabledBackends.includes("legacy")) {
+  if (enabledBackends.includes("cursor-legacy")) {
     if (bridgeFromSource) {
       adapterTsxCli = resolveBundledTsxCliEntry();
       adapterEntry = resolveLegacyAdapterSourceEntry();
@@ -438,12 +500,16 @@ export function loadConfig(): Config {
 
   const nodePath = resolveNodeExecutablePath();
 
-  const extraArgs = parseExtraArgs(process.env["CURSOR_ACP_EXTRA_ARGS"]);
+  const extraArgs = parseExtraArgs(
+    process.env["CURSOR_LEGACY_EXTRA_ARGS"] ?? process.env["CURSOR_ACP_EXTRA_ARGS"],
+  );
   const officialAgentPath =
     process.env["CURSOR_AGENT_PATH"]?.trim() || "agent";
   const officialApiKey = process.env["CURSOR_API_KEY"]?.trim() || undefined;
   const officialAuthToken =
     process.env["CURSOR_AUTH_TOKEN"]?.trim() || undefined;
+
+  const claudeSpawn = resolveClaudeAgentAcpSpawn();
 
   return {
     feishu: {
@@ -461,6 +527,8 @@ export function loadConfig(): Config {
       officialAgentPath,
       officialApiKey,
       officialAuthToken,
+      claudeSpawnCommand: claudeSpawn.command,
+      claudeSpawnArgs: claudeSpawn.args,
       tmuxTsxCliEntry,
       tmuxServerEntry,
       tmuxSessionStorePath,

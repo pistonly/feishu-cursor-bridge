@@ -6,7 +6,7 @@ import { SdkAcpRuntimeBase } from "./sdk-runtime-base.js";
  * 子进程运行仓库内置的 tmux ACP server 原型，通过标准 ACP stdio 与 bridge 对接。
  */
 export class TmuxAcpRuntime extends SdkAcpRuntimeBase {
-  readonly backend = "tmux" as const;
+  readonly backend = "cursor-tmux" as const;
 
   constructor(config: Config, handler: FeishuBridgeClient) {
     super(config, handler);

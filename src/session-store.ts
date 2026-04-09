@@ -1,17 +1,14 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { AcpBackend } from "./acp/runtime-contract.js";
-
-// ---------------------------------------------------------------------------
-// v3 Persisted types
-// ---------------------------------------------------------------------------
+import type { AcpBackend, SessionRecovery } from "./acp/runtime-contract.js";
 
 export interface PersistedSlotRecord {
   slotIndex: number;
   name?: string;
   backend: AcpBackend;
   sessionId: string;
-  /** 与 cursor-agent CLI `--resume` 对齐的 chat id */
+  recovery?: SessionRecovery;
+  /** 兼容旧版 legacy store */
   cursorCliChatId?: string;
   workspaceRoot?: string;
   lastActiveAt: number;
@@ -21,10 +18,8 @@ export interface PersistedSessionGroup {
   chatId: string;
   userId: string;
   chatType: "p2p" | "group";
-  /** 话题群 thread_id，与内存 sessionKey 的话题维度一致 */
   threadId?: string;
   activeSlotIndex: number;
-  /** monotonically increasing counter for next slot number */
   nextSlotIndex: number;
   slots: PersistedSlotRecord[];
 }
@@ -72,16 +67,53 @@ interface StoreFileV3 {
   sessions: Record<string, PersistedSessionGroup>;
 }
 
-/**
- * 将飞书 sessionKey → ACP session 组（多 slot）持久化到磁盘，便于进程重启后 session/load。
- */
+const BACKEND_ALIASES: Record<string, AcpBackend> = {
+  official: "cursor-official",
+  legacy: "cursor-legacy",
+  tmux: "cursor-tmux",
+  "cursor-official": "cursor-official",
+  "cursor-legacy": "cursor-legacy",
+  "cursor-tmux": "cursor-tmux",
+  claude: "claude",
+};
+
+function normalizeBackend(
+  backend: string | undefined,
+  defaultBackend: AcpBackend,
+): AcpBackend {
+  if (!backend) return defaultBackend;
+  return BACKEND_ALIASES[backend] ?? defaultBackend;
+}
+
+function normalizeRecovery(
+  backend: AcpBackend,
+  recovery: SessionRecovery | undefined,
+  cursorCliChatId: string | undefined,
+  sessionId: string,
+): SessionRecovery | undefined {
+  if (recovery) return recovery;
+  if (cursorCliChatId?.trim()) {
+    return {
+      kind: "cursor-cli",
+      cursorCliChatId: cursorCliChatId.trim(),
+    };
+  }
+  if (backend === "claude" && sessionId.trim()) {
+    return {
+      kind: "claude-session",
+      resumeSessionId: sessionId.trim(),
+    };
+  }
+  return undefined;
+}
+
 export class SessionStore {
   private readonly filePath: string;
   private readonly defaultBackend: AcpBackend;
   private data: StoreFileV3;
   private flushSeq = 0;
 
-  constructor(filePath: string, defaultBackend: AcpBackend = "official") {
+  constructor(filePath: string, defaultBackend: AcpBackend = "cursor-official") {
     this.filePath = path.resolve(filePath);
     this.defaultBackend = defaultBackend;
     this.data = { version: 3, sessions: {} };
@@ -95,7 +127,7 @@ export class SessionStore {
       if (parsed?.version === 3) {
         const v3 = parsed as StoreFileV3;
         if (v3.sessions && typeof v3.sessions === "object") {
-          this.data = v3;
+          this.data = migrateV3ToLatest(v3, this.defaultBackend);
         }
       } else if (parsed?.version === 2) {
         this.data = migrateV2ToV3(parsed as StoreFileV2, this.defaultBackend);
@@ -150,6 +182,7 @@ function migrateV1ToV3(v1: StoreFileV1, defaultBackend: AcpBackend): StoreFileV3
           slotIndex: 1,
           backend: defaultBackend,
           sessionId: rec.sessionId,
+          recovery: normalizeRecovery(defaultBackend, undefined, undefined, rec.sessionId),
           workspaceRoot: rec.workspaceRoot,
           lastActiveAt: rec.lastActiveAt,
         },
@@ -166,8 +199,27 @@ function migrateV2ToV3(v2: StoreFileV2, defaultBackend: AcpBackend): StoreFileV3
       ...group,
       slots: group.slots.map((slot) => ({
         ...slot,
-        backend: defaultBackend,
+        backend: normalizeBackend(undefined, defaultBackend),
+        recovery: normalizeRecovery(defaultBackend, undefined, slot.cursorCliChatId, slot.sessionId),
       })),
+    };
+  }
+  return { version: 3, sessions };
+}
+
+function migrateV3ToLatest(v3: StoreFileV3, defaultBackend: AcpBackend): StoreFileV3 {
+  const sessions: Record<string, PersistedSessionGroup> = {};
+  for (const [key, group] of Object.entries(v3.sessions)) {
+    sessions[key] = {
+      ...group,
+      slots: group.slots.map((slot) => {
+        const backend = normalizeBackend(slot.backend, defaultBackend);
+        return {
+          ...slot,
+          backend,
+          recovery: normalizeRecovery(backend, slot.recovery, slot.cursorCliChatId, slot.sessionId),
+        };
+      }),
     };
   }
   return { version: 3, sessions };

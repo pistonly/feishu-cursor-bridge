@@ -1,5 +1,6 @@
 import type { Config } from "../config.js";
 import { FeishuBridgeClient } from "./feishu-bridge-client.js";
+import { ClaudeAcpRuntime } from "./claude-runtime.js";
 import { OfficialAcpRuntime } from "./official-runtime.js";
 import { TmuxAcpRuntime } from "./tmux-runtime.js";
 import type {
@@ -7,6 +8,7 @@ import type {
   AcpNewSessionOptions,
   AcpNewSessionResult,
   BridgeAcpRuntime,
+  SessionRecovery,
 } from "./runtime-contract.js";
 import { SdkAcpRuntimeBase } from "./sdk-runtime-base.js";
 
@@ -50,8 +52,15 @@ export function resolveAdapterSessionTimeoutMs(config: Config): string {
 /**
  * 子进程运行本仓库 cursor-agent-acp 适配器，通过官方 SDK ClientSideConnection 对接标准 ACP stdio。
  */
+function getCursorCliRecovery(
+  options?: AcpNewSessionOptions,
+): Extract<SessionRecovery, { kind: "cursor-cli" }> | undefined {
+  const recovery = options?.recovery;
+  return recovery?.kind === "cursor-cli" ? recovery : undefined;
+}
+
 export class AcpRuntime extends SdkAcpRuntimeBase {
-  readonly backend = "legacy" as const;
+  readonly backend = "cursor-legacy" as const;
 
   constructor(config: Config, handler: FeishuBridgeClient) {
     super(config, handler);
@@ -101,7 +110,7 @@ export class AcpRuntime extends SdkAcpRuntimeBase {
     cwd: string,
     options?: AcpNewSessionOptions,
   ) {
-    const preferredCursorCliChatId = options?.cursorCliChatId?.trim() || undefined;
+    const preferredCursorCliChatId = getCursorCliRecovery(options)?.cursorCliChatId?.trim() || undefined;
     if (preferredCursorCliChatId && this.config.bridgeDebug) {
       console.log(
         `[acp] session/new prefer cursorChatId=${preferredCursorCliChatId} cwd=${cwd}`,
@@ -129,13 +138,18 @@ export class AcpRuntime extends SdkAcpRuntimeBase {
     },
     options?: AcpNewSessionOptions,
   ): AcpNewSessionResult {
-    const preferredCursorCliChatId = options?.cursorCliChatId?.trim() || undefined;
+    const preferredCursorCliChatId = getCursorCliRecovery(options)?.cursorCliChatId?.trim() || undefined;
     const c = res._meta?.cursorChatId;
     const cursorCliChatId =
       typeof c === "string" && c.length > 0
         ? c
         : preferredCursorCliChatId;
-    return { sessionId: res.sessionId, cursorCliChatId };
+    return cursorCliChatId
+      ? {
+          sessionId: res.sessionId,
+          recovery: { kind: "cursor-cli", cursorCliChatId },
+        }
+      : { sessionId: res.sessionId };
   }
 }
 
@@ -153,11 +167,14 @@ export function createAcpRuntime(
   config: Config,
   handler: FeishuBridgeClient,
 ): BridgeAcpRuntime {
-  if (config.acp.backend === "official") {
+  if (config.acp.backend === "cursor-official") {
     return new OfficialAcpRuntime(config, handler);
   }
-  if (config.acp.backend === "tmux") {
+  if (config.acp.backend === "cursor-tmux") {
     return new TmuxAcpRuntime(config, handler);
+  }
+  if (config.acp.backend === "claude") {
+    return new ClaudeAcpRuntime(config, handler);
   }
   return new AcpRuntime(config, handler);
 }
@@ -200,7 +217,8 @@ export class AcpRuntimeRegistry {
 }
 
 export function formatAcpBackendLabel(backend: AcpBackend): string {
-  if (backend === "official") return "Cursor 官方 ACP";
-  if (backend === "tmux") return "tmux ACP server 原型";
-  return "第三方 ACP 适配器";
+  if (backend === "cursor-official") return "Cursor 官方 ACP";
+  if (backend === "cursor-tmux") return "tmux ACP server 原型";
+  if (backend === "claude") return "Claude Code（claude-agent-acp）";
+  return "第三方 Cursor ACP 适配器";
 }

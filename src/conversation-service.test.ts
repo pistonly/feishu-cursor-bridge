@@ -16,14 +16,16 @@ function createTestConfig(): Config {
       domain: "feishu",
     },
     acp: {
-      backend: "official",
-      enabledBackends: ["official"],
+      backend: "cursor-official",
+      enabledBackends: ["cursor-official"],
       nodePath: process.execPath,
       adapterEntry: "",
       extraArgs: [],
       officialAgentPath: "agent",
       officialApiKey: undefined,
       officialAuthToken: undefined,
+      claudeSpawnCommand: "npx",
+      claudeSpawnArgs: ["-y", "@agentclientprotocol/claude-agent-acp"],
       tmuxTsxCliEntry: "/tmp/tsx-cli.mjs",
       tmuxServerEntry: "/tmp/tmux-acp-server.ts",
       tmuxSessionStorePath: "/tmp/tmux-acp-sessions.json",
@@ -71,7 +73,7 @@ function createMessage(): FeishuMessage {
 
 function createSession(): UserSession {
   return {
-    backend: "official",
+    backend: "cursor-official",
     sessionId: "session-1",
     workspaceRoot: "/tmp",
     chatId: "chat-1",
@@ -86,7 +88,10 @@ function createHarness(
   events: BridgeAcpEvent[],
   configOverrides?: Partial<Config["bridge"]>,
 ) {
-  const bridgeClient = new EventEmitter();
+  const bridgeClient = new EventEmitter() as EventEmitter & {
+    setFeishuPromptContext: (_sessionId: string, _ctx: unknown) => void;
+  };
+  bridgeClient.setFeishuPromptContext = () => {};
   const sendCardCalls: Array<{ id: string; content: string }> = [];
   const updateCardCalls: Array<{ id: string; content: string }> = [];
 
@@ -102,7 +107,7 @@ function createHarness(
   };
 
   const runtime: BridgeAcpRuntime = {
-    backend: "official",
+    backend: "cursor-official",
     bridgeClient: bridgeClient as any,
     initializeResult: null,
     supportsLoadSession: true,

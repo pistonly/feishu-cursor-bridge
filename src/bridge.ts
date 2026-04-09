@@ -905,9 +905,9 @@ export class Bridge {
       const snap = this.activeSnapshot(msg);
       const activeSession = snap?.activeSlot.session;
       const runtime = activeSession ? this.runtimeForSession(activeSession) : undefined;
-      const cliResume = activeSession?.cursorCliChatId;
+      const recovery = activeSession?.recovery;
       const currentModeId =
-        activeSession && activeSession.backend !== "tmux"
+        activeSession && activeSession.backend !== "cursor-tmux"
           ? runtime?.getSessionModeState(activeSession.sessionId)?.currentModeId
           : undefined;
       let body = `📊 活跃/内存 slot: ${stats.active}/${stats.total}`;
@@ -921,12 +921,14 @@ export class Bridge {
         body += `
 • 当前模式：\`${currentModeId}\``;
       }
-      if (cliResume) {
-        body += `\n• CLI resume ID：\`${cliResume}\``;
-      } else if (activeSession?.backend === "official") {
+      if (recovery?.kind === "cursor-cli") {
+        body += `\n• CLI resume ID：\`${recovery.cursorCliChatId}\``;
+      } else if (recovery?.kind === "claude-session") {
+        body += `\n• Claude 恢复会话：\`${recovery.resumeSessionId}\``;
+      } else if (activeSession?.backend === "cursor-official") {
         body += "\n• CLI resume ID：当前官方 ACP 后端未暴露等价字段";
       } else {
-        body += "\n• CLI resume ID：暂无（尚无活跃会话、或适配器未返回 / create-chat 失败）";
+        body += "\n• 恢复绑定：暂无（尚无活跃会话或后端未返回恢复元信息）";
       }
       if (this.config.bridgeDebug) {
         const idleLabel = snap
@@ -939,13 +941,13 @@ export class Bridge {
         );
         const slot = snap?.activeSlot;
         const availableModeIds =
-          slot && slot.session.backend !== "tmux"
+          slot && slot.session.backend !== "cursor-tmux"
             ? (runtime?.getSessionModeState(slot.session.sessionId)?.availableModes ?? [])
                 .map((mode) => mode.modeId)
                 .join(", ")
             : "";
         const legacySessionFile =
-          slot?.session.backend === "legacy" && slot.session.sessionId
+          slot?.session.backend === "cursor-legacy" && slot.session.sessionId
             ? path.join(
                 this.config.acp.adapterSessionDir,
                 `${slot.session.sessionId}.json`,
@@ -965,7 +967,7 @@ export class Bridge {
 • 空闲过期约: ${idleLabel}
 • 会话策略: bridge=${bridgeIdlePolicy}
 • ACP 子进程 cwd（allowlist 首项）: ${this.config.acp.workspaceRoot}
-• 允许根 CURSOR_WORK_ALLOWLIST: ${this.config.acp.allowedWorkspaceRoots.join(", ")}
+• 允许根 BRIDGE_WORK_ALLOWLIST: ${this.config.acp.allowedWorkspaceRoots.join(", ")}
 • 映射文件: ${this.config.bridge.sessionStorePath}
 • legacy 会话目录: ${this.config.acp.adapterSessionDir}
 • legacy 会话文件: ${legacySessionFile ?? "—"}
@@ -977,7 +979,7 @@ export class Bridge {
     }
 
     // 非 tmux ACP 后端在 prompt 里识别 /model 后仍会把整句发给 CLI，导致大模型「解释命令」。
-    // legacy / official 在 bridge 侧直接走 session/set_model；tmux 需要把命令真实送进 pane。
+    // Claude / Cursor ACP 类后端在 bridge 侧直接走 session/set_model；tmux 需要把命令真实送进 pane。
     const modelMatch = content.trim().match(/^\/model(?:\s+(\S+))?$/i);
     const activeSessionForModel = await this.sessionManager.getActiveSession(
       msg.chatId,
@@ -985,7 +987,7 @@ export class Bridge {
       msg.chatType,
       this.threadScope(msg),
     );
-    if (modelMatch && activeSessionForModel && activeSessionForModel.backend !== "tmux") {
+    if (modelMatch && activeSessionForModel && activeSessionForModel.backend !== "cursor-tmux") {
       const runtime = this.runtimeForSession(activeSessionForModel);
       const modelId = modelMatch[1]?.trim();
       if (!modelId) {
@@ -994,7 +996,7 @@ export class Bridge {
           formatModelUsage(
             runtime.getSessionModelState(activeSessionForModel.sessionId),
             {
-              officialNumbered: activeSessionForModel.backend === "official",
+              officialNumbered: activeSessionForModel.backend === "cursor-official",
             },
           ),
           msg.messageId,
@@ -1003,7 +1005,7 @@ export class Bridge {
         return;
       }
       let sessionId: string | undefined;
-      const officialNumbered = activeSessionForModel.backend === "official";
+      const officialNumbered = activeSessionForModel.backend === "cursor-official";
       try {
         sessionId = activeSessionForModel.sessionId;
         await this.flushPendingSessionNotices(msg);
@@ -1236,7 +1238,7 @@ export class Bridge {
       const name = s.name ? ` (${s.name})` : "";
       const runtime = this.runtimeForBackend(s.backend);
       const modeId =
-        s.backend === "tmux"
+        s.backend === "cursor-tmux"
           ? ""
           : (runtime.getSessionModeState(s.sessionId)?.currentModeId ?? "");
       const modeLine = modeId ? `

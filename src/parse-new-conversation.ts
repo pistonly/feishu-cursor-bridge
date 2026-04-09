@@ -150,8 +150,18 @@ export function parseNewConversationCommand(
 
 function normalizeBackend(raw: string | undefined): AcpBackend | undefined {
   const normalized = raw?.trim().toLowerCase();
-  if (normalized === "official" || normalized === "legacy" || normalized === "tmux") {
-    return normalized;
+  if (!normalized) return undefined;
+  if (normalized === "official" || normalized === "cursor-official") {
+    return "cursor-official";
+  }
+  if (normalized === "legacy" || normalized === "cursor-legacy") {
+    return "cursor-legacy";
+  }
+  if (normalized === "tmux" || normalized === "cursor-tmux") {
+    return "cursor-tmux";
+  }
+  if (normalized === "claude") {
+    return "claude";
   }
   return undefined;
 }

@@ -1,6 +1,6 @@
 # feishu-cursor-bridge
 
-> Standalone service that controls the Cursor AI Agent via a Feishu bot. The bridge runs as an **ACP Client**, spawning Cursor’s official **`agent acp`** by default; optional **`ACP_BACKEND=legacy`** runs the in-repo **`cursor-agent-acp/`** stdio adapter (see [docs/third-party.md](docs/third-party.md) for provenance only).
+> Standalone service that controls multiple ACP backends from a Feishu bot. The bridge runs as an **ACP Client** and can route each session slot to **`cursor-official`**, **`cursor-legacy`**, **`cursor-tmux`**, or **`claude`**.
 
 **[中文文档](#中文文档)**
 
@@ -14,10 +14,10 @@
 - **Multiple sessions**: up to **5** concurrent sessions per user per chat, each with its own context and workspace; `/switch` between them; inactive sessions keep their ACP connection
 - **Max live sessions per user**: default **10** across all DMs / groups / threads (tune with `BRIDGE_MAX_SESSIONS_PER_USER`; `0` means unlimited), reducing idle ACP connection buildup when idle timeout is infinite
 - Group chats: @ the bot (or no @ when “only one human + the bot”); DMs: talk directly
-- **Explicit sessions**: set **`CURSOR_WORK_ALLOWLIST`** (required); create a session with `/new list` then `/new <index or path>` before normal chat; bare `/new` lists presets
+- **Explicit sessions**: set **`BRIDGE_WORK_ALLOWLIST`** (compatible with `CURSOR_WORK_ALLOWLIST`); create a session with `/new list` then `/new <index or path>` before normal chat; bare `/new` lists presets
 - Built-in commands: `/new`, `/sessions`, `/switch`, `/close` (incl. `/close all`), `/rename` (incl. `/new list`, `/new <index>`, `/new <path>`), `/status`, `/mode`, `/model`; **`/topic` + text** is display-only (not sent to the Agent — see `docs/feishu-commands.md`)
 - Persistent Feishu ↔ ACP mapping: after restart, if the Agent reports `loadSession`, `session/load` can recover
-- **CLI resume ID (`legacy` / in-repo adapter only)**: with `ACP_BACKEND=legacy`, `/status` shows the CLI chat id for the active session; official ACP does not expose an equivalent field today
+- **Recovery metadata**: `/status` shows Cursor legacy CLI resume ID or Claude resume session id when the backend exposes one
 
 ## Architecture
 
@@ -28,7 +28,7 @@ Feishu user ──(WebSocket)──> FeishuBot ──> Bridge
                                               │
                    @agentclientprotocol/sdk ClientSideConnection
                                               │
-                   stdio NDJSON ──> agent acp child (default) / in-repo cursor-agent-acp (`legacy`) ──> Cursor
+                   stdio NDJSON ──> agent acp / cursor-agent-acp / tmux ACP server / claude-agent-acp
 ```
 
 - **Feishu layer**: `src/feishu-bot.ts` (SDK + message I/O only)
@@ -39,7 +39,7 @@ Feishu user ──(WebSocket)──> FeishuBot ──> Bridge
 ## Prerequisites
 
 1. **Node.js 18+**
-2. **Cursor CLI / Agent CLI** installed (`agent` on PATH, logged in); if you use **`ACP_BACKEND=legacy`**, the in-repo adapter still shells out to **`cursor-agent`** — keep it on PATH
+2. Install the runtime(s) you plan to use: Cursor official uses `agent`; `cursor-legacy` still shells out to `cursor-agent`; `claude` uses `claude-agent-acp` / Claude Code authentication
 3. Feishu enterprise app: bot, `im:message`, **`im:message.group_msg`** (required for group messages), `im:message:send_as_bot`, `im:chat`; for “one user + bot” no-@ logic, grant read chat / member APIs as needed (`im:chat` related)
 
 ## Quick Start
@@ -50,7 +50,7 @@ cp .env.example .env
 # Edit .env
 
 npm run dev
-# (`tsx src/index.ts`: with ACP_BACKEND=legacy, the adapter defaults to cursor-agent-acp sources via tsx—no build:adapter loop)
+# (`tsx src/index.ts`: `cursor-legacy` still defaults to cursor-agent-acp sources via tsx; other backends use their configured spawn command)
 # or
 npm run build && npm start
 
@@ -58,6 +58,23 @@ npm run build && npm start
 # ./scripts/bridge-dev.sh
 # npm run dev:restart
 ```
+
+### Backend deployment matrix
+
+`bash service.sh install` / `update` always starts the same bridge process; which backend actually runs is decided by `ACP_BACKEND` / `/new --backend ...` and the commands available on the host.
+
+| Backend | Required local command | Extra prerequisite | Key env vars | Recommended smoke / check |
+|---------|------------------------|--------------------|--------------|---------------------------|
+| `cursor-official` | `agent` | Run `agent login` on the host if needed | `ACP_BACKEND=cursor-official`, optional `CURSOR_AGENT_PATH`, `CURSOR_API_KEY`, `CURSOR_AUTH_TOKEN` | Confirm `agent acp` works locally, then use `/new --backend cursor-official ...` or normal `/new` |
+| `cursor-legacy` | Node.js + in-repo `cursor-agent-acp/` | Local `cursor-agent` / Cursor CLI must still be usable | `ACP_BACKEND=cursor-legacy`, optional `CURSOR_LEGACY_NODE_PATH`, `CURSOR_LEGACY_SESSION_DIR`, `CURSOR_LEGACY_EXTRA_ARGS` | Confirm `npm run dev` / `npm run build` succeeds, then use `/new --backend cursor-legacy ...` |
+| `cursor-tmux` | `tmux`, `cursor` CLI, Node.js | tmux available on host/container; Cursor CLI can run inside tmux pane | `ACP_BACKEND=cursor-tmux`, optional `TMUX_ACP_TSX_CLI`, `TMUX_ACP_SERVER_ENTRY`, `TMUX_ACP_SESSION_STORE`, `TMUX_ACP_START_COMMAND` | `docker-compose -f docker/compose.yaml run --rm tmux-acp-smoke` |
+| `claude` | `claude-agent-acp` or bundled dist / `npx` fallback | Claude Code auth must already be valid on the host; file send-back needs the bridge extension path to remain available | `ACP_BACKEND=claude`, optional `CLAUDE_AGENT_ACP_COMMAND`, `CLAUDE_AGENT_ACP_EXTRA_ARGS` | `docker-compose -f docker/compose.yaml run --rm claude-acp-smoke`, then a real `/new --backend claude ...` check |
+
+Notes:
+
+- `service.sh` does not pick a backend for you; it only installs and runs `node dist/index.js`.
+- `BRIDGE_WORK_ALLOWLIST` is still mandatory for all backends.
+- Docker dev setup mirrors host tools/auth by bind-mounting local directories; if a backend works on the host but not in Docker, check mounted binaries, auth state, and path assumptions first.
 
 ### Auto-start (`service.sh`)
 
@@ -125,7 +142,7 @@ docker-compose -f docker/compose.yaml down
 
 ### tmux backend smoke tests (Docker)
 
-Two **one-off** smoke services validate the `tmux` backend inside the container without touching a live Feishu bridge:
+Two **one-off** smoke services validate the `cursor-tmux` backend inside the container without touching a live Feishu bridge:
 
 ```bash
 # Basic: newSession -> prompt -> server restart -> loadSession -> prompt -> closeSession
@@ -140,7 +157,7 @@ Notes:
 - This compose targets **local Linux dev**; host paths are hard-coded as `/home/liuyang/...` — edit `docker/compose.yaml` bind mounts if your machine differs.
 - Workspace path in the container matches the host: `/home/liuyang/Documents/feishu-cursor-bridge`, so absolute paths in `.env` often need no change.
 - Dependencies live in Docker volume `bridge_node_modules`; `package-lock.json` changes trigger `npm install` on container start.
-- `docker/Dockerfile.dev` includes `tmux`, so smoke can exercise `ACP_BACKEND=tmux`; smokes do not hold a Feishu long connection — backend regression only.
+- `docker/Dockerfile.dev` includes `tmux`; Claude backend additionally requires its ACP command / auth to be available in the container. Smokes do not hold a Feishu long connection — backend regression only.
 
 ## Network & proxy
 
@@ -159,14 +176,16 @@ Notes:
 | `FEISHU_APP_ID` | Feishu App ID (required) | — |
 | `FEISHU_APP_SECRET` | Feishu App Secret (required) | — |
 | `FEISHU_DOMAIN` | `feishu` / `lark` / custom URL | `feishu` |
-| `ACP_BACKEND` | ACP backend: `official` / `legacy` / `tmux` | `official` |
+| `ACP_BACKEND` | Default backend: `cursor-official` / `cursor-legacy` / `cursor-tmux` / `claude` | `cursor-official` |
 | `CURSOR_AGENT_PATH` | Official ACP command path | `agent` |
 | `CURSOR_API_KEY` | Official ACP API key (optional) | empty |
 | `CURSOR_AUTH_TOKEN` | Official ACP auth token (optional) | empty |
-| `CURSOR_WORK_ALLOWLIST` | **Required.** Comma-separated absolute workspace roots; session dirs must sit under one of them; ACP child `cwd` = first entry | — |
-| `ACP_NODE_PATH` | Node binary used to spawn **in-repo** `cursor-agent-acp` (`legacy` only) | `process.execPath` |
-| `CURSOR_ACP_SESSION_DIR` | Passed to `cursor-agent-acp` as `--session-dir` (`legacy` only) | `~/.feishu-cursor-bridge/cursor-acp-sessions` |
-| `CURSOR_ACP_EXTRA_ARGS` | Extra args for `cursor-agent-acp` CLI (`legacy` only, space-separated) | empty |
+| `CLAUDE_AGENT_ACP_COMMAND` | Claude ACP child command | bundled dist or `npx -y @agentclientprotocol/claude-agent-acp` |
+| `CLAUDE_AGENT_ACP_EXTRA_ARGS` | Extra args appended to Claude ACP child command | empty |
+| `BRIDGE_WORK_ALLOWLIST` | **Required.** Comma-separated absolute workspace roots; compatible with `CURSOR_WORK_ALLOWLIST`; ACP child `cwd` = first entry | — |
+| `CURSOR_LEGACY_NODE_PATH` | Node binary used to spawn **in-repo** `cursor-agent-acp` (`cursor-legacy` only; compatible with `ACP_NODE_PATH`) | `process.execPath` |
+| `CURSOR_LEGACY_SESSION_DIR` | Passed to `cursor-agent-acp` as `--session-dir` (`cursor-legacy` only; compatible with `CURSOR_ACP_SESSION_DIR`) | `~/.feishu-cursor-bridge/cursor-acp-sessions` |
+| `CURSOR_LEGACY_EXTRA_ARGS` | Extra args for `cursor-agent-acp` CLI (`cursor-legacy` only; compatible with `CURSOR_ACP_EXTRA_ARGS`) | empty |
 | `BRIDGE_SESSION_STORE` | Feishu ↔ ACP mapping JSON path | `~/.feishu-cursor-bridge/.feishu-bridge-sessions.json` |
 | `SESSION_IDLE_TIMEOUT_MS` | Idle before new session; `0` / `infinity` = never | `604800000` (7 days) |
 | `BRIDGE_MAX_SESSIONS_PER_USER` | Max live sessions per user (all chats); `0` = unlimited | `10` |
@@ -185,13 +204,13 @@ Proxy precedence: `wss_proxy` / `ws_proxy` > `https_proxy` / `http_proxy` / `all
 
 ## Usage
 
-- **DM / group**: after you **create a session** with `/new list` then `/new <index or path>` (paths must fall under `CURSOR_WORK_ALLOWLIST`), normal messages go to Cursor; without a session the bot asks you to `/new` first
+- **DM / group**: after you **create a session** with `/new list` then `/new <index or path>` (paths must fall under `BRIDGE_WORK_ALLOWLIST`), normal messages go to Cursor; without a session the bot asks you to `/new` first
 - **Incoming attachments**: when a session is active, files/images/audio/video sent from Feishu are downloaded into `.feishu-incoming/` under the current workspace and then described to the Agent as local paths; `/fileback` is the opposite direction, for asking the Agent to send workspace files back to Feishu
 - **Group**: @ the bot + content ( **`im:message.group_msg`** must be enabled or group events won’t arrive); in **topic** groups, each `thread_id` maps to its own ACP session (not shared with the main group chat)
 - **Multi-session**: `/new <index or path>` creates and switches (old session stays connected); bare `/new` lists presets; `/sessions` lists; `/switch <index or name>` switches active (no arg → last used); `/close` closes one; `/rename` helps name-based switching. Full syntax: `docs/feishu-commands.md`
-- `/status` or `/状态`: session stats, always shows ACP backend; `official` / `legacy` also show known mode for the active session; `tmux` does not show a bridge-faked mode; **legacy** adds CLI resume ID for the active slot; with `BRIDGE_DEBUG=true`, adds ACP `sessionId`, paths, modes, etc.
-- `/mode <id>`: `official` / `legacy` use ACP `session/set_mode`; `tmux` forwards `/mode ...` verbatim to the real Cursor CLI pane
-- `/model <id>`: `legacy` / `official` use ACP `session/set_model` (`official` follows selector from ACP); `tmux` forwards to CLI pane; only `official` supports bridge-side `/model <index>`
+- `/status` or `/状态`: session stats, always shows ACP backend; `cursor-official` / `cursor-legacy` / `claude` show known mode for the active session; `cursor-tmux` does not show a bridge-faked mode; recovery metadata is shown when available; with `BRIDGE_DEBUG=true`, adds ACP `sessionId`, paths, modes, etc.
+- `/mode <id>`: `cursor-official` / `cursor-legacy` / `claude` use ACP `session/set_mode`; `cursor-tmux` forwards `/mode ...` verbatim to the real Cursor CLI pane
+- `/model <id>`: `cursor-legacy` / `cursor-official` / `claude` use ACP `session/set_model` (`cursor-official` keeps selector-by-index UX); `cursor-tmux` forwards to CLI pane
 
 ## Manual smoke checklist
 
@@ -200,20 +219,20 @@ Proxy precedence: `wss_proxy` / `ws_proxy` > `https_proxy` / `http_proxy` / `all
 3. Multi-turn — same session reused (`BRIDGE_DEBUG`: stable `sessionId`)
 4. With multiple `/new` sessions, `/switch` keeps contexts independent
 5. When tools run, card “tools” updates (depends on Agent output)
-6. `/status` shows backend + mode; with `BRIDGE_DEBUG=true`, `sessionId` / workspace, etc.; **CLI resume ID** appears only with `ACP_BACKEND=legacy`
+6. `/status` shows backend + mode; with `BRIDGE_DEBUG=true`, `sessionId` / workspace, etc.; **CLI resume ID** appears only with `ACP_BACKEND=cursor-legacy`
 
 ## Tech stack
 
 - **Cursor `agent acp`** — default ACP server
-- **`cursor-agent-acp/`** — in-repo stdio adapter when `ACP_BACKEND=legacy` ([provenance](docs/third-party.md))
+- **`cursor-agent-acp/`** — in-repo stdio adapter when using `cursor-legacy` ([provenance](docs/third-party.md))
 - **[@agentclientprotocol/sdk](https://www.npmjs.com/package/@agentclientprotocol/sdk)** — ACP client types + connection
 - **@larksuiteoapi/node-sdk** — Feishu long connection + message API
 - **TypeScript + Node.js**
 
 ## Backend strategy
 
-- Default: **`agent acp`** (official).
-- Optional: **`ACP_BACKEND=legacy`** uses the embedded **`cursor-agent-acp/`** adapter (stdio + `cursor-agent`).
+- Default: **`cursor-official`** (`agent acp`).
+- Optional: **`cursor-legacy`** uses the embedded **`cursor-agent-acp/`** adapter; **`cursor-tmux`** uses the tmux ACP server prototype; **`claude`** uses `claude-agent-acp`.
 - Protocol follows the SDK; events cover thinking, tools, plan, mode, etc., folded by `FeishuCardState`.
 
 ---
@@ -222,7 +241,7 @@ Proxy precedence: `wss_proxy` / `ws_proxy` > `https_proxy` / `http_proxy` / `all
 
 ## 这是什么
 
-独立服务，通过飞书机器人控制 Cursor AI Agent。桥接进程作为 **ACP Client**，默认子进程运行 Cursor 官方 **`agent acp`**；也可设 **`ACP_BACKEND=legacy`** 使用本仓库内 **`cursor-agent-acp/`**（stdio 适配器）。历史参考说明见 [docs/third-party.md](docs/third-party.md)，**不维护与外部 npm 包一致**。
+独立服务，通过飞书机器人统一控制多个 ACP backend。桥接进程作为 **ACP Client**，可将每个 session 槽位分别路由到 **`cursor-official`**、**`cursor-legacy`**、**`cursor-tmux`** 或 **`claude`**。
 
 ## 功能特性
 
@@ -232,10 +251,10 @@ Proxy precedence: `wss_proxy` / `ws_proxy` > `https_proxy` / `http_proxy` / `all
 - **多 session**：同一用户在同一聊天中可同时持有多个 session（最多 5 个），各自独立上下文与工作区；可用 `/switch` 在它们之间切换，未活跃的 session 仍保持 ACP 连接
 - **每用户存活 session 上限**：同一飞书用户跨所有私聊/群/话题的存活 session 总数默认最多 **10**（可用 `BRIDGE_MAX_SESSIONS_PER_USER` 调整；`0` 表示不限制），避免将空闲过期设为无限时进程堆积过多 ACP 连接
 - 群聊 @ 机器人触发（或满足「仅 1 用户 + 1 机器人」时可免 @）；私聊直接对话
-- **须显式建 session**：配置必填 **`CURSOR_WORK_ALLOWLIST`**；先用 `/new list` 再 `/new <序号或路径>` 才能对话；裸 `/new` 等同列表
+- **须显式建 session**：配置必填 **`BRIDGE_WORK_ALLOWLIST`**（兼容 `CURSOR_WORK_ALLOWLIST`）；先用 `/new list` 再 `/new <序号或路径>` 才能对话；裸 `/new` 等同列表
 - 内置命令：`/new`、`/sessions`、`/switch`、`/close`（含 `/close all`）、`/rename`（含 `/new list`、`/new <序号>`、`/new <路径>` 等）、`/status`、`/mode`、`/model`；另有 **`/topic` + 话题内容** 的纯展示命令（不发给 Agent，见 `docs/feishu-commands.md`）
 - 会话映射持久化：进程重启后若 Agent 声明 `loadSession`，可 `session/load` 恢复
-- **CLI resume ID（legacy only）**：若切到 `ACP_BACKEND=legacy`，`/status` 会展示当前活跃 session 对应的 CLI chat id；官方 ACP 当前未暴露等价字段
+- **恢复元信息**：`/status` 会在 `cursor-legacy` 显示 CLI resume ID，在 `claude` 显示 Claude 恢复会话 id；官方 ACP 当前未暴露等价字段
 
 ## 架构
 
@@ -246,7 +265,7 @@ Proxy precedence: `wss_proxy` / `ws_proxy` > `https_proxy` / `http_proxy` / `all
                                            │
                     @agentclientprotocol/sdk ClientSideConnection
                                            │
-                    stdio NDJSON ──> agent acp 子进程（默认） / 本仓 cursor-agent-acp（`legacy`） ──> Cursor
+                    stdio NDJSON ──> agent acp 子进程（默认） / 本仓 cursor-agent-acp（`cursor-legacy`） / tmux ACP server / claude-agent-acp
 ```
 
 - **飞书层**：`src/feishu-bot.ts`（仅 SDK 与消息收发）
@@ -257,7 +276,7 @@ Proxy precedence: `wss_proxy` / `ws_proxy` > `https_proxy` / `http_proxy` / `all
 ## 前置条件
 
 1. **Node.js 18+**
-2. 已安装 **Cursor CLI / Agent CLI**（`agent` 在 PATH 中，并已完成登录；若使用 **`ACP_BACKEND=legacy`**，内嵌适配器会调用 **`cursor-agent`**，需本机可用）
+2. 已安装 **Cursor CLI / Agent CLI**（`agent` 在 PATH 中，并已完成登录；若使用 **`ACP_BACKEND=cursor-legacy`**，内嵌适配器会调用 **`cursor-agent`**，需本机可用）
 3. 飞书企业自建应用：机器人、`im:message`、**`im:message.group_msg`**（群聊收消息必需）、`im:message:send_as_bot`、`im:chat`；若使用「仅 1 用户 + 1 机器人」免 @ 等需拉群信息的逻辑，还需按需开通 `im:chat` 相关只读权限（如查看群成员）
 
 ## 快速开始
@@ -268,7 +287,7 @@ cp .env.example .env
 # 编辑 .env
 
 npm run dev
-# （`tsx src/index.ts`：若 .env 中 ACP_BACKEND=legacy，本仓 cursor-agent-acp 默认以 tsx 跑源码，改适配器无需先 npm run build:adapter）
+# （`tsx src/index.ts`：若 .env 中 ACP_BACKEND=cursor-legacy，本仓 cursor-agent-acp 默认以 tsx 跑源码，改适配器无需先 npm run build:adapter）
 # 或
 npm run build && npm start
 
@@ -276,6 +295,23 @@ npm run build && npm start
 # ./scripts/bridge-dev.sh
 # npm run dev:restart
 ```
+
+### backend 部署对照
+
+`bash service.sh install` / `update` 启动的始终是同一个 bridge 进程；真正跑哪个 backend，取决于 `ACP_BACKEND`、`/new --backend ...` 以及宿主机上实际可用的命令与认证状态。
+
+| Backend | 本机必需命令 | 额外前置条件 | 关键环境变量 | 推荐验证方式 |
+|---------|--------------|--------------|--------------|--------------|
+| `cursor-official` | `agent` | 必要时先在宿主机执行 `agent login` | `ACP_BACKEND=cursor-official`，可选 `CURSOR_AGENT_PATH`、`CURSOR_API_KEY`、`CURSOR_AUTH_TOKEN` | 先确认本地 `agent acp` 可用，再用 `/new --backend cursor-official ...` 或默认 `/new` |
+| `cursor-legacy` | Node.js + 仓库内 `cursor-agent-acp/` | 宿主机上的 `cursor-agent` / Cursor CLI 仍需可用 | `ACP_BACKEND=cursor-legacy`，可选 `CURSOR_LEGACY_NODE_PATH`、`CURSOR_LEGACY_SESSION_DIR`、`CURSOR_LEGACY_EXTRA_ARGS` | 先确认 `npm run dev` / `npm run build` 正常，再用 `/new --backend cursor-legacy ...` |
+| `cursor-tmux` | `tmux`、`cursor` CLI、Node.js | 宿主机或容器里要能启动 tmux，且 tmux pane 内可执行 Cursor CLI | `ACP_BACKEND=cursor-tmux`，可选 `TMUX_ACP_TSX_CLI`、`TMUX_ACP_SERVER_ENTRY`、`TMUX_ACP_SESSION_STORE`、`TMUX_ACP_START_COMMAND` | `docker-compose -f docker/compose.yaml run --rm tmux-acp-smoke` |
+| `claude` | `claude-agent-acp`，或 bundled dist / `npx` 回退 | 宿主机需已有有效 Claude Code 认证；文件回传依赖 bridge 扩展链路可用 | `ACP_BACKEND=claude`，可选 `CLAUDE_AGENT_ACP_COMMAND`、`CLAUDE_AGENT_ACP_EXTRA_ARGS` | `docker-compose -f docker/compose.yaml run --rm claude-acp-smoke`，再补一次真实 `/new --backend claude ...` |
+
+说明：
+
+- `service.sh` 不负责替你选择 backend，它只负责安装并运行 `node dist/index.js`。
+- 所有 backend 都仍然要求配置 `BRIDGE_WORK_ALLOWLIST`。
+- Docker dev setup 通过 bind mount 复用宿主机工具与认证；如果宿主机可用、容器里不可用，优先检查挂载的二进制、认证状态和绝对路径假设。
 
 ### 开机自启（`service.sh`：macOS launchd / Linux systemd）
 
@@ -346,11 +382,15 @@ docker-compose -f docker/compose.yaml down
 当前仓库还提供了两个**一次性 smoke 服务**，用于在不影响宿主机正在运行的飞书 bridge 的情况下，单独验证容器内的 `tmux` backend：
 
 ```bash
-# 基本链路：newSession -> prompt -> server 重启 -> loadSession -> prompt -> closeSession
+# tmux 基本链路：newSession -> prompt -> server 重启 -> loadSession -> prompt -> closeSession
 docker-compose -f docker/compose.yaml run --rm tmux-acp-smoke
 
-# 取消链路：session/cancel -> stopReason: cancelled
+# tmux 取消链路：session/cancel -> stopReason: cancelled
 docker-compose -f docker/compose.yaml run --rm tmux-acp-cancel-smoke
+
+# claude 最小链路：newSession -> prompt -> closeSession
+# 需容器内可执行 CLAUDE_AGENT_ACP_COMMAND，且已具备 Claude Code / Anthropic 认证
+docker-compose -f docker/compose.yaml run --rm claude-acp-smoke
 ```
 
 说明：
@@ -358,7 +398,7 @@ docker-compose -f docker/compose.yaml run --rm tmux-acp-cancel-smoke
 - 该 compose 面向**本机 Linux 开发联调**，当前宿主机路径按 `/home/liuyang/...` 写死；若换机器，请同步修改 `docker/compose.yaml` 中的 bind mount。
 - 容器内工作目录与宿主机保持一致：`/home/liuyang/Documents/feishu-cursor-bridge`，因此现有 `.env` 里的工作区绝对路径通常无需额外改写。
 - 依赖安装在 Docker volume `bridge_node_modules` 中；`package-lock.json` 变化后，容器启动时会自动重新执行 `npm install`。
-- `docker/Dockerfile.dev` 现已安装 `tmux`，因此 smoke 服务可直接验证 `ACP_BACKEND=tmux` 路径；这两个 smoke 服务不会占用飞书 bot 长连接，只用于容器内的 backend 回归。
+- `docker/Dockerfile.dev` 现已安装 `tmux`，因此 smoke 服务可直接验证 `ACP_BACKEND=cursor-tmux` 路径；这些 smoke 服务不会占用飞书 bot 长连接，只用于容器内的 backend 回归。
 
 ## 网络与代理
 
@@ -377,14 +417,14 @@ docker-compose -f docker/compose.yaml run --rm tmux-acp-cancel-smoke
 | `FEISHU_APP_ID` | 飞书 App ID（必填） | - |
 | `FEISHU_APP_SECRET` | 飞书 App Secret（必填） | - |
 | `FEISHU_DOMAIN` | `feishu` / `lark` / 自定义 URL | `feishu` |
-| `ACP_BACKEND` | ACP 后端：`official` / `legacy` / `tmux` | `official` |
+| `ACP_BACKEND` | ACP 后端：`cursor-official` / `cursor-legacy` / `cursor-tmux` / `claude` | `cursor-official` |
 | `CURSOR_AGENT_PATH` | 官方 ACP 命令路径 | `agent` |
 | `CURSOR_API_KEY` | 官方 ACP API key（可选） | 空 |
 | `CURSOR_AUTH_TOKEN` | 官方 ACP auth token（可选） | 空 |
-| `CURSOR_WORK_ALLOWLIST` | **必填**，逗号分隔的绝对路径根；会话工作区须落在其下；ACP 子进程 `cwd` 取列表首项 | — |
-| `ACP_NODE_PATH` | 用于启动本仓 `cursor-agent-acp` 子进程的 Node（仅 `legacy`） | `process.execPath` |
-| `CURSOR_ACP_SESSION_DIR` | 传给 `cursor-agent-acp` 的 `--session-dir`（仅 `legacy`） | `~/.feishu-cursor-bridge/cursor-acp-sessions` |
-| `CURSOR_ACP_EXTRA_ARGS` | 透传 `cursor-agent-acp` CLI 的额外参数（仅 `legacy`，空格分隔） | 空 |
+| `BRIDGE_WORK_ALLOWLIST` | **必填**，逗号分隔的绝对路径根；兼容 `CURSOR_WORK_ALLOWLIST`；ACP 子进程 `cwd` 取列表首项 | — |
+| `CURSOR_LEGACY_NODE_PATH` | 用于启动本仓 `cursor-agent-acp` 子进程的 Node（仅 `cursor-legacy`，兼容 `ACP_NODE_PATH`） | `process.execPath` |
+| `CURSOR_LEGACY_SESSION_DIR` | 传给 `cursor-agent-acp` 的 `--session-dir`（仅 `cursor-legacy`，兼容 `CURSOR_ACP_SESSION_DIR`） | `~/.feishu-cursor-bridge/cursor-acp-sessions` |
+| `CURSOR_LEGACY_EXTRA_ARGS` | 透传 `cursor-agent-acp` CLI 的额外参数（仅 `cursor-legacy`，兼容 `CURSOR_ACP_EXTRA_ARGS`，空格分隔） | 空 |
 | `BRIDGE_SESSION_STORE` | 飞书↔ACP 映射 JSON 路径 | `~/.feishu-cursor-bridge/.feishu-bridge-sessions.json` |
 | `SESSION_IDLE_TIMEOUT_MS` | 空闲多久新建会话；`0` / `infinity` 表示永不过期 | `604800000`（7 天） |
 | `BRIDGE_MAX_SESSIONS_PER_USER` | 同一用户存活 session 总数上限（跨聊天）；`0` 不限制 | `10` |
@@ -404,14 +444,14 @@ docker-compose -f docker/compose.yaml run --rm tmux-acp-cancel-smoke
 
 ## 使用方式
 
-- **私聊 / 群聊**：须先用 **`/new list`** 再 **`/new <序号或路径>`** 创建 session（路径须在 `CURSOR_WORK_ALLOWLIST` 下），之后普通消息才会进 Agent；无 session 时机器人会提示先 `/new`
-- **切换 backend**：可用 `/new <序号或路径> --backend <official|legacy|tmux>` 为新 session 指定 backend；但该 backend 必须已包含在 `ACP_ENABLED_BACKENDS` 中，否则不会被启动
+- **私聊 / 群聊**：须先用 **`/new list`** 再 **`/new <序号或路径>`** 创建 session（路径须在 `BRIDGE_WORK_ALLOWLIST` 下），之后普通消息才会进 Agent；无 session 时机器人会提示先 `/new`
+- **切换 backend**：可用 `/new <序号或路径> --backend <cursor-official|cursor-legacy|cursor-tmux|claude>` 为新 session 指定 backend；但该 backend 必须已包含在 `ACP_ENABLED_BACKENDS` 中，否则不会被启动
 - **飞书附件入站**：有活跃 session 时，用户直接发送的文件 / 图片 / 音频 / 视频会先下载到当前工作区的 `.feishu-incoming/`，再把相对路径说明交给 Agent；`/fileback` 则是反方向，用于让 Agent 把工作区文件回传到飞书
 - **群聊**：@机器人 + 内容（开发平台须为应用开通 **`im:message.group_msg`**，否则群消息事件不会投递到机器人）；**话题群**内不同话题（`thread_id`）会**分别**映射 ACP 会话，与群主页会话互不共享
 - **多 session 切换**：`/new <序号或路径>` 新建并切到该 session（裸 `/new` 等同列表）；`/sessions` 列表；`/switch <编号或名称>` 切换活跃 session（无参数时切到上一次用过的）；`/close` 关闭指定；`/rename` 便于用名称切换。完整语法与快捷列表见 `docs/feishu-commands.md`
-- `/status` 或 `/状态`：会话统计，始终展示当前 ACP 后端；`official` / `legacy` 下还会展示当前活跃 session 已知 mode，`tmux` 下不再显示 bridge 侧伪造的 mode；若是 `legacy`，会额外显示当前活跃 slot 的 CLI resume ID；`BRIDGE_DEBUG=true` 时额外含 ACP `sessionId`、路径、可用模式等调试信息
-- `/mode <模式ID>`：`official` / `legacy` 下通过 ACP `session/set_mode` 切换当前活跃 session 的 mode；`tmux` 下则把 `/mode ...` 原样发给真实 Cursor CLI pane，由 CLI 自己处理
-- `/model <模型ID>`：`legacy` / `official` 后端下通过 ACP `session/set_model` 切换当前活跃 session 的模型；其中 `official` 以当前 ACP session 返回的 selector 为准；`tmux` 后端下则把 `/model ...` 原样发给真实 Cursor CLI pane，由 CLI 自己处理；仅 `official` 支持桥接侧 `/model <序号>`
+- `/status` 或 `/状态`：会话统计，始终展示当前 ACP 后端；`cursor-official` / `cursor-legacy` / `claude` 下还会展示当前活跃 session 已知 mode，`cursor-tmux` 下不再显示 bridge 侧伪造的 mode；若是 `cursor-legacy`，会额外显示当前活跃 slot 的 CLI resume ID，若是 `claude` 则显示 Claude 恢复会话 id；`BRIDGE_DEBUG=true` 时额外含 ACP `sessionId`、路径、可用模式等调试信息
+- `/mode <模式ID>`：`cursor-official` / `cursor-legacy` / `claude` 下通过 ACP `session/set_mode` 切换当前活跃 session 的 mode；`cursor-tmux` 下则把 `/mode ...` 原样发给真实 Cursor CLI pane，由 CLI 自己处理
+- `/model <模型ID>`：`cursor-legacy` / `cursor-official` / `claude` 后端下通过 ACP `session/set_model` 切换当前活跃 session 的模型；其中 `cursor-official` 以当前 ACP session 返回的 selector 为准；`cursor-tmux` 后端下则把 `/model ...` 原样发给真实 Cursor CLI pane，由 CLI 自己处理；仅 `cursor-official` 支持桥接侧 `/model <序号>`
 
 ## 最小验证清单（手工）
 
@@ -420,19 +460,19 @@ docker-compose -f docker/compose.yaml run --rm tmux-acp-cancel-smoke
 3. 连续多轮对话，确认复用同一会话（`BRIDGE_DEBUG` 下 sessionId 不变）
 4. 若已用 `/new` 建多个 session，可用 `/switch` 在编号间切换且各 session 独立
 5. 触发工具调用时，卡片「工具」列表有更新（视 Agent 输出而定）
-6. 发送 `/status`，确认显示当前 ACP 后端与当前 mode；若 `BRIDGE_DEBUG=true`，再确认返回里包含 `sessionId`、工作区路径等调试信息；只有切到 `ACP_BACKEND=legacy` 时，才会额外出现 **CLI resume ID**
+6. 发送 `/status`，确认显示当前 ACP 后端与当前 mode；若 `BRIDGE_DEBUG=true`，再确认返回里包含 `sessionId`、工作区路径等调试信息；只有切到 `ACP_BACKEND=cursor-legacy` 时，才会额外出现 **CLI resume ID**
 
 ## 技术栈
 
 - **Cursor `agent acp`** — 默认 ACP 服务端
-- **`cursor-agent-acp/`** — 内嵌 stdio 适配器源码与构建产物（`ACP_BACKEND=legacy`）；溯源见 [docs/third-party.md](docs/third-party.md)。目录内 `package.json` 仅含 `"type":"commonjs"`，避免根目录 `"type":"module"` 将 `dist/*.js` 误判为 ESM
+- **`cursor-agent-acp/`** — 内嵌 stdio 适配器源码与构建产物（`ACP_BACKEND=cursor-legacy`）；溯源见 [docs/third-party.md](docs/third-party.md)。目录内 `package.json` 仅含 `"type":"commonjs"`，避免根目录 `"type":"module"` 将 `dist/*.js` 误判为 ESM
 - **[@agentclientprotocol/sdk](https://www.npmjs.com/package/@agentclientprotocol/sdk)** — 官方 ACP Client 连接与类型
 - **@larksuiteoapi/node-sdk** — 飞书长连接与消息 API
 - **TypeScript + Node.js**
 
 ## 当前后端策略
 
-- 默认使用 **`agent acp` 官方后端**。
+- 默认 backend 为 **`cursor-official`**，对应官方 `agent acp`。
 - `ACP_ENABLED_BACKENDS` 控制启动时实际启用哪些 backend；若未设置，默认只启用 `ACP_BACKEND` 当前值。
-- 可选 **`ACP_BACKEND=legacy`**：使用本仓库内 **`cursor-agent-acp/`**（不依赖外部 npm 包）。
+- 可选 backend 包括 **`cursor-legacy`**（本仓 `cursor-agent-acp/`）、**`cursor-tmux`**（tmux ACP server 原型）和 **`claude`**（`claude-agent-acp`）。
 - 协议实现以 SDK 为准，事件面覆盖思考、工具、计划、模式等，并由 `FeishuCardState` 折叠展示。

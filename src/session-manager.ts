@@ -1,5 +1,10 @@
 import * as path from "node:path";
-import type { AcpBackend, AcpRuntimeResolver, BridgeAcpRuntime } from "./acp/runtime-contract.js";
+import type {
+  AcpBackend,
+  AcpRuntimeResolver,
+  BridgeAcpRuntime,
+  SessionRecovery,
+} from "./acp/runtime-contract.js";
 import type {
   SessionStore,
   PersistedSessionGroup,
@@ -9,7 +14,7 @@ import type {
 export interface UserSession {
   backend: AcpBackend;
   sessionId: string;
-  cursorCliChatId?: string;
+  recovery?: SessionRecovery;
   workspaceRoot: string;
   chatId: string;
   userId: string;
@@ -83,7 +88,7 @@ export class SessionManager {
     this.defaultWorkspaceRoot = path.resolve(
       options.defaultWorkspaceRoot ?? process.cwd(),
     );
-    this.defaultBackend = options.defaultBackend ?? "official";
+    this.defaultBackend = options.defaultBackend ?? "cursor-official";
     this.maxSlots = options.maxSlotsPerKey ?? 5;
     this.maxSessionsPerUser = options.maxSessionsPerUser ?? 10;
   }
@@ -194,7 +199,7 @@ export class SessionManager {
     }
     const cwd = path.resolve(trimmedRoot);
     const runtime = this.runtimeForBackend(backend);
-    const { sessionId, cursorCliChatId } = await runtime.newSession(cwd);
+    const { sessionId, recovery } = await runtime.newSession(cwd);
     const session = this.makeSession(
       backend,
       sessionId,
@@ -203,7 +208,7 @@ export class SessionManager {
       userId,
       chatType,
       now,
-      cursorCliChatId,
+      recovery,
       threadId,
     );
 
@@ -640,7 +645,7 @@ export class SessionManager {
     userId: string,
     chatType: "p2p" | "group",
     now: number,
-    cursorCliChatId?: string,
+    recovery?: SessionRecovery,
     threadId?: string,
   ): UserSession {
     const s: UserSession = {
@@ -653,8 +658,8 @@ export class SessionManager {
       createdAt: now,
       lastActiveAt: now,
     };
-    if (cursorCliChatId) {
-      s.cursorCliChatId = cursorCliChatId;
+    if (recovery) {
+      s.recovery = recovery;
     }
     if (threadId) {
       s.threadId = threadId;
@@ -753,54 +758,65 @@ export class SessionManager {
     this.pendingNotices.set(key, list);
   }
 
-  private formatCliBindingChangedNotice(
+  private formatRecoveryChangedNotice(
     slotIndex: number,
     workspaceRoot: string,
-    previousCursorCliChatId: string,
-    nextCursorCliChatId?: string,
+    previousRecovery: SessionRecovery,
+    nextRecovery?: SessionRecovery,
   ): string {
+    if (previousRecovery.kind === "cursor-cli") {
+      const nextCursorCliChatId =
+        nextRecovery?.kind === "cursor-cli" ? nextRecovery.cursorCliChatId : undefined;
+      return [
+        "⚠️ 检测到后台 ACP 会话已失效，虽然已自动重建连接，但当前飞书会话绑定的 CLI 会话发生了变化。",
+        `• Session：#${slotIndex}`,
+        `• 工作区：\`${workspaceRoot}\``,
+        `• 旧 CLI resume ID：\`${previousRecovery.cursorCliChatId}\``,
+        `• 新 CLI resume ID：${nextCursorCliChatId ? `\`${nextCursorCliChatId}\`` : "（无）"}`,
+        "",
+        "后续消息将继续写入上面显示的新绑定；如需继续原本的 CLI 对话，请在本机确认 Cursor 会话目录与适配器恢复状态。",
+      ].join("\n");
+    }
+    const nextResume =
+      nextRecovery?.kind === "claude-session" ? nextRecovery.resumeSessionId : undefined;
     return [
-      "⚠️ 检测到后台 ACP 会话已失效，虽然已自动重建连接，但当前飞书会话绑定的 CLI 会话发生了变化。",
+      "⚠️ 检测到后台 ACP 会话已失效，桥接已自动切换到新的 Claude 会话恢复绑定。",
       `• Session：#${slotIndex}`,
       `• 工作区：\`${workspaceRoot}\``,
-      `• 旧 CLI resume ID：\`${previousCursorCliChatId}\``,
-      `• 新 CLI resume ID：${nextCursorCliChatId ? `\`${nextCursorCliChatId}\`` : "（无）"}`,
-      "",
-      "后续消息将继续写入上面显示的新绑定；如需继续原本的 CLI 对话，请在本机确认 Cursor 会话目录与适配器恢复状态。",
+      `• 旧 Claude session：\`${previousRecovery.resumeSessionId}\``,
+      `• 新 Claude session：${nextResume ? `\`${nextResume}\`` : "（无）"}`,
     ].join("\n");
   }
 
-  private async createSessionPreservingCliBinding(
+  private async createSessionWithRecovery(
     backend: AcpBackend,
     cwd: string,
-    previousCursorCliChatId: string | undefined,
+    previousRecovery: SessionRecovery | undefined,
     slotIndex: number,
     noticeKey?: string,
-  ): Promise<{ sessionId: string; cursorCliChatId?: string }> {
-    const normalizedPrevious = previousCursorCliChatId?.trim() || undefined;
+  ): Promise<{ sessionId: string; recovery?: SessionRecovery }> {
     const fresh = await this.runtimeForBackend(backend).newSession(
       cwd,
-      normalizedPrevious ? { cursorCliChatId: normalizedPrevious } : undefined,
+      previousRecovery ? { recovery: previousRecovery } : undefined,
     );
-    const normalizedNext = fresh.cursorCliChatId?.trim() || undefined;
     if (
       noticeKey &&
-      normalizedPrevious &&
-      normalizedNext !== normalizedPrevious
+      previousRecovery &&
+      JSON.stringify(fresh.recovery) !== JSON.stringify(previousRecovery)
     ) {
       this.pushPendingNotice(
         noticeKey,
-        this.formatCliBindingChangedNotice(
+        this.formatRecoveryChangedNotice(
           slotIndex,
           cwd,
-          normalizedPrevious,
-          normalizedNext,
+          previousRecovery,
+          fresh.recovery,
         ),
       );
     }
     return {
       sessionId: fresh.sessionId,
-      cursorCliChatId: normalizedNext,
+      recovery: fresh.recovery,
     };
   }
 
@@ -824,11 +840,11 @@ export class SessionManager {
         // fall through
       }
     }
-    const { sessionId, cursorCliChatId } =
-      await this.createSessionPreservingCliBinding(
+    const { sessionId, recovery } =
+      await this.createSessionWithRecovery(
         slot.session.backend,
         cwd,
-        slot.session.cursorCliChatId,
+        slot.session.recovery,
         slot.slotIndex,
         noticeKey,
       );
@@ -837,10 +853,10 @@ export class SessionManager {
       sessionId,
       workspaceRoot: cwd,
       lastActiveAt: now,
-      ...(cursorCliChatId ? { cursorCliChatId } : {}),
+      ...(recovery ? { recovery } : {}),
     };
-    if (!cursorCliChatId) {
-      delete slot.session.cursorCliChatId;
+    if (!recovery) {
+      delete slot.session.recovery;
     }
   }
 
@@ -893,33 +909,33 @@ export class SessionManager {
       const runtime = this.runtimeForBackend(backend);
 
       let sessionId: string;
-      let cursorCliChatId: string | undefined;
+      let recovery: SessionRecovery | undefined;
       if (runtime.supportsLoadSession) {
         sessionId = ps.sessionId;
-        cursorCliChatId = ps.cursorCliChatId;
+        recovery = ps.recovery;
         try {
           await runtime.loadSession(ps.sessionId, cwd);
         } catch {
-          const fresh = await this.createSessionPreservingCliBinding(
+          const fresh = await this.createSessionWithRecovery(
             backend,
             cwd,
-            ps.cursorCliChatId,
+            ps.recovery,
             ps.slotIndex,
             key,
           );
           sessionId = fresh.sessionId;
-          cursorCliChatId = fresh.cursorCliChatId;
+          recovery = fresh.recovery;
         }
       } else {
-        const fresh = await this.createSessionPreservingCliBinding(
+        const fresh = await this.createSessionWithRecovery(
           backend,
           cwd,
-          ps.cursorCliChatId,
+          ps.recovery,
           ps.slotIndex,
           key,
         );
         sessionId = fresh.sessionId;
-        cursorCliChatId = fresh.cursorCliChatId;
+        recovery = fresh.recovery;
       }
 
       const session = this.makeSession(
@@ -930,7 +946,7 @@ export class SessionManager {
         userId,
         chatType,
         now,
-        cursorCliChatId,
+        recovery,
         tid,
       );
       restoredSlots.push({ slotIndex: ps.slotIndex, name: ps.name, session });
@@ -962,7 +978,7 @@ export class SessionManager {
       name: s.name,
       backend: s.session.backend,
       sessionId: s.session.sessionId,
-      ...(s.session.cursorCliChatId && { cursorCliChatId: s.session.cursorCliChatId }),
+      ...(s.session.recovery ? { recovery: s.session.recovery } : {}),
       workspaceRoot: s.session.workspaceRoot,
       lastActiveAt: s.session.lastActiveAt,
     }));

@@ -7,7 +7,7 @@ import type {
 } from "./runtime-contract.js";
 
 export class OfficialAcpRuntime extends SdkAcpRuntimeBase {
-  readonly backend = "official" as const;
+  readonly backend = "cursor-official" as const;
 
   constructor(config: Config, handler: FeishuBridgeClient) {
     super(config, handler);

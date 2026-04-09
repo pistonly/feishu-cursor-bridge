@@ -138,6 +138,10 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
     return { sessionId: res.sessionId };
   }
 
+  protected async authenticate(_conn: ClientSideConnection): Promise<void> {
+    // Most ACP backends are already authenticated by their launch environment.
+  }
+
   protected buildLoadSessionParams(
     sessionId: string,
     cwd: string,
@@ -378,14 +382,7 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
       },
     });
 
-    try {
-      await conn.authenticate({ methodId: "cursor_login" });
-    } catch (e) {
-      console.warn(
-        "[acp] authenticate(cursor_login) 失败（若已通过 Cursor CLI 登录可忽略）:",
-        e instanceof Error ? e.message : e,
-      );
-    }
+    await this.authenticate(conn);
   }
 
   async newSession(

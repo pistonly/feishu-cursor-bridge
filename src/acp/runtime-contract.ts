@@ -1,15 +1,23 @@
 import type { InitializeResponse } from "@agentclientprotocol/sdk";
 import type { FeishuBridgeClient } from "./feishu-bridge-client.js";
 
-export type AcpBackend = "legacy" | "official" | "tmux";
+export type AcpBackend =
+  | "cursor-official"
+  | "cursor-legacy"
+  | "cursor-tmux"
+  | "claude";
+
+export type SessionRecovery =
+  | { kind: "cursor-cli"; cursorCliChatId: string }
+  | { kind: "claude-session"; resumeSessionId: string };
 
 export interface AcpNewSessionOptions {
-  cursorCliChatId?: string;
+  recovery?: SessionRecovery;
 }
 
 export interface AcpNewSessionResult {
   sessionId: string;
-  cursorCliChatId?: string;
+  recovery?: SessionRecovery;
 }
 
 export interface AcpPromptResult {
@@ -63,4 +71,20 @@ export interface BridgeAcpRuntime {
 
 export interface AcpRuntimeResolver {
   getRuntime(backend: AcpBackend): BridgeAcpRuntime;
+}
+
+export function isCursorLegacyBackend(backend: AcpBackend): boolean {
+  return backend === "cursor-legacy";
+}
+
+export function isTmuxBackend(backend: AcpBackend): boolean {
+  return backend === "cursor-tmux";
+}
+
+export function isOfficialCursorBackend(backend: AcpBackend): boolean {
+  return backend === "cursor-official";
+}
+
+export function isClaudeBackend(backend: AcpBackend): boolean {
+  return backend === "claude";
 }

@@ -1,0 +1,4 @@
+Feishu 发文件测试
+==================
+生成时间：由 feishu-cursor-bridge 测试指令触发。
+若你在飞书里收到本文件，说明 FEISHU_SEND_FILE 流程正常。

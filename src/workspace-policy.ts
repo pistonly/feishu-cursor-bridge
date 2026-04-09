@@ -42,7 +42,7 @@ export async function resolveAllowedWorkspaceDir(
   }
   if (!isPathUnderAllowedRoots(config.acp.allowedWorkspaceRoots, abs)) {
     throw new Error(
-      `工作区不在允许范围内。允许的根:\n${config.acp.allowedWorkspaceRoots.map((r) => `• ${r}`).join("\n")}\n\n可通过环境变量 CURSOR_WORK_ALLOWLIST 配置多个根（逗号分隔）。`,
+      `工作区不在允许范围内。允许的根:\n${config.acp.allowedWorkspaceRoots.map((r) => `• ${r}`).join("\n")}\n\n可通过环境变量 BRIDGE_WORK_ALLOWLIST（兼容 CURSOR_WORK_ALLOWLIST） 配置多个根（逗号分隔）。`,
     );
   }
   return abs;

@@ -46,7 +46,7 @@ async function main() {
       "[main] BRIDGE_ALLOW_MULTIPLE_INSTANCES=true — 未启用单实例锁，可能重复连接飞书",
     );
   }
-  if (config.acp.enabledBackends.includes("tmux")) {
+  if (config.acp.enabledBackends.includes("cursor-tmux")) {
     console.log(
       `[main] Single-instance lock: ${config.bridge.singleInstanceLockPath} (pid ${process.pid})`,
     );
@@ -57,14 +57,14 @@ async function main() {
     `[main] Default ACP backend: ${config.acp.backend} (${formatAcpBackendLabel(config.acp.backend)})`,
   );
   console.log(`[main] Enabled ACP backends: ${config.acp.enabledBackends.join(", ")}`);
-  if (config.acp.enabledBackends.includes("legacy")) {
+  if (config.acp.enabledBackends.includes("cursor-legacy")) {
     const tsx = config.acp.adapterTsxCli;
     console.log(
       `[main] ACP adapter: ${config.acp.nodePath} ${tsx ? `${tsx} ` : ""}${config.acp.adapterEntry}`,
     );
     console.log(`[main] Adapter session dir: ${config.acp.adapterSessionDir}`);
   }
-  if (config.acp.enabledBackends.includes("official")) {
+  if (config.acp.enabledBackends.includes("cursor-official")) {
     const authHints = [
       config.acp.officialApiKey ? "api-key" : null,
       config.acp.officialAuthToken ? "auth-token" : null,
@@ -75,7 +75,7 @@ async function main() {
       `[main] Official ACP command: ${config.acp.officialAgentPath} acp${authHints ? ` (${authHints})` : ""}`,
     );
   }
-  if (config.acp.enabledBackends.includes("tmux")) {
+  if (config.acp.enabledBackends.includes("cursor-tmux")) {
     console.log(`[main] tmux ACP server entry: ${config.acp.tmuxServerEntry}`);
     console.log(`[main] tmux ACP tsx cli: ${config.acp.tmuxTsxCliEntry}`);
     console.log(`[main] tmux ACP session store: ${config.acp.tmuxSessionStorePath}`);
@@ -84,7 +84,7 @@ async function main() {
     );
   }
   console.log(
-    `[main] CURSOR_WORK_ALLOWLIST (${config.acp.allowedWorkspaceRoots.length}): ${config.acp.allowedWorkspaceRoots.join(", ")} — ACP spawn cwd: ${config.acp.workspaceRoot}`,
+    `[main] BRIDGE_WORK_ALLOWLIST (${config.acp.allowedWorkspaceRoots.length}): ${config.acp.allowedWorkspaceRoots.join(", ")} — ACP spawn cwd: ${config.acp.workspaceRoot}`,
   );
   console.log(`[main] Bridge session store: ${config.bridge.sessionStorePath}`);
   console.log(`[main] Workspace presets file: ${config.bridge.workspacePresetsPath}`);

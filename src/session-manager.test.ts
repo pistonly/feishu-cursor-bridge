@@ -27,7 +27,7 @@ function createPersistedGroup(cursorCliChatId = "cli-old"): PersistedSessionGrou
     slots: [
       {
         slotIndex: 1,
-        backend: "official",
+        backend: "cursor-official",
         sessionId: "acp-old",
         cursorCliChatId,
         workspaceRoot: WORKSPACE_ROOT,
@@ -96,17 +96,19 @@ test("loadSession 失败后会优先复用已持久化的 CLI resume ID", async 
     supportsLoadSession: true,
     async newSession(
       cwd?: string,
-      options?: { cursorCliChatId?: string },
-    ): Promise<{ sessionId: string; cursorCliChatId?: string }> {
+      options?: { recovery?: { kind: "cursor-cli"; cursorCliChatId: string } },
+    ): Promise<{ sessionId: string; recovery?: { kind: "cursor-cli"; cursorCliChatId: string } }> {
       const resolvedCwd = path.resolve(cwd ?? WORKSPACE_ROOT);
       newSessionCalls.push({
         cwd: resolvedCwd,
-        cursorCliChatId: options?.cursorCliChatId,
+        cursorCliChatId: options?.recovery?.cursorCliChatId,
       });
-      return {
-        sessionId: "acp-restored",
-        cursorCliChatId: options?.cursorCliChatId,
-      };
+      return options?.recovery?.cursorCliChatId
+        ? {
+            sessionId: "acp-restored",
+            recovery: { kind: "cursor-cli", cursorCliChatId: options.recovery.cursorCliChatId },
+          }
+        : { sessionId: "acp-restored" };
     },
     async loadSession(): Promise<void> {
       throw new Error("Session not found: acp-old");
@@ -121,7 +123,7 @@ test("loadSession 失败后会优先复用已持久化的 CLI resume ID", async 
     acp as BridgeAcpRuntime,
     store,
     60_000,
-    { defaultWorkspaceRoot: WORKSPACE_ROOT, defaultBackend: "official" },
+    { defaultWorkspaceRoot: WORKSPACE_ROOT, defaultBackend: "cursor-official" },
   );
 
   await manager.init();
@@ -129,7 +131,7 @@ test("loadSession 失败后会优先复用已持久化的 CLI resume ID", async 
   assert.ok(session);
 
   assert.equal(session.sessionId, "acp-restored");
-  assert.equal(session.cursorCliChatId, "cli-old");
+  assert.deepEqual(session.recovery, { kind: "cursor-cli", cursorCliChatId: "cli-old" });
   assert.deepEqual(newSessionCalls, [
     { cwd: WORKSPACE_ROOT, cursorCliChatId: "cli-old" },
   ]);
@@ -142,10 +144,10 @@ test("无法保留旧 CLI resume ID 时会生成绑定变更提醒", async () =>
 
   const acp: FakeAcpRuntime = {
     supportsLoadSession: true,
-    async newSession(): Promise<{ sessionId: string; cursorCliChatId?: string }> {
+    async newSession(): Promise<{ sessionId: string; recovery?: { kind: "cursor-cli"; cursorCliChatId: string } }> {
       return {
         sessionId: "acp-rebound",
-        cursorCliChatId: "cli-new",
+        recovery: { kind: "cursor-cli", cursorCliChatId: "cli-new" },
       };
     },
     async loadSession(): Promise<void> {
@@ -161,7 +163,7 @@ test("无法保留旧 CLI resume ID 时会生成绑定变更提醒", async () =>
     acp as BridgeAcpRuntime,
     store,
     60_000,
-    { defaultWorkspaceRoot: WORKSPACE_ROOT, defaultBackend: "official" },
+    { defaultWorkspaceRoot: WORKSPACE_ROOT, defaultBackend: "cursor-official" },
   );
 
   await manager.init();
@@ -170,7 +172,7 @@ test("无法保留旧 CLI resume ID 时会生成绑定变更提醒", async () =>
   const notices = manager.consumePendingNotices(CHAT_ID, USER_ID, "p2p");
 
   assert.equal(session.sessionId, "acp-rebound");
-  assert.equal(session.cursorCliChatId, "cli-new");
+  assert.deepEqual(session.recovery, { kind: "cursor-cli", cursorCliChatId: "cli-new" });
   assert.equal(notices.length, 1);
   assert.match(notices[0] ?? "", /旧 CLI resume ID：`cli-old`/);
   assert.match(notices[0] ?? "", /新 CLI resume ID：`cli-new`/);
@@ -187,23 +189,25 @@ test("活跃 slot 的 ACP session 被上游清理后会自动重建并保留 CLI
     supportsLoadSession: true,
     async newSession(
       cwd?: string,
-      options?: { cursorCliChatId?: string },
-    ): Promise<{ sessionId: string; cursorCliChatId?: string }> {
+      options?: { recovery?: { kind: "cursor-cli"; cursorCliChatId: string } },
+    ): Promise<{ sessionId: string; recovery?: { kind: "cursor-cli"; cursorCliChatId: string } }> {
       const resolvedCwd = path.resolve(cwd ?? WORKSPACE_ROOT);
       newSessionCalls.push({
         cwd: resolvedCwd,
-        cursorCliChatId: options?.cursorCliChatId,
+        cursorCliChatId: options?.recovery?.cursorCliChatId,
       });
       createCount++;
       return createCount === 1
         ? {
             sessionId: "acp-live",
-            cursorCliChatId: "cli-old",
+            recovery: { kind: "cursor-cli", cursorCliChatId: "cli-old" },
           }
-        : {
-            sessionId: "acp-rebound",
-            cursorCliChatId: options?.cursorCliChatId,
-          };
+        : options?.recovery?.cursorCliChatId
+          ? {
+              sessionId: "acp-rebound",
+              recovery: { kind: "cursor-cli", cursorCliChatId: options.recovery.cursorCliChatId },
+            }
+          : { sessionId: "acp-rebound" };
     },
     async loadSession(sessionId: string): Promise<void> {
       loadSessionCalls.push(sessionId);
@@ -222,20 +226,20 @@ test("活跃 slot 的 ACP session 被上游清理后会自动重建并保留 CLI
     acp as BridgeAcpRuntime,
     store,
     7 * 24 * 60 * 60_000,
-    { defaultWorkspaceRoot: WORKSPACE_ROOT, defaultBackend: "official" },
+    { defaultWorkspaceRoot: WORKSPACE_ROOT, defaultBackend: "cursor-official" },
   );
 
   await manager.init();
-  await manager.createNewSlot(CHAT_ID, USER_ID, "p2p", WORKSPACE_ROOT, "official");
+  await manager.createNewSlot(CHAT_ID, USER_ID, "p2p", WORKSPACE_ROOT, "cursor-official");
   const first = await manager.getActiveSession(CHAT_ID, USER_ID, "p2p");
   assert.ok(first);
   const second = await manager.getActiveSession(CHAT_ID, USER_ID, "p2p");
   assert.ok(second);
 
   assert.equal(first.sessionId, "acp-live");
-  assert.equal(first.cursorCliChatId, "cli-old");
+  assert.deepEqual(first.recovery, { kind: "cursor-cli", cursorCliChatId: "cli-old" });
   assert.equal(second.sessionId, "acp-rebound");
-  assert.equal(second.cursorCliChatId, "cli-old");
+  assert.deepEqual(second.recovery, { kind: "cursor-cli", cursorCliChatId: "cli-old" });
   assert.deepEqual(loadSessionCalls, ["acp-live", "acp-live"]);
   assert.deepEqual(newSessionCalls, [
     { cwd: WORKSPACE_ROOT, cursorCliChatId: undefined },
@@ -253,11 +257,11 @@ test("getSlot 可读取当前活跃 slot 或按名称读取指定 slot", async (
     supportsLoadSession: false,
     async newSession(
       cwd?: string,
-    ): Promise<{ sessionId: string; cursorCliChatId?: string }> {
+    ): Promise<{ sessionId: string; recovery?: { kind: "cursor-cli"; cursorCliChatId: string } }> {
       createCount++;
       return {
         sessionId: `acp-${createCount}`,
-        cursorCliChatId: `cli-${createCount}`,
+        recovery: { kind: "cursor-cli", cursorCliChatId: `cli-${createCount}` },
       };
     },
     async loadSession(): Promise<void> {},
@@ -271,11 +275,11 @@ test("getSlot 可读取当前活跃 slot 或按名称读取指定 slot", async (
     acp as BridgeAcpRuntime,
     store,
     60_000,
-    { defaultWorkspaceRoot: WORKSPACE_ROOT, defaultBackend: "official" },
+    { defaultWorkspaceRoot: WORKSPACE_ROOT, defaultBackend: "cursor-official" },
   );
 
   await manager.init();
-  await manager.createNewSlot(CHAT_ID, USER_ID, "p2p", WORKSPACE_ROOT, "official");
+  await manager.createNewSlot(CHAT_ID, USER_ID, "p2p", WORKSPACE_ROOT, "cursor-official");
   const first = await manager.getActiveSession(CHAT_ID, USER_ID, "p2p");
   assert.ok(first);
   manager.setSlotLastTurn(
@@ -291,7 +295,7 @@ test("getSlot 可读取当前活跃 slot 或按名称读取指定 slot", async (
     USER_ID,
     "p2p",
     WORKSPACE_ROOT,
-    "official",
+    "cursor-official",
     "backend",
   );
 

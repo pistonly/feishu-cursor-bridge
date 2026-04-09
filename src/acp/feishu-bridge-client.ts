@@ -1,21 +1,42 @@
 import { EventEmitter } from "node:events";
-import type {
-  Client,
-  ReadTextFileRequest,
-  ReadTextFileResponse,
-  RequestPermissionRequest,
-  RequestPermissionResponse,
-  SessionNotification,
-  SessionUpdate,
-  ToolKind,
-  WriteTextFileRequest,
-  WriteTextFileResponse,
+import {
+  RequestError,
+  type Client,
+  type ReadTextFileRequest,
+  type ReadTextFileResponse,
+  type RequestPermissionRequest,
+  type RequestPermissionResponse,
+  type SessionNotification,
+  type SessionUpdate,
+  type ToolKind,
+  type WriteTextFileRequest,
+  type WriteTextFileResponse,
 } from "@agentclientprotocol/sdk";
 import * as path from "node:path";
 import type { Config } from "../config.js";
 import { mapSessionNotificationToBridgeEvents } from "./events.js";
-import { readTextFileSafe, writeTextFileSafe } from "./fs-sandbox.js";
+import {
+  assertPathInWorkspace,
+  readTextFileSafe,
+  writeTextFileSafe,
+} from "./fs-sandbox.js";
 import type { BridgeAcpEvent } from "./types.js";
+
+
+export type FeishuSendPromptContext = {
+  chatId: string;
+  messageId: string;
+  replyInThread?: boolean;
+};
+
+export type FeishuBridgeClientDeps = {
+  uploadSessionFileToFeishu?: (
+    ctx: FeishuSendPromptContext,
+    absPath: string,
+  ) => Promise<string>;
+};
+
+export const FEISHU_BRIDGE_EXT_SEND_FILE_METHOD = "io.feishu-bridge/send_file";
 
 export interface FeishuBridgeClientEvents {
   acp: [BridgeAcpEvent];
@@ -75,11 +96,25 @@ export class FeishuBridgeClient
   private readonly config: Config;
   private readonly defaultWorkspaceRoot: string;
   private readonly sessionWorkspaceRoots = new Map<string, string>();
+  private readonly fileSendDeps?: FeishuBridgeClientDeps;
+  private readonly feishuPromptContexts = new Map<string, FeishuSendPromptContext>();
 
-  constructor(config: Config) {
+  constructor(config: Config, deps?: FeishuBridgeClientDeps) {
     super();
     this.config = config;
     this.defaultWorkspaceRoot = path.resolve(config.acp.workspaceRoot);
+    this.fileSendDeps = deps;
+  }
+
+  setFeishuPromptContext(
+    sessionId: string,
+    ctx: FeishuSendPromptContext | undefined,
+  ): void {
+    if (ctx === undefined) {
+      this.feishuPromptContexts.delete(sessionId);
+    } else {
+      this.feishuPromptContexts.set(sessionId, ctx);
+    }
   }
 
   /** 绑定 ACP sessionId 与读/写沙箱根（与 session/new 的 cwd 一致） */
@@ -196,4 +231,58 @@ export class FeishuBridgeClient
     );
     return {};
   }
+
+  async extMethod(
+    method: string,
+    params: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    if (method !== FEISHU_BRIDGE_EXT_SEND_FILE_METHOD) {
+      throw RequestError.methodNotFound(method);
+    }
+
+    const sessionId =
+      typeof params.sessionId === "string" ? params.sessionId.trim() : "";
+    const rawPath = typeof params.path === "string" ? params.path.trim() : "";
+    if (!sessionId || !rawPath) {
+      return { ok: false, error: "缺少 sessionId 或 path" };
+    }
+
+    const upload = this.fileSendDeps?.uploadSessionFileToFeishu;
+    if (!upload) {
+      return { ok: false, error: "桥接未配置文件发送到飞书" };
+    }
+
+    const ctx = this.feishuPromptContexts.get(sessionId);
+    if (!ctx) {
+      return {
+        ok: false,
+        error: "没有当前飞书对话上下文（仅在与飞书联动的请求处理过程中可用）",
+      };
+    }
+
+    const root = this.fsRootForSession(sessionId);
+    let abs: string;
+    try {
+      const candidate = path.isAbsolute(rawPath)
+        ? rawPath
+        : path.resolve(root, rawPath);
+      abs = assertPathInWorkspace(root, candidate);
+    } catch (e) {
+      return {
+        ok: false,
+        error: e instanceof Error ? e.message : String(e),
+      };
+    }
+
+    try {
+      const messageId = await upload(ctx, abs);
+      return { ok: true, messageId };
+    } catch (e) {
+      return {
+        ok: false,
+        error: e instanceof Error ? e.message : String(e),
+      };
+    }
+  }
+
 }
