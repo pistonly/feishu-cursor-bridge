@@ -5,6 +5,8 @@
  * loading, updating, and cleanup of conversation sessions.
  */
 
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 import { SessionManager } from '../../../src/session/manager';
 import { createLogger } from '../../../src/utils/logger';
 import { DEFAULT_CONFIG } from '../../../src';
@@ -229,6 +231,50 @@ describe('SessionManager', () => {
       await expect(manager.loadSession(sessionId)).rejects.toThrow(
         SessionError
       );
+    });
+
+    it('should restore model, mode, cursor chat id, and conversation from disk', async () => {
+      manager.setAvailableModels([
+        { id: 'auto', name: 'Auto' },
+        { id: 'composer-2', name: 'Composer 2' },
+      ]);
+      const created = await manager.createSession({
+        name: 'Persisted Session',
+        cwd: '/tmp/project',
+      });
+      await manager.setCursorChatId(created.id, 'cli-chat-1');
+      await manager.setSessionMode(created.id, 'agent');
+      await manager.setSessionModel(created.id, 'composer-2');
+      await manager.addMessage(created.id, {
+        id: 'msg-1',
+        role: 'user',
+        content: [{ type: 'text', text: 'hello persisted world' }],
+        timestamp: new Date('2026-04-09T10:00:00.000Z'),
+      });
+
+      const filePath = path.join(tempDir, `${created.id}.json`);
+      const persisted = JSON.parse(await fs.readFile(filePath, 'utf8'));
+      expect(persisted.metadata.model).toBe('composer-2');
+      expect(persisted.metadata.cursorChatId).toBe('cli-chat-1');
+      expect(persisted.state.currentMode).toBe('agent');
+      expect(persisted.state.currentModel).toBe('composer-2');
+
+      const restoredManager = new SessionManager(mockConfig, mockLogger);
+      try {
+        const loaded = await restoredManager.loadSession(created.id);
+        expect(loaded.metadata.model).toBe('composer-2');
+        expect(loaded.metadata.cursorChatId).toBe('cli-chat-1');
+        expect(loaded.state.currentMode).toBe('agent');
+        expect(loaded.state.currentModel).toBe('composer-2');
+        expect(loaded.conversation).toHaveLength(1);
+        expect(loaded.conversation[0].content[0]).toMatchObject({
+          type: 'text',
+          text: 'hello persisted world',
+        });
+        expect(loaded.conversation[0].timestamp).toBeInstanceOf(Date);
+      } finally {
+        await restoredManager.cleanup();
+      }
     });
   });
 

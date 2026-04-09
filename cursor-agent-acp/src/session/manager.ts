@@ -23,6 +23,8 @@ import type {
   SessionModeId,
   SessionModeState,
 } from '@agentclientprotocol/sdk';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 import { v4 as uuidv4 } from 'uuid';
 
 export interface SessionListOptions {
@@ -35,6 +37,26 @@ export interface SessionListResult {
   items: SessionInfo[];
   total: number;
   hasMore: boolean;
+}
+
+interface PersistedConversationMessage {
+  id: string;
+  role: ConversationMessage['role'];
+  content: ConversationMessage['content'];
+  timestamp: string;
+  metadata?: Record<string, any>;
+}
+
+interface PersistedSessionRecord {
+  version: 1;
+  id: string;
+  metadata: SessionMetadata;
+  conversation: PersistedConversationMessage[];
+  state: Omit<SessionData['state'], 'lastActivity'> & {
+    lastActivity: string;
+  };
+  createdAt: string;
+  updatedAt: string;
 }
 
 export class SessionManager {
@@ -837,8 +859,14 @@ export class SessionManager {
   }
 
   private async getAllSessions(): Promise<SessionData[]> {
-    // TODO: Implement loading sessions from disk
-    return Array.from(this.sessions.values());
+    const sessions = new Map<string, SessionData>(this.sessions);
+    const diskSessions = await this.loadAllSessionsFromDisk();
+    for (const session of diskSessions) {
+      if (!sessions.has(session.id)) {
+        sessions.set(session.id, session);
+      }
+    }
+    return Array.from(sessions.values());
   }
 
   private applyFilters(
@@ -876,20 +904,152 @@ export class SessionManager {
   }
 
   private async persistSession(session: SessionData): Promise<void> {
-    // TODO: Implement session persistence to disk
-    this.logger.debug(`Persisting session: ${session.id}`);
+    const filePath = this.sessionFilePath(session.id);
+    const tempPath = `${filePath}.tmp`;
+    this.logger.debug(`Persisting session: ${session.id}`, { filePath });
+    await this.ensureSessionDir();
+    const payload = JSON.stringify(this.serializeSession(session), null, 2);
+    await fs.writeFile(tempPath, payload, 'utf8');
+    await fs.rename(tempPath, filePath);
   }
 
   private async loadSessionFromDisk(
     sessionId: string
   ): Promise<SessionData | null> {
-    // TODO: Implement loading session from disk
-    this.logger.debug(`Loading session from disk: ${sessionId}`);
-    return null;
+    const filePath = this.sessionFilePath(sessionId);
+    this.logger.debug(`Loading session from disk: ${sessionId}`, { filePath });
+    try {
+      const payload = await fs.readFile(filePath, 'utf8');
+      return this.deserializeSession(JSON.parse(payload), filePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
+        return null;
+      }
+      throw error;
+    }
   }
 
   private async deleteSessionFromDisk(sessionId: string): Promise<void> {
-    // TODO: Implement deleting session from disk
-    this.logger.debug(`Deleting session from disk: ${sessionId}`);
+    const filePath = this.sessionFilePath(sessionId);
+    this.logger.debug(`Deleting session from disk: ${sessionId}`, { filePath });
+    try {
+      await fs.unlink(filePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+        throw error;
+      }
+    }
+  }
+
+  private sessionFilePath(sessionId: string): string {
+    return path.join(path.resolve(this.config.sessionDir), `${sessionId}.json`);
+  }
+
+  private async ensureSessionDir(): Promise<void> {
+    await fs.mkdir(path.resolve(this.config.sessionDir), { recursive: true });
+  }
+
+  private serializeSession(session: SessionData): PersistedSessionRecord {
+    return {
+      version: 1,
+      id: session.id,
+      metadata: session.metadata,
+      conversation: session.conversation.map((message) => ({
+        ...message,
+        timestamp: message.timestamp.toISOString(),
+      })),
+      state: {
+        ...session.state,
+        lastActivity: session.state.lastActivity.toISOString(),
+      },
+      createdAt: session.createdAt.toISOString(),
+      updatedAt: session.updatedAt.toISOString(),
+    };
+  }
+
+  private deserializeSession(raw: unknown, source: string): SessionData {
+    if (!raw || typeof raw !== 'object') {
+      throw new Error(`Invalid session file at ${source}: expected object`);
+    }
+    const record = raw as Partial<PersistedSessionRecord>;
+    if (record.version !== 1) {
+      throw new Error(`Invalid session file at ${source}: unsupported version`);
+    }
+    if (typeof record.id !== 'string' || record.id.trim() === '') {
+      throw new Error(`Invalid session file at ${source}: missing id`);
+    }
+    if (!record.metadata || typeof record.metadata !== 'object') {
+      throw new Error(`Invalid session file at ${source}: missing metadata`);
+    }
+    if (!Array.isArray(record.conversation)) {
+      throw new Error(`Invalid session file at ${source}: invalid conversation`);
+    }
+    if (!record.state || typeof record.state !== 'object') {
+      throw new Error(`Invalid session file at ${source}: missing state`);
+    }
+    const state = record.state as PersistedSessionRecord['state'];
+    const createdAt = new Date(String(record.createdAt));
+    const updatedAt = new Date(String(record.updatedAt));
+    const lastActivity = new Date(String(state.lastActivity));
+    if (
+      Number.isNaN(createdAt.getTime()) ||
+      Number.isNaN(updatedAt.getTime()) ||
+      Number.isNaN(lastActivity.getTime())
+    ) {
+      throw new Error(`Invalid session file at ${source}: invalid timestamps`);
+    }
+    return {
+      id: record.id,
+      metadata: { ...(record.metadata as SessionMetadata) },
+      conversation: record.conversation.map((message) => {
+        const timestamp = new Date(String(message.timestamp));
+        if (Number.isNaN(timestamp.getTime())) {
+          throw new Error(
+            `Invalid session file at ${source}: invalid message timestamp`
+          );
+        }
+        return {
+          ...message,
+          timestamp,
+        } as ConversationMessage;
+      }),
+      state: {
+        ...state,
+        lastActivity,
+      },
+      createdAt,
+      updatedAt,
+    };
+  }
+
+  private async loadAllSessionsFromDisk(): Promise<SessionData[]> {
+    try {
+      await this.ensureSessionDir();
+      const entries = await fs.readdir(path.resolve(this.config.sessionDir), {
+        withFileTypes: true,
+      });
+      const sessions: SessionData[] = [];
+      for (const entry of entries) {
+        if (!entry.isFile() || !entry.name.endsWith('.json')) {
+          continue;
+        }
+        const filePath = path.join(path.resolve(this.config.sessionDir), entry.name);
+        try {
+          const payload = await fs.readFile(filePath, 'utf8');
+          sessions.push(this.deserializeSession(JSON.parse(payload), filePath));
+        } catch (error) {
+          this.logger.warn('Skipping unreadable session file', {
+            filePath,
+            error,
+          });
+        }
+      }
+      return sessions;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
+        return [];
+      }
+      throw error;
+    }
   }
 }

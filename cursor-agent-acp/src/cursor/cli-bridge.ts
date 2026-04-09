@@ -44,6 +44,7 @@ interface CursorStreamJsonEvent {
   type: string;
   subtype?: string;
   session_id?: string;
+  model?: string;
   /** When present, pairs started/completed tool events (preferred over synthetic ids). */
   call_id?: string;
   tool_call_id?: string;
@@ -116,6 +117,17 @@ function streamJsonToolNameToAcpKind(internalName: string): ToolKind {
     default:
       return 'other';
   }
+}
+
+function isDebugEnvEnabled(name: string): boolean {
+  return String(process.env[name] || '').toLowerCase() === 'true';
+}
+
+function previewPromptForTrace(text: string, limit = 400): string {
+  if (typeof text !== 'string' || text.length === 0) {
+    return '';
+  }
+  return text.length <= limit ? text : `${text.slice(0, limit)}...(truncated)`;
 }
 
 export class CursorCliBridge {
@@ -744,6 +756,17 @@ export class CursorCliBridge {
     if (ev.session_id && !streamState.cursorStreamSessionId) {
       streamState.cursorStreamSessionId = ev.session_id;
     }
+    if (ev.type === 'system' && ev.subtype === 'init' && isDebugEnvEnabled('ACP_TRACE_CURSOR_CLI_MODEL')) {
+      console.error(
+        '[feishu-bridge] cursor-cli-system-init ' +
+          JSON.stringify({
+            stream: true,
+            sessionId: streamState.cursorStreamSessionId ?? null,
+            cursorSessionId: ev.session_id ?? null,
+            model: typeof ev.model === 'string' ? ev.model : null,
+          })
+      );
+    }
 
     switch (ev.type) {
       case 'thinking': {
@@ -1000,10 +1023,7 @@ export class CursorCliBridge {
           });
         }
 
-        if (
-          String(process.env['ACP_TRACE_CURSOR_CLI_MODEL'] || '')
-            .toLowerCase() === 'true'
-        ) {
+        if (isDebugEnvEnabled('ACP_TRACE_CURSOR_CLI_MODEL')) {
           const idx = args.indexOf('--model');
           const modelArg =
             idx >= 0 && idx + 1 < args.length ? args[idx + 1] : null;
@@ -1012,10 +1032,24 @@ export class CursorCliBridge {
               JSON.stringify({
                 stream: false,
                 sessionId,
+                cwd: workingDir,
+                argv: ['cursor-agent', ...args],
                 metadataModel: model != null ? model : null,
                 argvHasModelPair: idx >= 0,
                 modelPassedToCli: modelArg,
                 resumeChatId: cursorChatId != null ? cursorChatId : null,
+              })
+          );
+        }
+        if (isDebugEnvEnabled('ACP_TRACE_CURSOR_CLI_PROMPT')) {
+          console.error(
+            '[feishu-bridge] cursor-cli-prompt-trace ' +
+              JSON.stringify({
+                stream: false,
+                sessionId,
+                cwd: workingDir,
+                contentLength: content.value.length,
+                promptPreview: previewPromptForTrace(content.value),
               })
           );
         }
@@ -1158,10 +1192,7 @@ export class CursorCliBridge {
         });
       }
 
-      if (
-        String(process.env['ACP_TRACE_CURSOR_CLI_MODEL'] || '')
-          .toLowerCase() === 'true'
-      ) {
+      if (isDebugEnvEnabled('ACP_TRACE_CURSOR_CLI_MODEL')) {
         const idx = args.indexOf('--model');
         const modelArg =
           idx >= 0 && idx + 1 < args.length ? args[idx + 1] : null;
@@ -1170,10 +1201,24 @@ export class CursorCliBridge {
             JSON.stringify({
               stream: true,
               sessionId,
+              cwd: workingDir,
+              argv: ['cursor-agent', ...args],
               metadataModel: model != null ? model : null,
               argvHasModelPair: idx >= 0,
               modelPassedToCli: modelArg,
               resumeChatId: cursorChatId != null ? cursorChatId : null,
+            })
+        );
+      }
+      if (isDebugEnvEnabled('ACP_TRACE_CURSOR_CLI_PROMPT')) {
+        console.error(
+          '[feishu-bridge] cursor-cli-prompt-trace ' +
+            JSON.stringify({
+              stream: true,
+              sessionId,
+              cwd: workingDir,
+              contentLength: content.value.length,
+              promptPreview: previewPromptForTrace(content.value),
             })
         );
       }

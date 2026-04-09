@@ -1,4 +1,5 @@
 import type { Config } from "./config.js";
+import * as path from "node:path";
 import {
   AcpRuntimeRegistry,
   formatAcpBackendLabel,
@@ -943,6 +944,13 @@ export class Bridge {
                 .map((mode) => mode.modeId)
                 .join(", ")
             : "";
+        const legacySessionFile =
+          slot?.session.backend === "legacy" && slot.session.sessionId
+            ? path.join(
+                this.config.acp.adapterSessionDir,
+                `${slot.session.sessionId}.json`,
+              )
+            : undefined;
         body += `
 
 [调试 BRIDGE_DEBUG]
@@ -959,6 +967,8 @@ export class Bridge {
 • ACP 子进程 cwd（allowlist 首项）: ${this.config.acp.workspaceRoot}
 • 允许根 CURSOR_WORK_ALLOWLIST: ${this.config.acp.allowedWorkspaceRoots.join(", ")}
 • 映射文件: ${this.config.bridge.sessionStorePath}
+• legacy 会话目录: ${this.config.acp.adapterSessionDir}
+• legacy 会话文件: ${legacySessionFile ?? "—"}
 • loadSession: ${runtime?.supportsLoadSession ?? false}
 • LOG_LEVEL: ${this.config.logLevel}`;
       }
