@@ -29,7 +29,7 @@ export function formatBridgeCommandsHelp(backend: AcpBackend): string {
     "**对话与控制**",
     "• `/reply` — 重发当前槽位缓存的上一轮；`/reply <编号或名称>` — 指定槽位",
     "• `/stop` / `/cancel` — 中断**当前活跃**槽位正在生成的回复",
-    "• `/sendfile <说明>` — 向 Agent 附带「用 `FEISHU_SEND_FILE` 发文件」说明后再发你的任务",
+    "• `/fileback <说明>` — 向 Agent 附带「用 `FEISHU_SEND_FILE` 发文件」说明后再发你的任务",
     "",
     "**模型与模式**",
     "• `/model` — 查看或切换模型（行为见上文后端说明）",

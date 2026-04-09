@@ -1,9 +1,11 @@
+import { randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { HttpsProxyAgent } from "https-proxy-agent";
+import { assertPathInWorkspace } from "./acp/fs-sandbox.js";
 import {
   FEISHU_IM_FILE_MAX_BYTES,
   feishuImFileTypeForPath,
@@ -35,6 +37,17 @@ export interface FeishuMessage {
   replyInThread?: boolean;
   /** 富文本 post 里 @ 的用户 id（部分场景下 message.mentions 不完整） */
   inlineMentionIds?: string[];
+  /** 用户发送的图片/文件/音视频消息：可下载到工作区后再交给 Agent。 */
+  incomingResource?: FeishuIncomingResource;
+  /** 富文本 post 中内嵌图片的 `image_key` 列表。 */
+  postEmbeddedImageKeys?: string[];
+}
+
+export interface FeishuIncomingResource {
+  apiType: "file" | "image";
+  fileKey: string;
+  displayName?: string;
+  messageKind: "image" | "file" | "audio" | "video";
 }
 
 export interface FeishuBotConfig {
@@ -72,6 +85,101 @@ const CARD_LARK_MD_TRUNCATED_HINT = "\n\n_（内容过长，已截断）_";
 /** 飞书群聊、话题群等均需按「群」处理 @ 与会话维度 */
 function isGroupLikeChatType(raw: string | undefined): boolean {
   return raw === "group" || raw === "topic_group";
+}
+
+/** 用户消息资源落盘目录（位于工作区根下） */
+export const FEISHU_INCOMING_DIR_NAME = ".feishu-incoming";
+
+const FEISHU_MESSAGE_RESOURCE_MAX_BYTES = 100 * 1024 * 1024;
+
+export function parseIncomingResourceFromMessage(
+  rawContent: string,
+  messageType: string,
+): FeishuIncomingResource | undefined {
+  try {
+    const j = JSON.parse(rawContent) as Record<string, unknown>;
+    if (messageType === "image") {
+      const imageKey = typeof j.image_key === "string" ? j.image_key.trim() : "";
+      if (!imageKey) return undefined;
+      return { apiType: "image", fileKey: imageKey, messageKind: "image" };
+    }
+    if (messageType === "file" || messageType === "audio" || messageType === "video") {
+      const fileKey = typeof j.file_key === "string" ? j.file_key.trim() : "";
+      if (!fileKey) return undefined;
+      const displayName = typeof j.file_name === "string" ? j.file_name.trim() : undefined;
+      const messageKind =
+        messageType === "audio" ? "audio" : messageType === "video" ? "video" : "file";
+      return {
+        apiType: "file",
+        fileKey,
+        displayName: displayName || undefined,
+        messageKind,
+      };
+    }
+  } catch {}
+  return undefined;
+}
+
+export function parsePostEmbeddedImageKeys(rawContent: string): string[] {
+  const ordered: string[] = [];
+  const seen = new Set<string>();
+  const pushKey = (k: string) => {
+    const t = k.trim();
+    if (!t || seen.has(t)) return;
+    seen.add(t);
+    ordered.push(t);
+  };
+  try {
+    const parsed = JSON.parse(rawContent) as Record<string, unknown>;
+    const collectFromParagraphs = (paragraphs: unknown) => {
+      if (!Array.isArray(paragraphs)) return;
+      for (const paragraph of paragraphs) {
+        if (!Array.isArray(paragraph)) continue;
+        for (const element of paragraph) {
+          if (!element || typeof element !== "object") continue;
+          const el = element as { tag?: string; image_key?: string };
+          if (el.tag === "img" && typeof el.image_key === "string") {
+            pushKey(el.image_key);
+          }
+        }
+      }
+    };
+    const lang = parsed.zh_cn ?? parsed.en_us ?? parsed.ja_jp ?? Object.values(parsed)[0];
+    if (lang && typeof lang === "object") {
+      collectFromParagraphs((lang as { content?: unknown }).content);
+    }
+    if (ordered.length === 0 && Array.isArray(parsed.content)) {
+      collectFromParagraphs(parsed.content);
+    }
+  } catch {}
+  return ordered;
+}
+
+function sanitizeIncomingFilename(name: string): string {
+  const base = path.basename(name.trim()).replace(/[\/]/g, "");
+  const cleaned = base.replace(/[^\w.\-()（）\u4e00-\u9fff]+/g, "_");
+  const sliced = cleaned.slice(0, 200);
+  return sliced || `file-${randomBytes(4).toString("hex")}`;
+}
+
+function imageExtFromBasename(basename: string): string {
+  const ext = path.extname(basename).toLowerCase();
+  if (/^\.(jpe?g|png|gif|webp|bmp|tiff?|ico)$/.test(ext)) return ext;
+  return "";
+}
+
+function defaultExtForIncomingKind(
+  kind: FeishuIncomingResource["messageKind"],
+  basename: string,
+): string {
+  if (kind === "image") {
+    const ext = imageExtFromBasename(basename);
+    return ext || ".png";
+  }
+  const fromName = path.extname(basename);
+  if (fromName) return fromName;
+  if (kind === "audio" || kind === "video" || kind === "file") return ".bin";
+  return "";
 }
 
 export type FeishuSendReplyOptions = {
@@ -528,6 +636,67 @@ export class FeishuBot extends EventEmitter {
     return res.data?.message_id ?? "";
   }
 
+  /**
+   * 将用户消息中的资源下载到工作区 `.feishu-incoming/`，返回相对工作区根的路径。
+   */
+  async downloadIncomingResourceToWorkspace(
+    messageId: string,
+    resource: FeishuIncomingResource,
+    workspaceRoot: string,
+  ): Promise<{ relativePath: string; absPath: string }> {
+    const root = path.resolve(workspaceRoot);
+    const dir = path.join(root, FEISHU_INCOMING_DIR_NAME);
+    await fsp.mkdir(dir, { recursive: true });
+
+    const rawName = resource.displayName?.trim();
+    let base = rawName
+      ? sanitizeIncomingFilename(rawName)
+      : `incoming-${Date.now()}-${randomBytes(4).toString("hex")}`;
+
+    const ext = defaultExtForIncomingKind(resource.messageKind, base);
+    if (ext && !base.toLowerCase().endsWith(ext.toLowerCase())) {
+      base += ext;
+    }
+
+    const absPath = await this.pickUniqueIncomingPath(dir, base);
+    assertPathInWorkspace(root, absPath);
+
+    const resp = await this.client.im.messageResource.get({
+      path: { message_id: messageId, file_key: resource.fileKey },
+      params: { type: resource.apiType },
+    });
+    await resp.writeFile(absPath);
+
+    const st = await fsp.stat(absPath);
+    if (st.size > FEISHU_MESSAGE_RESOURCE_MAX_BYTES) {
+      await fsp.unlink(absPath).catch(() => {});
+      throw new Error(`下载的资源超过 ${FEISHU_MESSAGE_RESOURCE_MAX_BYTES} 字节`);
+    }
+
+    const relativePath = path.relative(root, absPath).split(path.sep).join("/");
+    return { relativePath, absPath };
+  }
+
+  private async pickUniqueIncomingPath(dir: string, filename: string): Promise<string> {
+    const safe = sanitizeIncomingFilename(filename);
+    const ext = path.extname(safe);
+    const stem = ext ? safe.slice(0, -ext.length) : safe;
+    let candidate = path.join(dir, safe);
+    let n = 0;
+    for (;;) {
+      try {
+        await fsp.access(candidate);
+        n++;
+        candidate = path.join(dir, sanitizeIncomingFilename(`${stem}-${n}${ext}`));
+      } catch (e: unknown) {
+        if (e instanceof Error && (e as NodeJS.ErrnoException).code === "ENOENT") {
+          return candidate;
+        }
+        throw e;
+      }
+    }
+  }
+
   async sendCard(
     chatId: string,
     content: string,
@@ -893,6 +1062,10 @@ export class FeishuBot extends EventEmitter {
 
     const replyInThread = rawChatType === "topic_group" || inTopicThread;
 
+    const incomingResource = parseIncomingResourceFromMessage(rawContent, messageType);
+    const postEmbeddedImageKeys =
+      messageType === "post" ? parsePostEmbeddedImageKeys(rawContent) : undefined;
+
     const feishuMsg: FeishuMessage = {
       messageId: message.message_id,
       chatId: message.chat_id,
@@ -918,6 +1091,10 @@ export class FeishuBot extends EventEmitter {
       threadId,
       replyInThread: replyInThread ? true : undefined,
       inlineMentionIds: inlineMentionIds.length ? inlineMentionIds : undefined,
+      ...(incomingResource ? { incomingResource } : {}),
+      ...(postEmbeddedImageKeys && postEmbeddedImageKeys.length > 0
+        ? { postEmbeddedImageKeys }
+        : {}),
     };
 
     this.emit("message", feishuMsg);

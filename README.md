@@ -186,6 +186,7 @@ Proxy precedence: `wss_proxy` / `ws_proxy` > `https_proxy` / `http_proxy` / `all
 ## Usage
 
 - **DM / group**: after you **create a session** with `/new list` then `/new <index or path>` (paths must fall under `CURSOR_WORK_ALLOWLIST`), normal messages go to Cursor; without a session the bot asks you to `/new` first
+- **Incoming attachments**: when a session is active, files/images/audio/video sent from Feishu are downloaded into `.feishu-incoming/` under the current workspace and then described to the Agent as local paths; `/fileback` is the opposite direction, for asking the Agent to send workspace files back to Feishu
 - **Group**: @ the bot + content ( **`im:message.group_msg`** must be enabled or group events won’t arrive); in **topic** groups, each `thread_id` maps to its own ACP session (not shared with the main group chat)
 - **Multi-session**: `/new <index or path>` creates and switches (old session stays connected); bare `/new` lists presets; `/sessions` lists; `/switch <index or name>` switches active (no arg → last used); `/close` closes one; `/rename` helps name-based switching. Full syntax: `docs/feishu-commands.md`
 - `/status` or `/状态`: session stats, always shows ACP backend; `official` / `legacy` also show known mode for the active session; `tmux` does not show a bridge-faked mode; **legacy** adds CLI resume ID for the active slot; with `BRIDGE_DEBUG=true`, adds ACP `sessionId`, paths, modes, etc.
@@ -404,6 +405,7 @@ docker-compose -f docker/compose.yaml run --rm tmux-acp-cancel-smoke
 ## 使用方式
 
 - **私聊 / 群聊**：须先用 **`/new list`** 再 **`/new <序号或路径>`** 创建 session（路径须在 `CURSOR_WORK_ALLOWLIST` 下），之后普通消息才会进 Agent；无 session 时机器人会提示先 `/new`
+- **飞书附件入站**：有活跃 session 时，用户直接发送的文件 / 图片 / 音频 / 视频会先下载到当前工作区的 `.feishu-incoming/`，再把相对路径说明交给 Agent；`/fileback` 则是反方向，用于让 Agent 把工作区文件回传到飞书
 - **群聊**：@机器人 + 内容（开发平台须为应用开通 **`im:message.group_msg`**，否则群消息事件不会投递到机器人）；**话题群**内不同话题（`thread_id`）会**分别**映射 ACP 会话，与群主页会话互不共享
 - **多 session 切换**：`/new <序号或路径>` 新建并切到该 session（裸 `/new` 等同列表）；`/sessions` 列表；`/switch <编号或名称>` 切换活跃 session（无参数时切到上一次用过的）；`/close` 关闭指定；`/rename` 便于用名称切换。完整语法与快捷列表见 `docs/feishu-commands.md`
 - `/status` 或 `/状态`：会话统计，始终展示当前 ACP 后端；`official` / `legacy` 下还会展示当前活跃 session 已知 mode，`tmux` 下不再显示 bridge 侧伪造的 mode；若是 `legacy`，会额外显示当前活跃 slot 的 CLI resume ID；`BRIDGE_DEBUG=true` 时额外含 ACP `sessionId`、路径、可用模式等调试信息

@@ -7,7 +7,12 @@ import {
 import type { BridgeAcpRuntime } from "./acp/runtime-contract.js";
 import { FeishuBridgeClient } from "./acp/feishu-bridge-client.js";
 import { formatJsonRpcLikeError } from "./format-json-rpc-error.js";
-import { FeishuBot, type FeishuMessage } from "./feishu-bot.js";
+import {
+  FeishuBot,
+  FEISHU_INCOMING_DIR_NAME,
+  type FeishuIncomingResource,
+  type FeishuMessage,
+} from "./feishu-bot.js";
 import {
   matchesBridgeHelpCommand,
   matchesInterruptUserCommand,
@@ -30,15 +35,58 @@ import {
   resolveSessionModeInput,
 } from "./mode-switch.js";
 import {
-  parseSendfileUserMessage,
-  SENDFILE_USAGE_TEXT,
-  wrapSendfilePromptForAgent,
-} from "./sendfile-command.js";
+  parseFilebackUserMessage,
+  FILEBACK_USAGE_TEXT,
+  wrapFilebackPromptForAgent,
+} from "./fileback-command.js";
 import { formatBridgeCommandsHelp } from "./bridge-commands-help.js";
 
 /** 无活跃 session 时，普通对话与部分命令的统一提示 */
 const NO_SESSION_HINT =
   "当前没有可用的 session。请先发送 `/new list` 查看工作区列表，再用 `/new <序号>` 或 `/new <目录绝对路径>` 创建 session。\n\n发送 `/commands`、`/help` 或只发 `/`（全角 `／` 亦可）可查看本桥接支持的全部命令，**无需先建 session**。";
+
+function formatIncomingAttachmentPrompt(
+  relativePath: string,
+  res: FeishuIncomingResource,
+): string {
+  const kindLabel =
+    res.messageKind === "image"
+      ? "图片"
+      : res.messageKind === "audio"
+        ? "音频"
+        : res.messageKind === "video"
+          ? "视频"
+          : "文件";
+  const lines: string[] = [
+    `用户通过飞书发送了${kindLabel}，已保存到工作区子目录 \`${FEISHU_INCOMING_DIR_NAME}/\`。`,
+    "",
+    `相对路径（相对工作区根目录）：\`${relativePath}\``,
+  ];
+  if (res.displayName) {
+    lines.push(`原始文件名：\`${res.displayName}\``);
+  }
+  lines.push(`（飞书消息类型：${res.messageKind}；资源接口 type=\`${res.apiType}\`）`);
+  return lines.join("\n");
+}
+
+function formatPostEmbeddedImagesPrompt(
+  textBody: string,
+  relativePaths: string[],
+): string {
+  const lines: string[] = [
+    `用户发送了飞书富文本（post）消息，其中包含 ${relativePaths.length} 张内嵌图片，已保存到工作区子目录 \`${FEISHU_INCOMING_DIR_NAME}/\`。`,
+    "",
+  ];
+  for (let i = 0; i < relativePaths.length; i++) {
+    lines.push(`${i + 1}. 相对路径（相对工作区根目录）：\`${relativePaths[i]}\``);
+  }
+  lines.push("", "（飞书消息类型：post；资源接口 type=\`image\`）");
+  const trimmed = textBody.trim();
+  if (trimmed) {
+    lines.push("", "富文本中的文字内容如下：", "", trimmed);
+  }
+  return lines.join("\n");
+}
 
 function formatDurationMs(ms: number): string {
   if (!Number.isFinite(ms)) {
@@ -265,7 +313,13 @@ export class Bridge {
   }
 
   private async handleFeishuMessage(msg: FeishuMessage): Promise<void> {
-    if (msg.contentType !== "text" && msg.contentType !== "post") {
+    const hasIncomingResource = msg.incomingResource != null;
+    const hasPostEmbeddedImages = (msg.postEmbeddedImageKeys?.length ?? 0) > 0;
+    if (
+      msg.contentType !== "text" &&
+      msg.contentType !== "post" &&
+      !hasIncomingResource
+    ) {
       return;
     }
 
@@ -305,18 +359,18 @@ export class Bridge {
 
     if (!content) return;
 
-    const sendfileParsed = parseSendfileUserMessage(content);
-    if (sendfileParsed.kind === "usage") {
+    const filebackParsed = parseFilebackUserMessage(content);
+    if (filebackParsed.kind === "usage") {
       await this.feishuBot.sendText(
         msg.chatId,
-        SENDFILE_USAGE_TEXT,
+        FILEBACK_USAGE_TEXT,
         msg.messageId,
         this.threadReplyOpts(msg),
       );
       return;
     }
-    if (sendfileParsed.kind === "prompt") {
-      content = wrapSendfilePromptForAgent(sendfileParsed.inner);
+    if (filebackParsed.kind === "prompt") {
+      content = wrapFilebackPromptForAgent(filebackParsed.inner);
       contentMultiline = content;
     }
 
@@ -1067,9 +1121,53 @@ export class Bridge {
       }
       await this.flushPendingSessionNotices(msg);
 
+      let promptContent = content;
+      if (msg.incomingResource) {
+        try {
+          const { relativePath } = await this.feishuBot.downloadIncomingResourceToWorkspace(
+            msg.messageId,
+            msg.incomingResource,
+            session.workspaceRoot,
+          );
+          promptContent = formatIncomingAttachmentPrompt(
+            relativePath,
+            msg.incomingResource,
+          );
+        } catch (err) {
+          await this.feishuBot.sendText(
+            msg.chatId,
+            `❌ 无法下载飞书附件：${err instanceof Error ? err.message : String(err)}`,
+            msg.messageId,
+            this.threadReplyOpts(msg),
+          );
+          return;
+        }
+      } else if (hasPostEmbeddedImages && msg.postEmbeddedImageKeys) {
+        try {
+          const relativePaths: string[] = [];
+          for (const imageKey of msg.postEmbeddedImageKeys) {
+            const { relativePath } = await this.feishuBot.downloadIncomingResourceToWorkspace(
+              msg.messageId,
+              { apiType: "image", fileKey: imageKey, messageKind: "image" },
+              session.workspaceRoot,
+            );
+            relativePaths.push(relativePath);
+          }
+          promptContent = formatPostEmbeddedImagesPrompt(content, relativePaths);
+        } catch (err) {
+          await this.feishuBot.sendText(
+            msg.chatId,
+            `❌ 无法下载飞书富文本内嵌图片：${err instanceof Error ? err.message : String(err)}`,
+            msg.messageId,
+            this.threadReplyOpts(msg),
+          );
+          return;
+        }
+      }
+
       const msgForPrompt: FeishuMessage = {
         ...msg,
-        content,
+        content: promptContent,
       };
 
       const lastReply = await this.conversation.handleUserPrompt(msgForPrompt, session);
@@ -1079,7 +1177,7 @@ export class Bridge {
           msg.senderId,
           msg.chatType,
           session.sessionId,
-          content,
+          promptContent,
           lastReply,
           this.threadScope(msg),
         );
@@ -1131,7 +1229,7 @@ export class Bridge {
     });
     await this.feishuBot.sendText(
       msg.chatId,
-      `📋 当前所有 session（共 ${slots.length} 个；# 为槽位编号，关闭后不会复用，故可能与数量连续不一致）：\n\n${lines.join("\n\n")}\n\n• \`/new list\` / \`/new <序号>\` / \`/new <路径>\` — 新建 session\n• \`/switch <编号或名称>\` — 切换\n• \`/reply [编号或名称]\` — 重发上一轮缓存回复\n• \`/sendfile <说明>\` — 向 Agent 附带「用 FEISHU_SEND_FILE 发文件」说明后再发你的任务\n• \`/stop\` / \`/cancel\` — 中断**当前活跃**槽位正在生成的回复（不关 session）\n• \`/resume\` — 对当前 session 执行 ACP \`session/load\`（测试/恢复）\n• \`/mode <模式ID>\` — 切换当前 session 模式\n• \`/rename <新名字>\` — 重命名当前 session\n• \`/rename <编号或名称> <新名字>\` — 重命名指定 session\n• \`/close <编号或名称>\` — 关闭\n• \`/close all\` — 关闭本组全部\n• \`/topic …\` — 仅发飞书、不发给 Agent（便于话题内写标题）`,
+      `📋 当前所有 session（共 ${slots.length} 个；# 为槽位编号，关闭后不会复用，故可能与数量连续不一致）：\n\n${lines.join("\n\n")}\n\n• \`/new list\` / \`/new <序号>\` / \`/new <路径>\` — 新建 session\n• \`/switch <编号或名称>\` — 切换\n• \`/reply [编号或名称]\` — 重发上一轮缓存回复\n• \`/fileback <说明>\` — 向 Agent 附带「用 FEISHU_SEND_FILE 发文件」说明后再发你的任务\n• \`/stop\` / \`/cancel\` — 中断**当前活跃**槽位正在生成的回复（不关 session）\n• \`/resume\` — 对当前 session 执行 ACP \`session/load\`（测试/恢复）\n• \`/mode <模式ID>\` — 切换当前 session 模式\n• \`/rename <新名字>\` — 重命名当前 session\n• \`/rename <编号或名称> <新名字>\` — 重命名指定 session\n• \`/close <编号或名称>\` — 关闭\n• \`/close all\` — 关闭本组全部\n• \`/topic …\` — 仅发飞书、不发给 Agent（便于话题内写标题）`,
       msg.messageId,
       this.threadReplyOpts(msg),
     );
