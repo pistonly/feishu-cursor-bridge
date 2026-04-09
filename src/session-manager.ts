@@ -1,23 +1,19 @@
 import * as path from "node:path";
-import type { BridgeAcpRuntime } from "./acp/runtime-contract.js";
-import type { SessionStore, PersistedSessionGroup, PersistedSlotRecord } from "./session-store.js";
-
-// ---------------------------------------------------------------------------
-// Public types
-// ---------------------------------------------------------------------------
+import type { AcpBackend, AcpRuntimeResolver, BridgeAcpRuntime } from "./acp/runtime-contract.js";
+import type {
+  SessionStore,
+  PersistedSessionGroup,
+  PersistedSlotRecord,
+} from "./session-store.js";
 
 export interface UserSession {
+  backend: AcpBackend;
   sessionId: string;
-  /**
-   * `cursor-agent create-chat` 的 chat id，与 CLI `--resume` 一致；来自适配器 session/new._meta（无则未创建或未暴露）
-   */
   cursorCliChatId?: string;
-  /** ACP session/new 与读文件沙箱使用的绝对路径 */
   workspaceRoot: string;
   chatId: string;
   userId: string;
   chatType: "p2p" | "group";
-  /** 话题群内某话题线程 id；与 sessionKey 中的话题维度一致 */
   threadId?: string;
   createdAt: number;
   lastActiveAt: number;
@@ -27,16 +23,13 @@ export interface SessionSlot {
   slotIndex: number;
   name?: string;
   session: UserSession;
-  /** 上一轮用户侧输入（与 lastReply 成对），仅内存缓存，重启后丢失 */
   lastPrompt?: string;
-  /** 上一轮对话的最终 markdown 输出，仅内存缓存，重启后丢失 */
   lastReply?: string;
 }
 
 export interface UserSessionGroup {
   slots: SessionSlot[];
   activeSlotIndex: number;
-  /** monotonically increasing counter for next slot number */
   nextSlotIndex: number;
 }
 
@@ -50,6 +43,7 @@ export interface SessionSnapshot {
 export interface SlotListItem {
   slotIndex: number;
   sessionId: string;
+  backend: AcpBackend;
   name?: string;
   workspaceRoot: string;
   lastActiveAt: number;
@@ -58,60 +52,40 @@ export interface SlotListItem {
 
 export interface SessionManagerOptions {
   debug?: boolean;
-  /**
-   * 持久化记录缺少 `workspaceRoot` 时的回退 cwd；亦为与 ACP 子进程 spawn 对齐的首个允许根。
-   */
   defaultWorkspaceRoot: string;
-  /** 每个 key 最多保留的 slot 数量 */
+  defaultBackend?: AcpBackend;
   maxSlotsPerKey?: number;
-  /**
-   * 同一飞书用户存活 session 总数上限（跨所有私聊/群/话题）；`0` 表示不限制。
-   * @default 10
-   */
   maxSessionsPerUser?: number;
-  onSessionWorkspace?: (sessionId: string, workspaceRoot: string) => void;
-  onSessionWorkspaceRemove?: (sessionId: string) => void;
 }
 
-// ---------------------------------------------------------------------------
-// SessionManager
-// ---------------------------------------------------------------------------
-
-/**
- * 飞书维度会话：每个 sessionKey 持有多个 slot（最多 maxSlotsPerKey 个），
- * 每个 slot 对应一个 ACP session；slot 可独立切换而不关闭其他 slot 的 ACP 连接。
- */
 export class SessionManager {
   private groups = new Map<string, UserSessionGroup>();
   private pendingNotices = new Map<string, string[]>();
-  private acp: BridgeAcpRuntime;
+  private resolver: AcpRuntimeResolver;
   private store: SessionStore;
   private idleMs: number;
   private debug: boolean;
   private readonly defaultWorkspaceRoot: string;
+  private readonly defaultBackend: AcpBackend;
   private readonly maxSlots: number;
-  /** `0` 表示不限制 */
   private readonly maxSessionsPerUser: number;
-  private readonly onSessionWorkspace?: (sessionId: string, workspaceRoot: string) => void;
-  private readonly onSessionWorkspaceRemove?: (sessionId: string) => void;
 
   constructor(
-    acp: BridgeAcpRuntime,
+    resolver: AcpRuntimeResolver | BridgeAcpRuntime,
     store: SessionStore,
     idleMs: number,
-    options?: SessionManagerOptions,
+    options: SessionManagerOptions,
   ) {
-    this.acp = acp;
+    this.resolver = this.normalizeResolver(resolver);
     this.store = store;
     this.idleMs = idleMs;
-    this.debug = options?.debug ?? false;
+    this.debug = options.debug ?? false;
     this.defaultWorkspaceRoot = path.resolve(
-      options?.defaultWorkspaceRoot ?? process.cwd(),
+      options.defaultWorkspaceRoot ?? process.cwd(),
     );
-    this.maxSlots = options?.maxSlotsPerKey ?? 5;
-    this.maxSessionsPerUser = options?.maxSessionsPerUser ?? 10;
-    this.onSessionWorkspace = options?.onSessionWorkspace;
-    this.onSessionWorkspaceRemove = options?.onSessionWorkspaceRemove;
+    this.defaultBackend = options.defaultBackend ?? "official";
+    this.maxSlots = options.maxSlotsPerKey ?? 5;
+    this.maxSessionsPerUser = options.maxSessionsPerUser ?? 10;
   }
 
   async init(): Promise<void> {
@@ -120,7 +94,6 @@ export class SessionManager {
     for (const key of this.store.allKeys()) {
       const group = this.store.get(key);
       if (!group) continue;
-      // Drop groups where all slots have expired
       const hasLive = group.slots.some((s) => !this.isExpiredAt(s.lastActiveAt, now));
       if (!hasLive) {
         this.store.delete(key);
@@ -128,26 +101,6 @@ export class SessionManager {
     }
     await this.store.flush();
   }
-
-  private makeKey(
-    chatId: string,
-    userId: string,
-    chatType: string,
-    threadId?: string,
-  ): string {
-    if (this.chatType(chatType) === "p2p") return `dm:${userId}`;
-    const t = threadId?.trim();
-    if (t) return `${chatId}:t:${t}:${userId}`;
-    return `${chatId}:${userId}`;
-  }
-
-  private chatType(t: string): "p2p" | "group" {
-    return t === "group" ? "group" : "p2p";
-  }
-
-  // -------------------------------------------------------------------------
-  // Core: get active session（不自动新建；无 session 时返回 null）
-  // -------------------------------------------------------------------------
 
   async getActiveSession(
     chatId: string,
@@ -161,8 +114,6 @@ export class SessionManager {
 
     let group = this.groups.get(key);
     let restoredFromStore = false;
-
-    // Try to restore from store if not in memory
     if (!group) {
       group = await this.restoreGroupFromStore(
         key,
@@ -175,44 +126,39 @@ export class SessionManager {
       restoredFromStore = group != null;
     }
 
-    if (group) {
-      const slot = this.findSlot(group, group.activeSlotIndex);
-      if (slot && !this.isExpiredAt(slot.session.lastActiveAt, now)) {
-        if (!restoredFromStore) {
-          await this.ensureSlotSessionAvailable(slot, now, key);
-        }
-        slot.session.lastActiveAt = now;
-        this.persistGroup(key, group);
-        if (this.debug) {
-          console.log(
-            `[session] reuse key=${key} slot=#${slot.slotIndex} sessionId=${slot.session.sessionId}`,
-          );
-        }
-        return slot.session;
+    if (!group) return null;
+    const slot = this.findSlot(group, group.activeSlotIndex);
+    if (!slot) return null;
+
+    if (!this.isExpiredAt(slot.session.lastActiveAt, now)) {
+      if (!restoredFromStore) {
+        await this.ensureSlotSessionAvailable(slot, now, key);
       }
-      // Active slot expired — create a new ACP session in its place
-      if (slot) {
-        await this.renewSlotSession(slot, slot.session.workspaceRoot, now, key);
-        this.persistGroup(key, group);
-        return slot.session;
-      }
+      slot.session.lastActiveAt = now;
+      this.persistGroup(key, group);
+      return slot.session;
     }
 
-    return null;
+    await this.renewSlotSession(slot, slot.session.workspaceRoot, now, key);
+    this.persistGroup(key, group);
+    return slot.session;
   }
-
-  // -------------------------------------------------------------------------
-  // Create new slot
-  // -------------------------------------------------------------------------
 
   async createNewSlot(
     chatId: string,
     userId: string,
     chatTypeRaw: string,
     workspaceRoot: string,
+    backend: AcpBackend,
     name?: string,
     threadId?: string,
-  ): Promise<{ slotIndex: number; name?: string; sessionId: string; workspaceRoot: string }> {
+  ): Promise<{
+    slotIndex: number;
+    name?: string;
+    backend: AcpBackend;
+    sessionId: string;
+    workspaceRoot: string;
+  }> {
     const chatType = this.chatType(chatTypeRaw);
     const key = this.makeKey(chatId, userId, chatType, threadId);
     const now = Date.now();
@@ -247,8 +193,10 @@ export class SessionManager {
       );
     }
     const cwd = path.resolve(trimmedRoot);
-    const { sessionId, cursorCliChatId } = await this.acp.newSession(cwd);
+    const runtime = this.runtimeForBackend(backend);
+    const { sessionId, cursorCliChatId } = await runtime.newSession(cwd);
     const session = this.makeSession(
+      backend,
       sessionId,
       cwd,
       chatId,
@@ -273,18 +221,10 @@ export class SessionManager {
       group.activeSlotIndex = slotIndex;
     }
 
-    this.onSessionWorkspace?.(sessionId, cwd);
     this.groups.set(key, group);
     this.persistGroup(key, group);
-    if (this.debug) {
-      console.log(`[session] new slot key=${key} slot=#${slotIndex} sessionId=${sessionId} cwd=${cwd}`);
-    }
-    return { slotIndex, name: normalizedName, sessionId, workspaceRoot: cwd };
+    return { slotIndex, name: normalizedName, backend, sessionId, workspaceRoot: cwd };
   }
-
-  // -------------------------------------------------------------------------
-  // Switch active slot
-  // -------------------------------------------------------------------------
 
   async switchSlot(
     chatId: string,
@@ -419,17 +359,8 @@ export class SessionManager {
     this.ensureSlotNameAvailable(group, normalizedName, slot.slotIndex);
     slot.name = normalizedName;
     this.persistGroup(key, group);
-    if (this.debug) {
-      console.log(
-        `[session] rename key=${key} slot=#${slot.slotIndex} name=${normalizedName}`,
-      );
-    }
     return slot;
   }
-
-  // -------------------------------------------------------------------------
-  // Close a specific slot
-  // -------------------------------------------------------------------------
 
   async closeSlot(
     chatId: string,
@@ -466,9 +397,9 @@ export class SessionManager {
       );
     }
 
-    this.onSessionWorkspaceRemove?.(slot.session.sessionId);
-    await this.acp.cancelSession(slot.session.sessionId);
-    await this.acp.closeSession(slot.session.sessionId);
+    const runtime = this.runtimeForSlot(slot);
+    await runtime.cancelSession(slot.session.sessionId);
+    await runtime.closeSession(slot.session.sessionId);
 
     group.slots = group.slots.filter((s) => s.slotIndex !== slot.slotIndex);
 
@@ -476,32 +407,21 @@ export class SessionManager {
       this.groups.delete(key);
       this.store.delete(key);
       void this.store.flush().catch(() => {});
-      if (this.debug) {
-        console.log(`[session] close slot (last, group removed) key=${key} slot=#${slot.slotIndex}`);
-      }
       return { closed: slot, removedEntireGroup: true };
     }
 
-    // If we closed the active slot, switch to the most recently active remaining slot
     if (group.activeSlotIndex === slot.slotIndex) {
       const best = group.slots.reduce((a, b) =>
         b.session.lastActiveAt > a.session.lastActiveAt ? b : a,
       );
       group.activeSlotIndex = best.slotIndex;
-      this.onSessionWorkspace?.(best.session.sessionId, best.session.workspaceRoot);
     }
 
     this.groups.set(key, group);
     this.persistGroup(key, group);
-    if (this.debug) {
-      console.log(`[session] close slot key=${key} slot=#${slot.slotIndex}`);
-    }
     return { closed: slot, removedEntireGroup: false };
   }
 
-  /**
-   * 关闭当前 sessionKey 下全部 slot（cancel + close ACP），并移除持久化，释放全局配额。
-   */
   async closeAllSlots(
     chatId: string,
     userId: string,
@@ -529,23 +449,16 @@ export class SessionManager {
 
     const toClose = [...group.slots];
     for (const slot of toClose) {
-      this.onSessionWorkspaceRemove?.(slot.session.sessionId);
-      await this.acp.cancelSession(slot.session.sessionId);
-      await this.acp.closeSession(slot.session.sessionId);
+      const runtime = this.runtimeForSlot(slot);
+      await runtime.cancelSession(slot.session.sessionId);
+      await runtime.closeSession(slot.session.sessionId);
     }
 
     this.groups.delete(key);
     this.store.delete(key);
     void this.store.flush().catch(() => {});
-    if (this.debug) {
-      console.log(`[session] close all slots key=${key} count=${toClose.length}`);
-    }
     return { closed: toClose };
   }
-
-  // -------------------------------------------------------------------------
-  // List slots
-  // -------------------------------------------------------------------------
 
   async listSlots(
     chatId: string,
@@ -567,15 +480,17 @@ export class SessionManager {
       );
     }
     if (!group) return [];
-    const ordered = [...group.slots].sort((a, b) => a.slotIndex - b.slotIndex);
-    return ordered.map((s) => ({
-      slotIndex: s.slotIndex,
-      sessionId: s.session.sessionId,
-      name: s.name,
-      workspaceRoot: s.session.workspaceRoot,
-      lastActiveAt: s.session.lastActiveAt,
-      isActive: s.slotIndex === group.activeSlotIndex,
-    }));
+    return [...group.slots]
+      .sort((a, b) => a.slotIndex - b.slotIndex)
+      .map((slot) => ({
+        slotIndex: slot.slotIndex,
+        sessionId: slot.session.sessionId,
+        backend: slot.session.backend,
+        name: slot.name,
+        workspaceRoot: slot.session.workspaceRoot,
+        lastActiveAt: slot.session.lastActiveAt,
+        isActive: slot.slotIndex === group!.activeSlotIndex,
+      }));
   }
 
   async getSlot(
@@ -607,6 +522,9 @@ export class SessionManager {
         ? this.findSlot(group, group.activeSlotIndex)
         : this.resolveSlot(group, target);
     if (!slot) {
+      if (target === null) {
+        throw new Error("当前没有可用的活跃 session。");
+      }
       throw new Error(
         typeof target === "number"
           ? `找不到编号 #${target} 的 session。`
@@ -614,64 +532,6 @@ export class SessionManager {
       );
     }
     return slot;
-  }
-
-  // -------------------------------------------------------------------------
-  // Cache last reply for active slot
-  // -------------------------------------------------------------------------
-
-  setSlotLastTurn(
-    chatId: string,
-    userId: string,
-    chatTypeRaw: string,
-    sessionId: string,
-    userPrompt: string,
-    assistantMarkdown: string,
-    threadId?: string,
-  ): void {
-    const chatType = this.chatType(chatTypeRaw);
-    const key = this.makeKey(chatId, userId, chatType, threadId);
-    const group = this.groups.get(key);
-    if (!group) return;
-    const slot = group.slots.find((s) => s.session.sessionId === sessionId);
-    if (slot) {
-      const p = userPrompt.trim();
-      const r = assistantMarkdown.trim();
-      slot.lastPrompt = p ? p : undefined;
-      slot.lastReply = r ? r : undefined;
-    }
-  }
-
-  consumePendingNotices(
-    chatId: string,
-    userId: string,
-    chatTypeRaw: string,
-    threadId?: string,
-  ): string[] {
-    const chatType = this.chatType(chatTypeRaw);
-    const key = this.makeKey(chatId, userId, chatType, threadId);
-    const notices = this.pendingNotices.get(key) ?? [];
-    this.pendingNotices.delete(key);
-    return notices;
-  }
-
-  // -------------------------------------------------------------------------
-  // Stats / snapshot (for /status)
-  // -------------------------------------------------------------------------
-
-  getStats(): { total: number; active: number } {
-    const now = Date.now();
-    let active = 0;
-    let total = 0;
-    for (const group of this.groups.values()) {
-      for (const slot of group.slots) {
-        total++;
-        if (!this.isExpiredAt(slot.session.lastActiveAt, now)) {
-          active++;
-        }
-      }
-    }
-    return { total, active };
   }
 
   getSessionSnapshot(
@@ -684,21 +544,56 @@ export class SessionManager {
     const key = this.makeKey(chatId, userId, chatType, threadId);
     const group = this.groups.get(key);
     if (!group) return null;
-    const slot = this.findSlot(group, group.activeSlotIndex);
-    if (!slot) return null;
-    const now = Date.now();
-    if (this.isExpiredAt(slot.session.lastActiveAt, now)) return null;
+    const activeSlot = this.findSlot(group, group.activeSlotIndex);
+    if (!activeSlot) return null;
     return {
       sessionKey: key,
       group,
-      activeSlot: slot,
-      idleExpiresInMs: this.getIdleExpiresInMs(slot.session.lastActiveAt, now),
+      activeSlot,
+      idleExpiresInMs: this.getIdleExpiresInMs(activeSlot.session.lastActiveAt, Date.now()),
     };
   }
 
-  // -------------------------------------------------------------------------
-  // Periodic cleanup
-  // -------------------------------------------------------------------------
+  getStats(): { active: number; total: number } {
+    let total = 0;
+    const now = Date.now();
+    for (const group of this.groups.values()) {
+      total += group.slots.filter((slot) => !this.isExpiredAt(slot.session.lastActiveAt, now)).length;
+    }
+    return { active: this.groups.size, total };
+  }
+
+  setSlotLastTurn(
+    chatId: string,
+    userId: string,
+    chatTypeRaw: string,
+    slotIndex: number,
+    prompt: string,
+    reply: string,
+    threadId?: string,
+  ): void {
+    const chatType = this.chatType(chatTypeRaw);
+    const key = this.makeKey(chatId, userId, chatType, threadId);
+    const group = this.groups.get(key);
+    if (!group) return;
+    const slot = this.findSlot(group, slotIndex);
+    if (!slot) return;
+    slot.lastPrompt = prompt;
+    slot.lastReply = reply;
+  }
+
+  consumePendingNotices(
+    chatId: string,
+    userId: string,
+    chatTypeRaw: string,
+    threadId?: string,
+  ): string[] {
+    const chatType = this.chatType(chatTypeRaw);
+    const key = this.makeKey(chatId, userId, chatType, threadId);
+    const list = this.pendingNotices.get(key) ?? [];
+    this.pendingNotices.delete(key);
+    return list;
+  }
 
   async cleanupExpired(): Promise<number> {
     const now = Date.now();
@@ -709,9 +604,9 @@ export class SessionManager {
         this.isExpiredAt(s.session.lastActiveAt, now),
       );
       for (const slot of expired) {
-        this.onSessionWorkspaceRemove?.(slot.session.sessionId);
-        await this.acp.cancelSession(slot.session.sessionId);
-        await this.acp.closeSession(slot.session.sessionId);
+        const runtime = this.runtimeForSlot(slot);
+        await runtime.cancelSession(slot.session.sessionId);
+        await runtime.closeSession(slot.session.sessionId);
       }
       group.slots = group.slots.filter(
         (s) => !this.isExpiredAt(s.session.lastActiveAt, now),
@@ -722,28 +617,23 @@ export class SessionManager {
         this.groups.delete(key);
         this.store.delete(key);
       } else {
-        // If the active slot was removed, point to the most recently active remaining slot
-        if (!this.findSlot(group, group.activeSlotIndex)) {
+        if (!group.slots.find((s) => s.slotIndex === group.activeSlotIndex)) {
           const best = group.slots.reduce((a, b) =>
             b.session.lastActiveAt > a.session.lastActiveAt ? b : a,
           );
           group.activeSlotIndex = best.slotIndex;
-          this.onSessionWorkspace?.(best.session.sessionId, best.session.workspaceRoot);
         }
         this.persistGroup(key, group);
       }
     }
     if (cleaned) {
-      void this.store.flush().catch(() => {});
+      await this.store.flush();
     }
     return cleaned;
   }
 
-  // -------------------------------------------------------------------------
-  // Private helpers
-  // -------------------------------------------------------------------------
-
   private makeSession(
+    backend: AcpBackend,
     sessionId: string,
     workspaceRoot: string,
     chatId: string,
@@ -754,6 +644,7 @@ export class SessionManager {
     threadId?: string,
   ): UserSession {
     const s: UserSession = {
+      backend,
       sessionId,
       workspaceRoot,
       chatId,
@@ -769,6 +660,25 @@ export class SessionManager {
       s.threadId = threadId;
     }
     return s;
+  }
+
+  private normalizeResolver(
+    resolver: AcpRuntimeResolver | BridgeAcpRuntime,
+  ): AcpRuntimeResolver {
+    if ("getRuntime" in resolver) {
+      return resolver;
+    }
+    return {
+      getRuntime: () => resolver,
+    };
+  }
+
+  private runtimeForBackend(backend: AcpBackend): BridgeAcpRuntime {
+    return this.resolver.getRuntime(backend);
+  }
+
+  private runtimeForSlot(slot: SessionSlot): BridgeAcpRuntime {
+    return this.runtimeForBackend(slot.session.backend);
   }
 
   private findSlot(group: UserSessionGroup, slotIndex: number): SessionSlot | undefined {
@@ -833,13 +743,7 @@ export class SessionManager {
 
     slot.session.lastActiveAt = now;
     group.activeSlotIndex = slot.slotIndex;
-    this.onSessionWorkspace?.(slot.session.sessionId, slot.session.workspaceRoot);
     this.persistGroup(key, group);
-    if (this.debug) {
-      console.log(
-        `[session] switch key=${key} -> slot=#${slot.slotIndex} sessionId=${slot.session.sessionId}`,
-      );
-    }
     return slot;
   }
 
@@ -855,24 +759,26 @@ export class SessionManager {
     previousCursorCliChatId: string,
     nextCursorCliChatId?: string,
   ): string {
-    return (
-      "⚠️ 检测到后台 ACP 会话已失效，虽然已自动重建连接，但当前飞书会话绑定的 CLI 会话发生了变化。\n" +
-      `• Session：#${slotIndex}\n` +
-      `• 工作区：\`${workspaceRoot}\`\n` +
-      `• 旧 CLI resume ID：\`${previousCursorCliChatId}\`\n` +
-      `• 新 CLI resume ID：${nextCursorCliChatId ? `\`${nextCursorCliChatId}\`` : "（无）"}\n\n` +
-      "后续消息将继续写入上面显示的新绑定；如需继续原本的 CLI 对话，请在本机确认 Cursor 会话目录与适配器恢复状态。"
-    );
+    return [
+      "⚠️ 检测到后台 ACP 会话已失效，虽然已自动重建连接，但当前飞书会话绑定的 CLI 会话发生了变化。",
+      `• Session：#${slotIndex}`,
+      `• 工作区：\`${workspaceRoot}\``,
+      `• 旧 CLI resume ID：\`${previousCursorCliChatId}\``,
+      `• 新 CLI resume ID：${nextCursorCliChatId ? `\`${nextCursorCliChatId}\`` : "（无）"}`,
+      "",
+      "后续消息将继续写入上面显示的新绑定；如需继续原本的 CLI 对话，请在本机确认 Cursor 会话目录与适配器恢复状态。",
+    ].join("\n");
   }
 
   private async createSessionPreservingCliBinding(
+    backend: AcpBackend,
     cwd: string,
     previousCursorCliChatId: string | undefined,
     slotIndex: number,
     noticeKey?: string,
   ): Promise<{ sessionId: string; cursorCliChatId?: string }> {
     const normalizedPrevious = previousCursorCliChatId?.trim() || undefined;
-    const fresh = await this.acp.newSession(
+    const fresh = await this.runtimeForBackend(backend).newSession(
       cwd,
       normalizedPrevious ? { cursorCliChatId: normalizedPrevious } : undefined,
     );
@@ -907,30 +813,25 @@ export class SessionManager {
       skipLoadSessionProbe?: boolean;
     },
   ): Promise<void> {
+    const runtime = this.runtimeForSlot(slot);
     const oldId = slot.session.sessionId;
-    // Try loadSession first (if supported)
-    if (this.acp.supportsLoadSession && !options?.skipLoadSessionProbe) {
+    if (runtime.supportsLoadSession && !options?.skipLoadSessionProbe) {
       try {
-        await this.acp.loadSession(oldId, cwd);
+        await runtime.loadSession(oldId, cwd);
         slot.session.lastActiveAt = now;
-        if (this.debug) {
-          console.log(`[session] loadSession slot=#${slot.slotIndex} sessionId=${oldId}`);
-        }
         return;
       } catch {
-        // Fall through to new session
+        // fall through
       }
     }
     const { sessionId, cursorCliChatId } =
       await this.createSessionPreservingCliBinding(
+        slot.session.backend,
         cwd,
         slot.session.cursorCliChatId,
         slot.slotIndex,
         noticeKey,
       );
-    if (sessionId !== oldId) {
-      this.onSessionWorkspaceRemove?.(oldId);
-    }
     slot.session = {
       ...slot.session,
       sessionId,
@@ -941,10 +842,6 @@ export class SessionManager {
     if (!cursorCliChatId) {
       delete slot.session.cursorCliChatId;
     }
-    this.onSessionWorkspace?.(sessionId, cwd);
-    if (this.debug) {
-      console.log(`[session] renew slot=#${slot.slotIndex} old=${oldId} new=${sessionId}`);
-    }
   }
 
   private async ensureSlotSessionAvailable(
@@ -952,17 +849,13 @@ export class SessionManager {
     now: number,
     noticeKey?: string,
   ): Promise<void> {
-    if (!this.acp.supportsLoadSession) {
+    const runtime = this.runtimeForSlot(slot);
+    if (!runtime.supportsLoadSession) {
       return;
     }
     const { sessionId, workspaceRoot } = slot.session;
     try {
-      await this.acp.loadSession(sessionId, workspaceRoot);
-      if (this.debug) {
-        console.log(
-          `[session] probe load slot=#${slot.slotIndex} sessionId=${sessionId}`,
-        );
-      }
+      await runtime.loadSession(sessionId, workspaceRoot);
     } catch {
       await this.renewSlotSession(slot, workspaceRoot, now, noticeKey, {
         skipLoadSessionProbe: true,
@@ -982,7 +875,6 @@ export class SessionManager {
     if (!persisted) return undefined;
 
     const tid = persisted.threadId ?? threadId;
-
     const liveSlots = persisted.slots.filter(
       (s) => !this.isExpiredAt(s.lastActiveAt, now),
     );
@@ -997,19 +889,19 @@ export class SessionManager {
       const cwd = ps.workspaceRoot
         ? path.resolve(ps.workspaceRoot)
         : this.defaultWorkspaceRoot;
+      const backend = ps.backend ?? this.defaultBackend;
+      const runtime = this.runtimeForBackend(backend);
 
       let sessionId: string;
       let cursorCliChatId: string | undefined;
-      if (this.acp.supportsLoadSession) {
+      if (runtime.supportsLoadSession) {
         sessionId = ps.sessionId;
         cursorCliChatId = ps.cursorCliChatId;
         try {
-          await this.acp.loadSession(ps.sessionId, cwd);
-          if (this.debug) {
-            console.log(`[session] restore load slot=#${ps.slotIndex} sessionId=${ps.sessionId}`);
-          }
+          await runtime.loadSession(ps.sessionId, cwd);
         } catch {
           const fresh = await this.createSessionPreservingCliBinding(
+            backend,
             cwd,
             ps.cursorCliChatId,
             ps.slotIndex,
@@ -1017,12 +909,10 @@ export class SessionManager {
           );
           sessionId = fresh.sessionId;
           cursorCliChatId = fresh.cursorCliChatId;
-          if (this.debug) {
-            console.log(`[session] restore new slot=#${ps.slotIndex} (load failed) sessionId=${sessionId}`);
-          }
         }
       } else {
         const fresh = await this.createSessionPreservingCliBinding(
+          backend,
           cwd,
           ps.cursorCliChatId,
           ps.slotIndex,
@@ -1030,12 +920,10 @@ export class SessionManager {
         );
         sessionId = fresh.sessionId;
         cursorCliChatId = fresh.cursorCliChatId;
-        if (this.debug) {
-          console.log(`[session] restore new slot=#${ps.slotIndex} (load unsupported) sessionId=${sessionId}`);
-        }
       }
 
       const session = this.makeSession(
+        backend,
         sessionId,
         cwd,
         chatId,
@@ -1046,10 +934,8 @@ export class SessionManager {
         tid,
       );
       restoredSlots.push({ slotIndex: ps.slotIndex, name: ps.name, session });
-      this.onSessionWorkspace?.(sessionId, cwd);
     }
 
-    // Determine active slot: prefer persisted active, else most recent
     let activeSlotIndex = persisted.activeSlotIndex;
     if (!restoredSlots.find((s) => s.slotIndex === activeSlotIndex)) {
       activeSlotIndex = restoredSlots.reduce((a, b) =>
@@ -1068,13 +954,13 @@ export class SessionManager {
   }
 
   private persistGroup(key: string, group: UserSessionGroup): void {
-    // Infer chatId/userId/chatType from one of the slots
     const sample = group.slots[0]?.session;
     if (!sample) return;
 
     const slots: PersistedSlotRecord[] = group.slots.map((s) => ({
       slotIndex: s.slotIndex,
       name: s.name,
+      backend: s.session.backend,
       sessionId: s.session.sessionId,
       ...(s.session.cursorCliChatId && { cursorCliChatId: s.session.cursorCliChatId }),
       workspaceRoot: s.session.workspaceRoot,
@@ -1096,10 +982,6 @@ export class SessionManager {
     });
   }
 
-  /**
-   * 统计同一用户在持久化存储中的存活 slot 数（含尚未加载到内存的会话），
-   * 与 `SESSION_IDLE_TIMEOUT_MS` 的过期判定一致。
-   */
   private countAliveSlotsForUser(userId: string, now: number): number {
     let n = 0;
     for (const key of this.store.allKeys()) {
@@ -1112,7 +994,6 @@ export class SessionManager {
     return n;
   }
 
-  /** 在新增一个 slot（多出一个存活 session）之前调用 */
   private assertCanAddUserSession(userId: string, now: number): void {
     if (this.maxSessionsPerUser <= 0) return;
     const n = this.countAliveSlotsForUser(userId, now);
@@ -1121,6 +1002,22 @@ export class SessionManager {
         `已达到同一用户最多 ${this.maxSessionsPerUser} 个存活 session 的上限，请先在其它会话中执行 /close 或等待空闲过期后再试。`,
       );
     }
+  }
+
+  private makeKey(
+    chatId: string,
+    userId: string,
+    chatType: string,
+    threadId?: string,
+  ): string {
+    if (this.chatType(chatType) === "p2p") return `dm:${userId}`;
+    const t = threadId?.trim();
+    if (t) return `${chatId}:t:${t}:${userId}`;
+    return `${chatId}:${userId}`;
+  }
+
+  private chatType(t: string): "p2p" | "group" {
+    return t === "group" ? "group" : "p2p";
   }
 
   private isExpiredAt(lastActiveAt: number, now: number): boolean {

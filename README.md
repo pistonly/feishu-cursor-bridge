@@ -405,6 +405,7 @@ docker-compose -f docker/compose.yaml run --rm tmux-acp-cancel-smoke
 ## 使用方式
 
 - **私聊 / 群聊**：须先用 **`/new list`** 再 **`/new <序号或路径>`** 创建 session（路径须在 `CURSOR_WORK_ALLOWLIST` 下），之后普通消息才会进 Agent；无 session 时机器人会提示先 `/new`
+- **切换 backend**：可用 `/new <序号或路径> --backend <official|legacy|tmux>` 为新 session 指定 backend；但该 backend 必须已包含在 `ACP_ENABLED_BACKENDS` 中，否则不会被启动
 - **飞书附件入站**：有活跃 session 时，用户直接发送的文件 / 图片 / 音频 / 视频会先下载到当前工作区的 `.feishu-incoming/`，再把相对路径说明交给 Agent；`/fileback` 则是反方向，用于让 Agent 把工作区文件回传到飞书
 - **群聊**：@机器人 + 内容（开发平台须为应用开通 **`im:message.group_msg`**，否则群消息事件不会投递到机器人）；**话题群**内不同话题（`thread_id`）会**分别**映射 ACP 会话，与群主页会话互不共享
 - **多 session 切换**：`/new <序号或路径>` 新建并切到该 session（裸 `/new` 等同列表）；`/sessions` 列表；`/switch <编号或名称>` 切换活跃 session（无参数时切到上一次用过的）；`/close` 关闭指定；`/rename` 便于用名称切换。完整语法与快捷列表见 `docs/feishu-commands.md`
@@ -432,5 +433,6 @@ docker-compose -f docker/compose.yaml run --rm tmux-acp-cancel-smoke
 ## 当前后端策略
 
 - 默认使用 **`agent acp` 官方后端**。
+- `ACP_ENABLED_BACKENDS` 控制启动时实际启用哪些 backend；若未设置，默认只启用 `ACP_BACKEND` 当前值。
 - 可选 **`ACP_BACKEND=legacy`**：使用本仓库内 **`cursor-agent-acp/`**（不依赖外部 npm 包）。
 - 协议实现以 SDK 为准，事件面覆盖思考、工具、计划、模式等，并由 `FeishuCardState` 折叠展示。

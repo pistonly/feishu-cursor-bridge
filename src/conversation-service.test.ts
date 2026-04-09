@@ -17,6 +17,7 @@ function createTestConfig(): Config {
     },
     acp: {
       backend: "official",
+      enabledBackends: ["official"],
       nodePath: process.execPath,
       adapterEntry: "",
       extraArgs: [],
@@ -70,6 +71,7 @@ function createMessage(): FeishuMessage {
 
 function createSession(): UserSession {
   return {
+    backend: "official",
     sessionId: "session-1",
     workspaceRoot: "/tmp",
     chatId: "chat-1",

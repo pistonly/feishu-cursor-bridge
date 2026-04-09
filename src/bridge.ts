@@ -1,11 +1,10 @@
 import type { Config } from "./config.js";
 import {
-  createAcpRuntime,
+  AcpRuntimeRegistry,
   formatAcpBackendLabel,
   resolveAdapterSessionTimeoutMs,
 } from "./acp/runtime.js";
-import type { BridgeAcpRuntime } from "./acp/runtime-contract.js";
-import { FeishuBridgeClient } from "./acp/feishu-bridge-client.js";
+import type { AcpBackend, BridgeAcpRuntime } from "./acp/runtime-contract.js";
 import { formatJsonRpcLikeError } from "./format-json-rpc-error.js";
 import {
   FeishuBot,
@@ -103,13 +102,12 @@ function formatDurationMs(ms: number): string {
 
 export class Bridge {
   private config: Config;
-  private bridgeClient: FeishuBridgeClient;
-  private acpRuntime: BridgeAcpRuntime;
+  private runtimeRegistry: AcpRuntimeRegistry;
   private feishuBot: FeishuBot;
   private sessionStore: SessionStore;
   private sessionManager: SessionManager;
   private presetsStore: WorkspacePresetsStore;
-  private conversation: ConversationService;
+  private conversations: Map<AcpBackend, ConversationService>;
   /** key: `<sessionKey>:<slotIndex>` — 同一 slot 同一时刻只能有一个 prompt 在跑 */
   private activePrompts = new Set<string>();
   private cleanupInterval: ReturnType<typeof setInterval> | null = null;
@@ -122,33 +120,26 @@ export class Bridge {
       domain: config.feishu.domain,
       bridgeDebug: config.bridgeDebug,
     });
-    this.bridgeClient = new FeishuBridgeClient(config);
-    this.acpRuntime = createAcpRuntime(config, this.bridgeClient);
-    this.sessionStore = new SessionStore(config.bridge.sessionStorePath);
+    this.runtimeRegistry = new AcpRuntimeRegistry(config);
+    this.sessionStore = new SessionStore(
+      config.bridge.sessionStorePath,
+      config.acp.backend,
+    );
     this.presetsStore = new WorkspacePresetsStore(
       config.bridge.workspacePresetsPath,
     );
     this.sessionManager = new SessionManager(
-      this.acpRuntime,
+      this.runtimeRegistry,
       this.sessionStore,
       config.bridge.sessionIdleTimeoutMs,
       {
         debug: config.bridgeDebug,
         defaultWorkspaceRoot: config.acp.workspaceRoot,
+        defaultBackend: config.acp.backend,
         maxSessionsPerUser: config.bridge.maxSessionsPerUser,
-        onSessionWorkspace: (sessionId, root) => {
-          this.bridgeClient.setSessionWorkspace(sessionId, root);
-        },
-        onSessionWorkspaceRemove: (sessionId) => {
-          this.bridgeClient.removeSessionWorkspace(sessionId);
-        },
       },
     );
-    this.conversation = new ConversationService(
-      config,
-      this.acpRuntime,
-      this.feishuBot,
-    );
+    this.conversations = new Map();
   }
 
   async start(): Promise<void> {
@@ -161,16 +152,20 @@ export class Bridge {
     await this.sessionManager.init();
     await this.presetsStore.load(this.config.bridge.workspacePresetsSeed);
 
-    await this.acpRuntime.start();
-    await this.acpRuntime.initializeAndAuth();
-    console.log(
-      `[bridge] ${formatAcpBackendLabel(this.acpRuntime.backend)} 已连接 protocolVersion=${this.acpRuntime.initializeResult?.protocolVersion} loadSession=${this.acpRuntime.supportsLoadSession}`,
-    );
-
-    if (this.config.bridgeDebug) {
-      this.bridgeClient.on("acp", (ev) => {
-        console.log(`[bridge:debug] acp ${ev.type}`, ev);
-      });
+    const startedRuntimes = await this.runtimeRegistry.startEnabledRuntimes();
+    for (const runtime of startedRuntimes) {
+      console.log(
+        `[bridge] ${formatAcpBackendLabel(runtime.backend)} 已连接 protocolVersion=${runtime.initializeResult?.protocolVersion} loadSession=${runtime.supportsLoadSession}`,
+      );
+      this.conversations.set(
+        runtime.backend,
+        new ConversationService(this.config, runtime, this.feishuBot),
+      );
+      if (this.config.bridgeDebug) {
+        runtime.bridgeClient.on("acp", (ev) => {
+          console.log(`[bridge:debug] [${runtime.backend}] acp ${ev.type}`, ev);
+        });
+      }
     }
 
     this.feishuBot.on("ready", () => {
@@ -213,6 +208,35 @@ export class Bridge {
     if (msg.chatType !== "group") return undefined;
     const t = msg.threadId?.trim();
     return t || undefined;
+  }
+
+  private runtimeForBackend(backend: AcpBackend): BridgeAcpRuntime {
+    return this.runtimeRegistry.getRuntime(backend);
+  }
+
+  private runtimeForSession(session: { backend: AcpBackend }): BridgeAcpRuntime {
+    return this.runtimeForBackend(session.backend);
+  }
+
+  private conversationForBackend(backend: AcpBackend): ConversationService {
+    const existing = this.conversations.get(backend);
+    if (existing) return existing;
+    const created = new ConversationService(
+      this.config,
+      this.runtimeForBackend(backend),
+      this.feishuBot,
+    );
+    this.conversations.set(backend, created);
+    return created;
+  }
+
+  private activeSnapshot(msg: FeishuMessage) {
+    return this.sessionManager.getSessionSnapshot(
+      msg.chatId,
+      msg.senderId,
+      msg.chatType,
+      this.threadScope(msg),
+    );
   }
 
   private async flushPendingSessionNotices(msg: FeishuMessage): Promise<void> {
@@ -375,10 +399,7 @@ export class Bridge {
     }
 
     const newConv = parseNewConversationCommand(content);
-    const bridgeManagedCommand =
-      newConv?.kind === "mode" && this.acpRuntime.backend === "tmux"
-        ? null
-        : newConv;
+    const bridgeManagedCommand = newConv;
     if (bridgeManagedCommand) {
       try {
         // ----------------------------------------------------------------
@@ -408,8 +429,9 @@ export class Bridge {
             );
             return;
           }
+          const runtime = this.runtimeForSession(session);
           await this.flushPendingSessionNotices(msg);
-          if (!this.acpRuntime.supportsLoadSession) {
+          if (!runtime.supportsLoadSession) {
             await this.feishuBot.sendText(
               msg.chatId,
               "❌ 当前 Agent 未宣告 `loadSession`，无法执行 `/resume`。",
@@ -420,13 +442,9 @@ export class Bridge {
           }
           try {
             const replayMd = await captureAcpReplayDuring(
-              this.bridgeClient,
+              runtime.bridgeClient,
               session.sessionId,
-              () =>
-                this.acpRuntime.loadSession(
-                  session.sessionId,
-                  session.workspaceRoot,
-                ),
+              () => runtime.loadSession(session.sessionId, session.workspaceRoot),
               {
                 showAvailableCommands:
                   this.config.bridge.showAcpAvailableCommands,
@@ -474,17 +492,13 @@ export class Bridge {
         // ----------------------------------------------------------------
         if (bridgeManagedCommand.kind === "mode") {
           if (!bridgeManagedCommand.modeId) {
-            const snap = this.sessionManager.getSessionSnapshot(
-              msg.chatId,
-              msg.senderId,
-              msg.chatType,
-              this.threadScope(msg),
-            );
+            const snap = this.activeSnapshot(msg);
+            const runtime = snap ? this.runtimeForSession(snap.activeSlot.session) : undefined;
             await this.feishuBot.sendText(
               msg.chatId,
               formatModeUsage(
                 snap
-                  ? this.acpRuntime.getSessionModeState(snap.activeSlot.session.sessionId)
+                  ? runtime?.getSessionModeState(snap.activeSlot.session.sessionId)
                   : undefined,
               ),
               msg.messageId,
@@ -493,6 +507,7 @@ export class Bridge {
             return;
           }
           let sessionId: string | undefined;
+          let activeSession: Awaited<ReturnType<SessionManager["getActiveSession"]>> | undefined;
           try {
             const session = await this.sessionManager.getActiveSession(
               msg.chatId,
@@ -509,14 +524,16 @@ export class Bridge {
               );
               return;
             }
+            activeSession = session;
             sessionId = session.sessionId;
+            const runtime = this.runtimeForSession(session);
             await this.flushPendingSessionNotices(msg);
-            const modeState = this.acpRuntime.getSessionModeState(session.sessionId);
+            const modeState = runtime.getSessionModeState(session.sessionId);
             const resolved = resolveSessionModeInput(
               bridgeManagedCommand.modeId,
               modeState,
             );
-            await this.acpRuntime.setSessionMode(session.sessionId, resolved.modeId);
+            await runtime.setSessionMode(session.sessionId, resolved.modeId);
             await this.feishuBot.sendText(
               msg.chatId,
               `✅ 已切换模式为 \`${resolved.modeId}\`（后续对话将按该模式处理）。`,
@@ -528,8 +545,8 @@ export class Bridge {
               msg.chatId,
               formatModeSwitchFailure(
                 err,
-                sessionId
-                  ? this.acpRuntime.getSessionModeState(sessionId)
+                sessionId && activeSession
+                  ? this.runtimeForSession(activeSession).getSessionModeState(sessionId)
                   : undefined,
               ),
               msg.messageId,
@@ -840,11 +857,14 @@ export class Bridge {
               return;
           }
 
+          const requestedBackend: AcpBackend =
+            bridgeManagedCommand.backend ?? this.config.acp.backend;
           const result = await this.sessionManager.createNewSlot(
             msg.chatId,
             msg.senderId,
             msg.chatType,
             workspaceAbs,
+            requestedBackend,
             slotName,
             this.threadScope(msg),
           );
@@ -852,7 +872,7 @@ export class Bridge {
           const nameLabel = result.name ? ` (${result.name})` : "";
           await this.feishuBot.sendText(
             msg.chatId,
-            `✅ 已新建并切换到 session #${result.slotIndex}${nameLabel}\n工作区：\`${result.workspaceRoot}\`\n\n发送 \`/sessions\` 查看所有 session。`,
+            `✅ 已新建并切换到 session #${result.slotIndex}${nameLabel}\nBackend：\`${result.backend}\`\n工作区：\`${result.workspaceRoot}\`\n\n发送 \`/sessions\` 查看所有 session。`,
             msg.messageId,
             this.threadReplyOpts(msg),
           );
@@ -871,7 +891,7 @@ export class Bridge {
     if (matchesBridgeHelpCommand(contentMultiline)) {
       await this.feishuBot.sendText(
         msg.chatId,
-        formatBridgeCommandsHelp(this.acpRuntime.backend),
+        formatBridgeCommandsHelp(this.activeSnapshot(msg)?.activeSlot.session.backend ?? this.config.acp.backend),
         msg.messageId,
         this.threadReplyOpts(msg),
       );
@@ -881,26 +901,28 @@ export class Bridge {
     const statusLower = statusTrim.toLowerCase();
     if (statusTrim === "/状态" || statusLower === "/status") {
       const stats = this.sessionManager.getStats();
-      const snap = this.sessionManager.getSessionSnapshot(
-        msg.chatId,
-        msg.senderId,
-        msg.chatType,
-        this.threadScope(msg),
-      );
-      const cliResume = snap?.activeSlot.session.cursorCliChatId;
+      const snap = this.activeSnapshot(msg);
+      const activeSession = snap?.activeSlot.session;
+      const runtime = activeSession ? this.runtimeForSession(activeSession) : undefined;
+      const cliResume = activeSession?.cursorCliChatId;
       const currentModeId =
-        snap && this.acpRuntime.backend !== "tmux"
-          ? this.acpRuntime.getSessionModeState(snap.activeSlot.session.sessionId)
-              ?.currentModeId
+        activeSession && activeSession.backend !== "tmux"
+          ? runtime?.getSessionModeState(activeSession.sessionId)?.currentModeId
           : undefined;
       let body = `📊 活跃/内存 slot: ${stats.active}/${stats.total}`;
-      body += `\n• ACP 后端：${this.acpRuntime.backend}`;
+      body += `
+• 默认 backend：${this.config.acp.backend}`;
+      body += `
+• 已启用 backend：${this.config.acp.enabledBackends.join(", ")}`;
+      body += `
+• 当前 session backend：${activeSession?.backend ?? "（尚无）"}`;
       if (currentModeId) {
-        body += `\n• 当前模式：\`${currentModeId}\``;
+        body += `
+• 当前模式：\`${currentModeId}\``;
       }
       if (cliResume) {
-        body += `\n• CLI resume ID：\`${cliResume}\`\n  （与本机 \`cursor-agent\` 的 \`--resume\` 参数一致，便于 PC 接手同一对话）`;
-      } else if (this.acpRuntime.backend === "official") {
+        body += `\n• CLI resume ID：\`${cliResume}\``;
+      } else if (activeSession?.backend === "official") {
         body += "\n• CLI resume ID：当前官方 ACP 后端未暴露等价字段";
       } else {
         body += "\n• CLI resume ID：暂无（尚无活跃会话、或适配器未返回 / create-chat 失败）";
@@ -914,32 +936,31 @@ export class Bridge {
         const bridgeIdlePolicy = formatDurationMs(
           this.config.bridge.sessionIdleTimeoutMs,
         );
-        const backendPolicy =
-          this.config.acp.backend === "legacy"
-            ? `bridge=${bridgeIdlePolicy} / adapter=${formatDurationMs(Number(resolveAdapterSessionTimeoutMs(this.config)))}`
-            : this.config.acp.backend === "official"
-              ? `bridge=${bridgeIdlePolicy} / official=agent-managed`
-              : `bridge=${bridgeIdlePolicy} / tmux-acp=store-managed`;
         const slot = snap?.activeSlot;
         const availableModeIds =
-          slot && this.acpRuntime.backend !== "tmux"
-            ? (
-                this.acpRuntime.getSessionModeState(slot.session.sessionId)
-                  ?.availableModes ?? []
-              )
+          slot && slot.session.backend !== "tmux"
+            ? (runtime?.getSessionModeState(slot.session.sessionId)?.availableModes ?? [])
                 .map((mode) => mode.modeId)
                 .join(", ")
             : "";
-        body += `\n\n[调试 BRIDGE_DEBUG]\n• ACP 后端: ${this.acpRuntime.backend}\n• sessionKey: ${snap?.sessionKey ?? "(尚无)"}\n• threadId: ${this.threadScope(msg) ?? "（主会话区）"}\n• 活跃 slot: #${slot?.slotIndex ?? "—"}${slot?.name ? ` (${slot.name})` : ""}\n• ACP sessionId: ${slot?.session.sessionId ?? "—"}\n• 当前模式: ${currentModeId ?? "—"}\n• 可用模式: ${availableModeIds || "—"}\n• 会话 cwd: ${slot?.session.workspaceRoot ?? "—"}\n• 空闲过期约: ${idleLabel}\n• 会话策略: ${backendPolicy}\n• ACP 子进程 cwd（allowlist 首项）: ${this.config.acp.workspaceRoot}\n• 允许根 CURSOR_WORK_ALLOWLIST: ${this.config.acp.allowedWorkspaceRoots.join(", ")}\n• 映射文件: ${this.config.bridge.sessionStorePath}\n• loadSession: ${this.acpRuntime.supportsLoadSession}\n• LOG_LEVEL: ${this.config.logLevel}`;
-        if (this.config.acp.backend === "legacy") {
-          body += `\n• 适配器会话目录: ${this.config.acp.adapterSessionDir}`;
-        } else if (this.config.acp.backend === "official") {
-          body += `\n• 官方 ACP 命令: ${this.config.acp.officialAgentPath} acp`;
-        } else {
-          body += `\n• tmux ACP server: ${this.config.acp.tmuxServerEntry}`;
-          body += `\n• tmux ACP store: ${this.config.acp.tmuxSessionStorePath}`;
-          body += `\n• tmux start command: ${this.config.acp.tmuxStartCommand ?? "cursor agent"}`;
-        }
+        body += `
+
+[调试 BRIDGE_DEBUG]
+• 当前 session backend: ${activeSession?.backend ?? "—"}
+• sessionKey: ${snap?.sessionKey ?? "(尚无)"}
+• threadId: ${this.threadScope(msg) ?? "（主会话区）"}
+• 活跃 slot: #${slot?.slotIndex ?? "—"}${slot?.name ? ` (${slot.name})` : ""}
+• ACP sessionId: ${slot?.session.sessionId ?? "—"}
+• 当前模式: ${currentModeId ?? "—"}
+• 可用模式: ${availableModeIds || "—"}
+• 会话 cwd: ${slot?.session.workspaceRoot ?? "—"}
+• 空闲过期约: ${idleLabel}
+• 会话策略: bridge=${bridgeIdlePolicy}
+• ACP 子进程 cwd（allowlist 首项）: ${this.config.acp.workspaceRoot}
+• 允许根 CURSOR_WORK_ALLOWLIST: ${this.config.acp.allowedWorkspaceRoots.join(", ")}
+• 映射文件: ${this.config.bridge.sessionStorePath}
+• loadSession: ${runtime?.supportsLoadSession ?? false}
+• LOG_LEVEL: ${this.config.logLevel}`;
       }
       await this.feishuBot.sendText(msg.chatId, body, msg.messageId, this.threadReplyOpts(msg));
       return;
@@ -948,23 +969,22 @@ export class Bridge {
     // 非 tmux ACP 后端在 prompt 里识别 /model 后仍会把整句发给 CLI，导致大模型「解释命令」。
     // legacy / official 在 bridge 侧直接走 session/set_model；tmux 需要把命令真实送进 pane。
     const modelMatch = content.trim().match(/^\/model(?:\s+(\S+))?$/i);
-    if (modelMatch && this.acpRuntime.backend !== "tmux") {
+    const activeSessionForModel = await this.sessionManager.getActiveSession(
+      msg.chatId,
+      msg.senderId,
+      msg.chatType,
+      this.threadScope(msg),
+    );
+    if (modelMatch && activeSessionForModel && activeSessionForModel.backend !== "tmux") {
+      const runtime = this.runtimeForSession(activeSessionForModel);
       const modelId = modelMatch[1]?.trim();
       if (!modelId) {
-        const snap = this.sessionManager.getSessionSnapshot(
-          msg.chatId,
-          msg.senderId,
-          msg.chatType,
-          this.threadScope(msg),
-        );
         await this.feishuBot.sendText(
           msg.chatId,
           formatModelUsage(
-            snap
-              ? this.acpRuntime.getSessionModelState(snap.activeSlot.session.sessionId)
-              : undefined,
+            runtime.getSessionModelState(activeSessionForModel.sessionId),
             {
-              officialNumbered: this.acpRuntime.backend === "official",
+              officialNumbered: activeSessionForModel.backend === "official",
             },
           ),
           msg.messageId,
@@ -973,31 +993,16 @@ export class Bridge {
         return;
       }
       let sessionId: string | undefined;
-      const officialNumbered = this.acpRuntime.backend === "official";
+      const officialNumbered = activeSessionForModel.backend === "official";
       try {
-        const session = await this.sessionManager.getActiveSession(
-          msg.chatId,
-          msg.senderId,
-          msg.chatType,
-          this.threadScope(msg),
-        );
-        if (!session) {
-          await this.feishuBot.sendText(
-            msg.chatId,
-            `❌ ${NO_SESSION_HINT}`,
-            msg.messageId,
-            this.threadReplyOpts(msg),
-          );
-          return;
-        }
-        sessionId = session.sessionId;
+        sessionId = activeSessionForModel.sessionId;
         await this.flushPendingSessionNotices(msg);
-        const modelState = this.acpRuntime.getSessionModelState(session.sessionId);
+        const modelState = runtime.getSessionModelState(activeSessionForModel.sessionId);
         const resolved =
           officialNumbered
             ? resolveOfficialModelSelectorInput(modelId, modelState)
             : { modelId };
-        await this.acpRuntime.setSessionModel(session.sessionId, resolved.modelId);
+        await runtime.setSessionModel(activeSessionForModel.sessionId, resolved.modelId);
         const okText =
           resolved.pickedByIndex != null
             ? `✅ 已按序号 ${resolved.pickedByIndex} 切换为 \`${resolved.modelId}\`（后续对话将使用该模型）。`
@@ -1013,9 +1018,7 @@ export class Bridge {
           msg.chatId,
           formatModelSwitchFailure(
             err,
-            sessionId
-              ? this.acpRuntime.getSessionModelState(sessionId)
-              : undefined,
+            sessionId ? runtime.getSessionModelState(sessionId) : undefined,
             officialNumbered ? { officialNumbered: true } : undefined,
           ),
           msg.messageId,
@@ -1042,6 +1045,7 @@ export class Bridge {
         return;
       }
       const sessionKey = snap.sessionKey;
+      const activeSlot = snap.activeSlot;
       const active = snap.activeSlot;
       const promptKey = `${sessionKey}:${active.slotIndex}`;
       if (!this.activePrompts.has(promptKey)) {
@@ -1056,7 +1060,7 @@ export class Bridge {
       await this.flushPendingSessionNotices(msg);
       const errors: string[] = [];
       try {
-        await this.acpRuntime.cancelSession(active.session.sessionId);
+        await this.runtimeForSession(active.session).cancelSession(active.session.sessionId);
       } catch (e) {
         errors.push(
           `#${active.slotIndex}: ${e instanceof Error ? e.message : String(e)}`,
@@ -1170,13 +1174,13 @@ export class Bridge {
         content: promptContent,
       };
 
-      const lastReply = await this.conversation.handleUserPrompt(msgForPrompt, session);
+      const lastReply = await this.conversationForBackend(session.backend).handleUserPrompt(msgForPrompt, session);
       if (lastReply) {
         this.sessionManager.setSlotLastTurn(
           msg.chatId,
           msg.senderId,
           msg.chatType,
-          session.sessionId,
+          snap?.activeSlot.slotIndex ?? 1,
           promptContent,
           lastReply,
           this.threadScope(msg),
@@ -1220,16 +1224,35 @@ export class Bridge {
     const lines = slots.map((s) => {
       const active = s.isActive ? " ◀ 当前" : "";
       const name = s.name ? ` (${s.name})` : "";
+      const runtime = this.runtimeForBackend(s.backend);
       const modeId =
-        this.acpRuntime.backend === "tmux"
+        s.backend === "tmux"
           ? ""
-          : (this.acpRuntime.getSessionModeState(s.sessionId)?.currentModeId ?? "");
-      const modeLine = modeId ? `\n  模式：\`${modeId}\`` : "";
-      return `#${s.slotIndex}${name}${active}\n  工作区：\`${s.workspaceRoot}\`${modeLine}`;
+          : (runtime.getSessionModeState(s.sessionId)?.currentModeId ?? "");
+      const modeLine = modeId ? `
+  模式：\`${modeId}\`` : "";
+      return `#${s.slotIndex}${name}${active}
+  Backend：\`${s.backend}\`
+  工作区：\`${s.workspaceRoot}\`${modeLine}`;
     });
     await this.feishuBot.sendText(
       msg.chatId,
-      `📋 当前所有 session（共 ${slots.length} 个；# 为槽位编号，关闭后不会复用，故可能与数量连续不一致）：\n\n${lines.join("\n\n")}\n\n• \`/new list\` / \`/new <序号>\` / \`/new <路径>\` — 新建 session\n• \`/switch <编号或名称>\` — 切换\n• \`/reply [编号或名称]\` — 重发上一轮缓存回复\n• \`/fileback <说明>\` — 向 Agent 附带「用 FEISHU_SEND_FILE 发文件」说明后再发你的任务\n• \`/stop\` / \`/cancel\` — 中断**当前活跃**槽位正在生成的回复（不关 session）\n• \`/resume\` — 对当前 session 执行 ACP \`session/load\`（测试/恢复）\n• \`/mode <模式ID>\` — 切换当前 session 模式\n• \`/rename <新名字>\` — 重命名当前 session\n• \`/rename <编号或名称> <新名字>\` — 重命名指定 session\n• \`/close <编号或名称>\` — 关闭\n• \`/close all\` — 关闭本组全部\n• \`/topic …\` — 仅发飞书、不发给 Agent（便于话题内写标题）`,
+      `📋 当前所有 session（共 ${slots.length} 个；# 为槽位编号，关闭后不会复用，故可能与数量连续不一致）：
+
+${lines.join("\n\n")}
+
+• \`/new list\` / \`/new <序号>\` / \`/new <路径>\` — 新建 session
+• \`/switch <编号或名称>\` — 切换
+• \`/reply [编号或名称]\` — 重发上一轮缓存回复
+• \`/fileback <说明>\` — 向 Agent 附带「用 FEISHU_SEND_FILE 发文件」说明后再发你的任务
+• \`/stop\` / \`/cancel\` — 中断**当前活跃**槽位正在生成的回复（不关 session）
+• \`/resume\` — 对当前 session 执行 ACP \`session/load\`（测试/恢复）
+• \`/mode <模式ID>\` — 切换当前 session 模式
+• \`/rename <新名字>\` — 重命名当前 session
+• \`/rename <编号或名称> <新名字>\` — 重命名指定 session
+• \`/close <编号或名称>\` — 关闭
+• \`/close all\` — 关闭本组全部
+• \`/topic …\` — 仅发飞书、不发给 Agent（便于话题内写标题）`,
       msg.messageId,
       this.threadReplyOpts(msg),
     );
@@ -1241,7 +1264,8 @@ export class Bridge {
       this.cleanupInterval = null;
     }
     await this.feishuBot.stop();
-    await this.acpRuntime.stop();
+    await this.runtimeRegistry.stopAll();
     console.log("[bridge] Service stopped");
   }
 }
+

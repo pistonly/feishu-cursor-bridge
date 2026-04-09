@@ -31,7 +31,7 @@
 
 仅发送一个字符 **`/`**（ASCII U+002F）或全角 **`／`**（U+FF0F），且整段消息去掉首尾空白后**仅有该字符**时，与 `/help` 等价（便于快速唤起帮助）。
 
-**作用**：机器人回复本桥接内置命令的分类列表（精简版）；正文会说明当前 ACP 后端下 **`/model` / `/mode`** 是由桥接调 ACP，还是原样交给 Cursor CLI（`tmux` 后端）。回复内容由 `src/bridge-commands-help.ts` 中的 `formatBridgeCommandsHelp` 生成。
+**作用**：机器人回复本桥接内置命令的分类列表（精简版）；正文会说明**当前活跃 session 所属 backend** 下 **`/model` / `/mode`** 是由桥接调 ACP，还是原样交给 Cursor CLI（`tmux` backend）。若当前还没有活跃 session，则按默认 backend 说明。回复内容由 `src/bridge-commands-help.ts` 中的 `formatBridgeCommandsHelp` 生成。
 
 **无需 session**：与 `/status` 类似，**没有活跃 session 也可使用**；无 session 时的统一提示里也会引导使用本组命令。
 
@@ -56,7 +56,9 @@
 
 **等价命令**：`/new`（同 `/new list`）、`/new list`、`/new <路径>`、`/new <快捷序号>`
 
-**作用**：在当前聊天下**新建一个 session** 并自动切换到它，旧 session 保持 ACP 连接。工作区须落在环境变量 **`CURSOR_WORK_ALLOWLIST`** 配置的允许根之下。
+**作用**：在当前聊天下**新建一个 session** 并自动切换到它，旧 session 保持连接。工作区须落在环境变量 **`CURSOR_WORK_ALLOWLIST`** 配置的允许根之下。
+
+每个新建 session 现在都可以显式指定 backend；**backend 一旦绑定到该 session，在该 session 生命周期内保持不变**。如果不指定，则使用服务端配置的默认 backend。
 
 **用法**：
 
@@ -77,6 +79,9 @@
 /new /home/you/project
 /new ~/projects/my-app
 /new "/path/with spaces/in name"
+/new /home/you/project --backend official
+/new ~/projects/my-app --backend legacy
+/new "/path/with spaces/in name" --backend tmux
 ```
 
 使用快捷列表中第 N 项作为工作区：
@@ -84,6 +89,8 @@
 ```text
 /new 1
 /new 2
+/new 1 --backend official
+/new 2 --backend tmux
 ```
 
 新建时附加一个名称（便于后续用名称切换）：
@@ -92,7 +99,24 @@
 /new --name backend
 /new ~/projects/api --name api
 /new 1 --name frontend
+/new 1 --backend official --name frontend
+/new ~/projects/api --backend legacy --name api
 ```
+
+指定 backend 的格式：
+
+```text
+/new <路径> --backend <official|legacy|tmux>
+/new <序号> --backend <official|legacy|tmux>
+```
+
+说明：
+
+- `--backend` 仅对**真正创建 session** 的 `/new <路径>`、`/new <序号>` 生效。
+- `/new`、`/new list`、`/new add-list`、`/new remove-list` 不创建 session，因此不使用 `--backend`。
+- 当前服务只允许选择启动时启用的 backend；若某 backend 未启用，机器人会直接报错。
+- 启用列表由环境变量 `ACP_ENABLED_BACKENDS` 控制；若未设置，默认只启用 `ACP_BACKEND` 当前值。
+- 成功创建后，机器人回执会显示新 session 绑定的 backend。
 
 > 若已达到**当前聊天** 5 个 session 上限，会提示先用 `/close` 关闭一个。若已达到**同一用户全局**存活 session 上限，会提示在其它会话中 `/close` 或等待空闲过期。
 
@@ -114,7 +138,11 @@
 /sessions
 ```
 
-列出当前聊天下所有 session，标注活跃的那个，并显示各自的工作区路径。
+列出当前聊天下所有 session，标注活跃的那个，并显示各自的：
+
+- backend
+- 工作区路径
+- 若当前 backend 支持，已知的当前模式
 
 ---
 
@@ -230,14 +258,14 @@
 
 **作用**：
 
-- `official` / `legacy` 后端：查看或切换当前活跃 session 的 ACP mode，**不会**把整条消息再发给大模型。
-- `tmux` 后端：bridge 会把 `/mode ...` 原样发给真实的交互式 Cursor CLI pane，由 CLI 自己处理；bridge 不再维护一个“权威 mode 列表”。
+- `official` / `legacy` backend：查看或切换**当前活跃 session** 的 ACP mode，**不会**把整条消息再发给大模型。
+- `tmux` backend：bridge 会把 `/mode ...` 原样发给真实的交互式 Cursor CLI pane，由 CLI 自己处理；bridge 不再维护一个“权威 mode 列表”。
 
-后端差异：
+backend 差异：
 
 - `official` / `legacy` 不带参数时：返回当前 session 已知的可用模式列表与当前模式。
 - `official` / `legacy` 带参数时：调用 ACP `session/set_mode` 切换当前 session 模式。
-- `tmux` 后端下，无论是否带参数，都会把 `/mode` 原样发给 Cursor CLI，由 CLI 自己展示或切换。
+- `tmux` backend 下，无论是否带参数，都会把 `/mode` 原样发给 Cursor CLI，由 CLI 自己展示或切换。
 
 **示例**：
 
@@ -276,14 +304,21 @@
 
 **等价命令**：`/status`、`/状态`
 
-**作用**：返回当前桥接 session 统计（活跃与内存中的 slot 总数），以及当前 ACP 后端信息；在 `official` / `legacy` 后端下，还会附带当前活跃 session 已知的 mode。
+**作用**：返回当前桥接与 session 统计信息。当前实现会展示：
+
+- 活跃/内存中的 slot 统计
+- 默认 backend
+- 已启用 backend 列表
+- 当前活跃 session 的 backend（如果已有活跃 session）
+- 当前活跃 session 的已知模式（若当前 session backend 支持且已有状态）
+- 当前活跃 session 的 CLI resume ID（若该 backend 暴露或缓存了该字段）
 
 **增强信息**：当服务环境 **`BRIDGE_DEBUG=true`** 时，同一条回复中会追加调试信息，包括：
 
 - 当前 `sessionKey`、活跃 slot 编号与名称、ACP `sessionId`
 - 当前 session **cwd**（工作区绝对路径）
 - 空闲过期时间（若 `SESSION_IDLE_TIMEOUT_MS=0` 或 `infinity` 则显示为“永不过期”）、`CURSOR_WORK_ALLOWLIST` 根列表与 ACP 子进程 spawn cwd（列表首项）
-- 适配器会话目录、映射文件路径、`loadSession` 能力、日志级别等
+- 映射文件路径、当前 session 的 `loadSession` 能力、日志级别等
 
 同一环境下，群聊因未 @ 被忽略时的**服务端日志**字段说明见下文「群聊 @ 与调试日志」。
 
@@ -301,8 +336,8 @@
 
 **作用**：
 
-- `legacy` / `official` 后端：bridge 直接调用 ACP `session/set_model` 切换**当前活跃 session** 的模型，**不会**把整条消息再发给大模型（避免仅出现「解释 /model」类回复）。
-- `tmux` 后端：bridge 会把 `/model ...` 原样发给真实的交互式 Cursor CLI pane，由 CLI 自己处理；此时不走 ACP `session/set_model`，也不依赖 bridge 侧缓存的模型列表。
+- `legacy` / `official` backend：bridge 直接调用 ACP `session/set_model` 切换**当前活跃 session** 的模型，**不会**把整条消息再发给大模型（避免仅出现「解释 /model」类回复）。
+- `tmux` backend：bridge 会把 `/model ...` 原样发给真实的交互式 Cursor CLI pane，由 CLI 自己处理；此时不走 ACP `session/set_model`，也不依赖 bridge 侧缓存的模型列表。
 
 **示例**：
 
@@ -314,15 +349,15 @@
 
 **可用模型 ID / selector**：
 
-- 默认 `official` 后端下，以**当前 ACP session 返回的 `availableModels`** 为准，而不是 `cursor-agent models` 的 alias 列表。
+- 默认 `official` backend 下，以**当前 ACP session 返回的 `availableModels`** 为准，而不是 `cursor-agent models` 的 alias 列表。
 - 机器人返回列表时，反引号中的值就是可直接提交给 ACP `session/set_model` 的**精确 selector**；若带 `[]` 或其它参数后缀，必须完整带上。
-- `official` 后端下，列表会带 `【n】` 序号，可直接使用 `/model <序号>`；桥接会按当前 session 的可用模型列表做 1-based 解析。
-- `legacy` / `official` 后端下，若当前 session 尚未拿到模型状态，机器人会回退到基础用法提示；此时请先让该 slot 建立/恢复 session 并完成一轮交互，再使用模型 id、selector 或序号（仅 `official`）。
+- `official` backend 下，列表会带 `【n】` 序号，可直接使用 `/model <序号>`；桥接会按当前 session 的可用模型列表做 1-based 解析。
+- `legacy` / `official` backend 下，若当前 session 尚未拿到模型状态，机器人会回退到基础用法提示；此时请先让该 slot 建立/恢复 session 并完成一轮交互，再使用模型 id、selector 或序号（仅 `official`）。
 
 未带参数时：
 
-- `legacy` / `official` 后端下，若当前 session 已拿到模型状态，机器人会直接返回可用模型列表与当前模型；否则回退到基础用法提示。
-- `tmux` 后端下，会把 `/model` 原样发给 Cursor CLI，由 CLI 自己展示当前模型或可选项。
+- `legacy` / `official` backend 下，若当前 session 已拿到模型状态，机器人会直接返回可用模型列表与当前模型；否则回退到基础用法提示。
+- `tmux` backend 下，会把 `/model` 原样发给 Cursor CLI，由 CLI 自己展示当前模型或可选项。
 
 ---
 
@@ -330,9 +365,9 @@
 
 ```
 你：/new list            → 查看快捷工作区列表
-你：/new 1               → 用列表第 1 项创建 session #1（须已在 allowlist 内）
+你：/new 1 --backend official   → 用列表第 1 项创建 session #1（须已在 allowlist 内）
 你：/sessions            → 查看当前 session 列表
-你：/new ~/proj-b --name proj-b   → 新建 session #2，工作区为 ~/proj-b（须在 allowlist 下）
+你：/new ~/proj-b --backend tmux --name proj-b   → 新建 session #2，工作区为 ~/proj-b（须在 allowlist 下）
 你：（对话，针对 proj-b）
 你：/switch 1            → 切回 session #1（proj-b 保持 ACP 连接）
 你：（继续对话，针对原来的工作区）
@@ -383,6 +418,8 @@
 | 变量 | 与命令的关系 |
 |------|----------------|
 | `CURSOR_WORK_ALLOWLIST` | **必填**；逗号分隔的绝对路径，会话工作区必须落在某一允许根下；ACP 子进程 spawn 的 cwd 为列表首项。 |
+| `ACP_BACKEND` | 默认 backend；创建 session 时若未显式写 `--backend`，则使用此值。 |
+| `ACP_ENABLED_BACKENDS` | 允许通过 `/new --backend` 选择的 backend 列表（逗号分隔）。 |
 | `CURSOR_WORK_PRESETS_FILE` | 可选；`/new list` 使用的快捷列表 JSON 路径。 |
 | `CURSOR_WORK_PRESETS` | 可选；列表文件为空时用于首次写入的初始路径（逗号分隔）。 |
 | `SESSION_IDLE_TIMEOUT_MS` | 可选；控制 session 空闲多久后视为过期。设为 `0` 或 `infinity` 表示永不过期。 |

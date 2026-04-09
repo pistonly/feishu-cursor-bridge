@@ -44,6 +44,7 @@ function createTestConfig(): Config {
     },
     acp: {
       backend: "legacy",
+      enabledBackends: ["legacy"],
       nodePath: process.execPath,
       adapterEntry: "/tmp/cursor-agent-acp.js",
       extraArgs: [],
@@ -449,6 +450,26 @@ test("loadConfig 仍允许显式切回 legacy", async () => {
     () => {
       const config = loadConfig();
       assert.equal(config.acp.backend, "legacy");
+    },
+  );
+});
+
+test("loadConfig 在默认 official 且启用 legacy 时也会准备 legacy adapter 入口", async () => {
+  const tmpRoot = path.join(os.tmpdir(), "feishu-cursor-bridge-config-enabled-legacy-tests");
+  await withEnv(
+    {
+      FEISHU_APP_ID: "app-id",
+      FEISHU_APP_SECRET: "app-secret",
+      ACP_BACKEND: "official",
+      ACP_ENABLED_BACKENDS: "official,legacy,tmux",
+      CURSOR_WORK_ALLOWLIST: tmpRoot,
+    },
+    () => {
+      const config = loadConfig();
+      assert.equal(config.acp.backend, "official");
+      assert.deepEqual(config.acp.enabledBackends, ["official", "legacy", "tmux"]);
+      assert.ok(config.acp.adapterEntry.length > 0);
+      assert.equal(config.acp.adapterTsxCli, undefined);
     },
   );
 });

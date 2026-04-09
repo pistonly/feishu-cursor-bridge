@@ -28,6 +28,7 @@ export interface Config {
   /** `ACP_BACKEND=legacy`：本仓库 `cursor-agent-acp/` 子进程与工作区 */
   acp: {
     backend: AcpBackend;
+    enabledBackends: AcpBackend[];
     nodePath: string;
     /** legacy 时为本仓库 `cursor-agent-acp` 入口（与桥接 dev/prod 同源：tsx+src 或 dist+node） */
     adapterEntry: string;
@@ -189,6 +190,19 @@ function parseAcpBackend(raw: string | undefined): AcpBackend {
   return ACP_BACKENDS.has(normalized) ? normalized : "official";
 }
 
+function parseEnabledAcpBackends(
+  raw: string | undefined,
+  defaultBackend: AcpBackend,
+): AcpBackend[] {
+  const trimmed = raw?.trim();
+  if (!trimmed) return [defaultBackend];
+  const backends = trimmed
+    .split(",")
+    .map((item) => parseAcpBackend(item))
+    .filter((item, index, all) => all.indexOf(item) === index);
+  return backends.length > 0 ? backends : [defaultBackend];
+}
+
 const DEFAULT_SESSION_IDLE_TIMEOUT_MS = 7 * 24 * 60 * 60_000;
 
 const DEFAULT_MAX_SESSIONS_PER_USER = 10;
@@ -265,6 +279,15 @@ export function loadConfig(): Config {
   }
 
   const backend = parseAcpBackend(process.env["ACP_BACKEND"]);
+  const enabledBackends = parseEnabledAcpBackends(
+    process.env["ACP_ENABLED_BACKENDS"],
+    backend,
+  );
+  if (!enabledBackends.includes(backend)) {
+    throw new Error(
+      `ACP_BACKEND=${backend} 必须包含在 ACP_ENABLED_BACKENDS 中。`,
+    );
+  }
 
   const allowlistRaw = process.env["CURSOR_WORK_ALLOWLIST"]?.trim();
   if (!allowlistRaw) {
@@ -398,7 +421,7 @@ export function loadConfig(): Config {
   let adapterEntry = "";
   let adapterTsxCli: string | undefined;
 
-  if (backend === "legacy") {
+  if (enabledBackends.includes("legacy")) {
     if (bridgeFromSource) {
       adapterTsxCli = resolveBundledTsxCliEntry();
       adapterEntry = resolveLegacyAdapterSourceEntry();
@@ -430,6 +453,7 @@ export function loadConfig(): Config {
     },
     acp: {
       backend,
+      enabledBackends,
       nodePath,
       adapterEntry,
       ...(adapterTsxCli ? { adapterTsxCli } : {}),

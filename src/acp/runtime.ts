@@ -33,9 +33,6 @@ export const MAX_ADAPTER_SESSION_TIMEOUT_MS = 24 * 60 * 60_000;
 /**
  * 同步适配器自己的 session 清理窗口，避免桥侧仍认为 session 存活时，
  * `cursor-agent-acp` 先按其内部超时把底层 session 删掉。
- *
- * 注意：适配器自身把 `sessionTimeout` 限制在 1 分钟到 24 小时之间，
- * 所以桥侧即便配置了更长空闲期，这里也只能截断到 24 小时，再依赖上层探活+重建兜底。
  */
 export function resolveAdapterSessionTimeoutMs(config: Config): string {
   const idleMs = config.bridge.sessionIdleTimeoutMs;
@@ -142,6 +139,16 @@ export class AcpRuntime extends SdkAcpRuntimeBase {
   }
 }
 
+function cloneConfigForBackend(config: Config, backend: AcpBackend): Config {
+  return {
+    ...config,
+    acp: {
+      ...config.acp,
+      backend,
+    },
+  };
+}
+
 export function createAcpRuntime(
   config: Config,
   handler: FeishuBridgeClient,
@@ -153,6 +160,43 @@ export function createAcpRuntime(
     return new TmuxAcpRuntime(config, handler);
   }
   return new AcpRuntime(config, handler);
+}
+
+export class AcpRuntimeRegistry {
+  private readonly runtimes = new Map<AcpBackend, BridgeAcpRuntime>();
+
+  constructor(private readonly config: Config) {}
+
+  getRuntime(backend: AcpBackend): BridgeAcpRuntime {
+    const existing = this.runtimes.get(backend);
+    if (existing) return existing;
+    const runtimeConfig = cloneConfigForBackend(this.config, backend);
+    const bridgeClient = new FeishuBridgeClient(runtimeConfig);
+    const runtime = createAcpRuntime(runtimeConfig, bridgeClient);
+    this.runtimes.set(backend, runtime);
+    return runtime;
+  }
+
+  getEnabledBackends(): AcpBackend[] {
+    return [...this.config.acp.enabledBackends];
+  }
+
+  async startEnabledRuntimes(): Promise<BridgeAcpRuntime[]> {
+    const started: BridgeAcpRuntime[] = [];
+    for (const backend of this.config.acp.enabledBackends) {
+      const runtime = this.getRuntime(backend);
+      await runtime.start();
+      await runtime.initializeAndAuth();
+      started.push(runtime);
+    }
+    return started;
+  }
+
+  async stopAll(): Promise<void> {
+    for (const runtime of this.runtimes.values()) {
+      await runtime.stop();
+    }
+  }
 }
 
 export function formatAcpBackendLabel(backend: AcpBackend): string {

@@ -16,6 +16,7 @@ function createTestConfig(): Config {
     },
     acp: {
       backend: "official",
+      enabledBackends: ["official"],
       nodePath: process.execPath,
       adapterEntry: "",
       extraArgs: [],

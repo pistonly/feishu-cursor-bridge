@@ -27,6 +27,7 @@ function createPersistedGroup(cursorCliChatId = "cli-old"): PersistedSessionGrou
     slots: [
       {
         slotIndex: 1,
+        backend: "official",
         sessionId: "acp-old",
         cursorCliChatId,
         workspaceRoot: WORKSPACE_ROOT,
@@ -43,7 +44,7 @@ async function createStoreFile(group: PersistedSessionGroup): Promise<string> {
     filePath,
     JSON.stringify(
       {
-        version: 2,
+        version: 3,
         sessions: {
           [SESSION_KEY]: group,
         },
@@ -63,7 +64,7 @@ async function createEmptyStoreFile(): Promise<string> {
     filePath,
     JSON.stringify(
       {
-        version: 2,
+        version: 3,
         sessions: {},
       },
       null,
@@ -120,7 +121,7 @@ test("loadSession 失败后会优先复用已持久化的 CLI resume ID", async 
     acp as BridgeAcpRuntime,
     store,
     60_000,
-    { defaultWorkspaceRoot: WORKSPACE_ROOT },
+    { defaultWorkspaceRoot: WORKSPACE_ROOT, defaultBackend: "official" },
   );
 
   await manager.init();
@@ -160,7 +161,7 @@ test("无法保留旧 CLI resume ID 时会生成绑定变更提醒", async () =>
     acp as BridgeAcpRuntime,
     store,
     60_000,
-    { defaultWorkspaceRoot: WORKSPACE_ROOT },
+    { defaultWorkspaceRoot: WORKSPACE_ROOT, defaultBackend: "official" },
   );
 
   await manager.init();
@@ -221,11 +222,11 @@ test("活跃 slot 的 ACP session 被上游清理后会自动重建并保留 CLI
     acp as BridgeAcpRuntime,
     store,
     7 * 24 * 60 * 60_000,
-    { defaultWorkspaceRoot: WORKSPACE_ROOT },
+    { defaultWorkspaceRoot: WORKSPACE_ROOT, defaultBackend: "official" },
   );
 
   await manager.init();
-  await manager.createNewSlot(CHAT_ID, USER_ID, "p2p", WORKSPACE_ROOT);
+  await manager.createNewSlot(CHAT_ID, USER_ID, "p2p", WORKSPACE_ROOT, "official");
   const first = await manager.getActiveSession(CHAT_ID, USER_ID, "p2p");
   assert.ok(first);
   const second = await manager.getActiveSession(CHAT_ID, USER_ID, "p2p");
@@ -270,18 +271,18 @@ test("getSlot 可读取当前活跃 slot 或按名称读取指定 slot", async (
     acp as BridgeAcpRuntime,
     store,
     60_000,
-    { defaultWorkspaceRoot: WORKSPACE_ROOT },
+    { defaultWorkspaceRoot: WORKSPACE_ROOT, defaultBackend: "official" },
   );
 
   await manager.init();
-  await manager.createNewSlot(CHAT_ID, USER_ID, "p2p", WORKSPACE_ROOT);
+  await manager.createNewSlot(CHAT_ID, USER_ID, "p2p", WORKSPACE_ROOT, "official");
   const first = await manager.getActiveSession(CHAT_ID, USER_ID, "p2p");
   assert.ok(first);
   manager.setSlotLastTurn(
     CHAT_ID,
     USER_ID,
     "p2p",
-    first.sessionId,
+    1,
     "first prompt",
     "first reply",
   );
@@ -290,6 +291,7 @@ test("getSlot 可读取当前活跃 slot 或按名称读取指定 slot", async (
     USER_ID,
     "p2p",
     WORKSPACE_ROOT,
+    "official",
     "backend",
   );
 

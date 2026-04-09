@@ -9,6 +9,7 @@
 | 允许作为会话工作区的根路径列表（**必填**） | `CURSOR_WORK_ALLOWLIST` | 无默认值；须显式配置逗号分隔绝对路径，至少一项；不存在则尝试 `mkdir -p` |
 | ACP 子进程 `spawn` 的 `cwd` | （派生） | 取 **`CURSOR_WORK_ALLOWLIST` 中第一项**；与各 session 的 `cwd` 独立 |
 | ACP 后端选择 | `ACP_BACKEND` | `official` |
+| 启动时启用的 backend 列表 | `ACP_ENABLED_BACKENDS` | 默认仅包含 `ACP_BACKEND` 当前值 |
 | 官方 ACP 命令 | `CURSOR_AGENT_PATH` | `agent` |
 | `cursor-agent-acp` 适配器会话目录（仅 `legacy`） | `CURSOR_ACP_SESSION_DIR` | `~/.feishu-cursor-bridge/cursor-acp-sessions` |
 | 飞书 ↔ ACP 会话映射持久化 JSON | `BRIDGE_SESSION_STORE` | `~/.feishu-cursor-bridge/.feishu-bridge-sessions.json` |
@@ -26,11 +27,13 @@
 - **目录**：列表中每一项若尚不存在，启动时会尝试 `mkdir -p`（与旧版单一路径行为一致）；若创建失败则启动报错。
 - **顺序**：列表**第一项**同时用作拉起官方/legacy ACP 子进程时的 `cwd`（与具体 Agent 会话的工作区是两套概念）。
 
-### ACP 后端 `ACP_BACKEND` / `CURSOR_AGENT_PATH`
+### ACP 后端 `ACP_BACKEND` / `ACP_ENABLED_BACKENDS` / `CURSOR_AGENT_PATH`
 
 - **`ACP_BACKEND` 默认**：`official`
+- **`ACP_ENABLED_BACKENDS` 默认**：未设置时，仅启用 `ACP_BACKEND` 当前值
 - **`CURSOR_AGENT_PATH` 默认**：`agent`
-- **含义**：默认拉起 Cursor 官方 `agent acp`；需要本仓 stdio 适配器时再设 `legacy`
+- **含义**：`ACP_BACKEND` 决定默认 backend；`ACP_ENABLED_BACKENDS` 决定启动时实际拉起哪些 backend，以及 `/new --backend <...>` 允许选择哪些值
+- **常见场景**：若默认仍想用 `official`，但又希望在飞书里临时切到 `legacy` / `tmux`，应显式配置 `ACP_ENABLED_BACKENDS=official,legacy,tmux`
 
 ### 适配器会话目录 `CURSOR_ACP_SESSION_DIR`
 

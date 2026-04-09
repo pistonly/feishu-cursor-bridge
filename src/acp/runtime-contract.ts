@@ -60,3 +60,7 @@ export interface BridgeAcpRuntime {
   supportsCloseSession(): boolean;
   stop(): Promise<void>;
 }
+
+export interface AcpRuntimeResolver {
+  getRuntime(backend: AcpBackend): BridgeAcpRuntime;
+}
