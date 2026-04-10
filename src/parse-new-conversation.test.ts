@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   matchesBridgeHelpCommand,
+  matchesBridgeStartCommand,
   matchesInterruptUserCommand,
   parseNewConversationCommand,
 } from "./parse-new-conversation.js";
@@ -71,3 +72,13 @@ test("matchesBridgeHelpCommand 仅匹配整段帮助命令", () => {
   assert.equal(matchesBridgeHelpCommand("讨论 /help"), false);
   assert.equal(matchesBridgeHelpCommand("/new list\n/help"), false);
 });
+
+test("matchesBridgeStartCommand 仅匹配显式 /start", () => {
+  assert.equal(matchesBridgeStartCommand("/start"), true);
+  assert.equal(matchesBridgeStartCommand(" /START \
+"), true);
+  assert.equal(matchesBridgeStartCommand("／start"), true);
+  assert.equal(matchesBridgeStartCommand("请发 /start"), false);
+  assert.equal(matchesBridgeStartCommand("/start now"), false);
+});
+

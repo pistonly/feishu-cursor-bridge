@@ -15,6 +15,7 @@ import {
 } from "./feishu-bot.js";
 import {
   matchesBridgeHelpCommand,
+  matchesBridgeStartCommand,
   matchesInterruptUserCommand,
   parseNewConversationCommand,
 } from "./parse-new-conversation.js";
@@ -40,6 +41,7 @@ import {
   wrapFilebackPromptForAgent,
 } from "./fileback-command.js";
 import { formatBridgeCommandsHelp } from "./bridge-commands-help.js";
+import { buildWorkspaceWithBackendSelectCardMarkdown, buildWelcomeCardMarkdown } from "./feishu-interactive-cards.js";
 
 /** 无活跃 session 时，普通对话与部分命令的统一提示 */
 const NO_SESSION_HINT =
@@ -112,6 +114,8 @@ export class Bridge {
   /** key: `<sessionKey>:<slotIndex>` — 同一 slot 同一时刻只能有一个 prompt 在跑 */
   private activePrompts = new Set<string>();
   private cleanupInterval: ReturnType<typeof setInterval> | null = null;
+  /** 记录已发送过欢迎消息的用户 */
+  private welcomedUsers = new Set<string>();
 
   constructor(config: Config) {
     this.config = config;
@@ -383,6 +387,11 @@ export class Bridge {
     }
 
     if (!content) return;
+
+    if (matchesBridgeStartCommand(contentMultiline)) {
+      await this.sendWelcomeCard(msg);
+      return;
+    }
 
     const filebackParsed = parseFilebackUserMessage(content);
     if (filebackParsed.kind === "usage") {
@@ -747,13 +756,18 @@ export class Bridge {
         if (bridgeManagedCommand.kind === "new") {
           if (bridgeManagedCommand.variant === "list") {
             const presets = this.presetsStore.getPresets();
-            const lines =
-              presets.length > 0
-                ? presets.map((p, i) => `${i + 1}. \`${p}\``).join("\n")
-                : "（尚为空）";
-            await this.feishuBot.sendText(
+
+            // 使用交互式卡片替代纯文本列表
+            const interactiveCard = buildWorkspaceWithBackendSelectCardMarkdown({
+              presets,
+              showBackendSelector: this.config.acp.enabledBackends.length > 1,
+              enabledBackends: this.config.acp.enabledBackends,
+              defaultBackend: this.config.acp.backend,
+            });
+
+            await this.feishuBot.sendCard(
               msg.chatId,
-              `📋 工作区快捷列表（使用 \`/new <序号>\` 新建并切换）。\n\n${lines}\n\n添加：\`/new add-list <路径>\`\n删除：\`/new remove-list <序号>\``,
+              interactiveCard,
               msg.messageId,
               this.threadReplyOpts(msg),
             );
@@ -1213,6 +1227,25 @@ export class Bridge {
         .catch(() => {});
     } finally {
       this.activePrompts.delete(promptKey);
+    }
+  }
+
+  /**
+   * 仅在用户显式发送 /start 时发送欢迎卡片。
+   */
+  private async sendWelcomeCard(msg: FeishuMessage): Promise<void> {
+    try {
+      await this.feishuBot.sendCard(
+        msg.chatId,
+        buildWelcomeCardMarkdown(),
+        msg.messageId,
+        this.threadReplyOpts(msg),
+      );
+      this.welcomedUsers.add(msg.senderId);
+    } catch (err) {
+      console.warn(
+        `[bridge] Failed to send welcome card to user ${msg.senderId} in chat ${msg.chatId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 

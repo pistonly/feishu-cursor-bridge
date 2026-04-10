@@ -697,6 +697,9 @@ export class FeishuBot extends EventEmitter {
     }
   }
 
+  /**
+   * 发送简单的 Markdown 卡片
+   */
   async sendCard(
     chatId: string,
     content: string,
@@ -715,6 +718,78 @@ export class FeishuBot extends EventEmitter {
     };
     const payload = JSON.stringify(card);
     const replyInThread = opts?.replyInThread === true;
+
+    if (replyToMessageId) {
+      const res = await this.client.im.message.reply({
+        path: { message_id: replyToMessageId },
+        data: {
+          msg_type: "interactive",
+          content: payload,
+          ...(replyInThread ? { reply_in_thread: true } : {}),
+        },
+      });
+      return res.data?.message_id ?? "";
+    }
+
+    const res = await this.client.im.message.create({
+      params: { receive_id_type: "chat_id" },
+      data: {
+        receive_id: chatId,
+        msg_type: "interactive",
+        content: payload,
+      },
+    });
+    return res.data?.message_id ?? "";
+  }
+
+  /**
+   * 发送工作区选择的交互式卡片
+   */
+  async sendWorkspaceSelectCard(
+    chatId: string,
+    presets: string[],
+    replyToMessageId?: string,
+    opts?: FeishuSendReplyOptions,
+  ): Promise<string> {
+    const replyInThread = opts?.replyInThread === true;
+
+    const card = {
+      config: { wide_screen_mode: true },
+      elements: [
+        {
+          tag: "div",
+          text: {
+            tag: "lark_md",
+            content: "📋 **选择工作区**\n\n请选择一个工作区来创建新会话:"
+          },
+        },
+        {
+          tag: "action",
+          actions: presets.map((preset, index) => ({
+            tag: "button",
+            text: {
+              tag: "lark_md",
+              content: `**${index + 1}.** \`${preset}\``
+            },
+            type: "primary",
+            value: {
+              action: "select_workspace",
+              index: index + 1,
+              path: preset
+            },
+          })),
+        },
+        {
+          tag: "div",
+          text: {
+            tag: "lark_md",
+            content: "或者直接输入命令:\n• `/new <序号>` - 使用快捷列表创建会话\n• `/new <路径>` - 使用指定路径\n• `/new list` - 查看完整列表"
+          },
+        },
+      ],
+    };
+
+    const payload = JSON.stringify(card);
 
     if (replyToMessageId) {
       const res = await this.client.im.message.reply({

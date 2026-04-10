@@ -43,6 +43,16 @@ export function matchesBridgeHelpCommand(content: string): boolean {
   return lower === "/help" || lower === "/commands";
 }
 
+export function matchesBridgeStartCommand(content: string): boolean {
+  const normalized = content
+    .replace(/^﻿/, "")
+    .replace(/／/g, "/")
+    .trim();
+  if (!normalized) return false;
+
+  return normalized.toLowerCase() === "/start";
+}
+
 export type NewConversationCommand =
   | { kind: "mode"; modeId?: string }
   | { kind: "new"; variant: "default"; name?: string; backend?: AcpBackend }
