@@ -242,6 +242,12 @@ test("OfficialAcpRuntime 会缓存 new/load 返回的模式与模型状态，并
     initResult: {
       agentCapabilities: {
         loadSession: true,
+        sessionCapabilities: {
+          _meta: {
+            supportsSetMode: true,
+            supportsSetModel: true,
+          },
+        },
       },
     },
   });
@@ -359,6 +365,72 @@ test("OfficialAcpRuntime.closeSession 与 stop 会清理缓存的模式与模型
   await runtime.stop();
   assert.equal(runtime.getSessionModeState("session-1"), undefined);
   assert.equal(runtime.getSessionModelState("session-1"), undefined);
+});
+
+test("SdkAcpRuntimeBase 仅在 agent 宣告能力后才允许切换模式与模型", async () => {
+  const config = createTestConfig();
+  config.acp.backend = "cursor-official";
+  const runtime = new OfficialAcpRuntime(
+    config,
+    {} as FeishuBridgeClient,
+  );
+
+  let modeCalls = 0;
+  let modelCalls = 0;
+  const fakeConnection = {
+    setSessionMode: async () => {
+      modeCalls++;
+      return {};
+    },
+    unstable_setSessionModel: async () => {
+      modelCalls++;
+      return {};
+    },
+  };
+
+  Object.assign(runtime as object, {
+    connection: fakeConnection,
+    initResult: {
+      agentCapabilities: {
+        sessionCapabilities: {
+          _meta: {},
+        },
+      },
+    },
+  });
+
+  assert.equal(runtime.supportsSetSessionMode, false);
+  assert.equal(runtime.supportsSetSessionModel, false);
+  await assert.rejects(
+    runtime.setSessionMode("session-1", "agent"),
+    /does not advertise session\/set_mode/,
+  );
+  await assert.rejects(
+    runtime.setSessionModel("session-1", "gpt-5"),
+    /does not advertise session\/set_model/,
+  );
+  assert.equal(modeCalls, 0);
+  assert.equal(modelCalls, 0);
+
+  Object.assign(runtime as object, {
+    initResult: {
+      agentCapabilities: {
+        sessionCapabilities: {
+          _meta: {
+            supportsSetMode: true,
+            supportsSetModel: true,
+          },
+        },
+      },
+    },
+  });
+
+  assert.equal(runtime.supportsSetSessionMode, true);
+  assert.equal(runtime.supportsSetSessionModel, true);
+  await runtime.setSessionMode("session-1", "agent");
+  await runtime.setSessionModel("session-1", "gpt-5");
+  assert.equal(modeCalls, 1);
+  assert.equal(modelCalls, 1);
 });
 
 test("createAcpRuntime 会按 ACP_BACKEND 返回对应实现", () => {

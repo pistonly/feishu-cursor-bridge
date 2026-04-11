@@ -14,7 +14,13 @@ const WORKSPACE_ROOT = "/tmp/bridge-session-test";
 
 type FakeAcpRuntime = Pick<
   BridgeAcpRuntime,
-  "supportsLoadSession" | "newSession" | "loadSession" | "cancelSession" | "closeSession"
+  | "supportsLoadSession"
+  | "supportsSetSessionMode"
+  | "supportsSetSessionModel"
+  | "newSession"
+  | "loadSession"
+  | "cancelSession"
+  | "closeSession"
 >;
 
 function createPersistedGroup(cursorCliChatId = "cli-old"): PersistedSessionGroup {
@@ -94,6 +100,8 @@ test("loadSession 失败后会优先复用已持久化的 CLI resume ID", async 
   const newSessionCalls: Array<{ cwd: string; cursorCliChatId?: string }> = [];
   const acp: FakeAcpRuntime = {
     supportsLoadSession: true,
+    supportsSetSessionMode: false,
+    supportsSetSessionModel: false,
     async newSession(
       cwd?: string,
       options?: { recovery?: { kind: "cursor-cli"; cursorCliChatId: string } },
@@ -144,6 +152,8 @@ test("无法保留旧 CLI resume ID 时会生成绑定变更提醒", async () =>
 
   const acp: FakeAcpRuntime = {
     supportsLoadSession: true,
+    supportsSetSessionMode: false,
+    supportsSetSessionModel: false,
     async newSession(): Promise<{ sessionId: string; recovery?: { kind: "cursor-cli"; cursorCliChatId: string } }> {
       return {
         sessionId: "acp-rebound",
@@ -187,6 +197,8 @@ test("活跃 slot 的 ACP session 被上游清理后会自动重建并保留 CLI
   let createCount = 0;
   const acp: FakeAcpRuntime = {
     supportsLoadSession: true,
+    supportsSetSessionMode: false,
+    supportsSetSessionModel: false,
     async newSession(
       cwd?: string,
       options?: { recovery?: { kind: "cursor-cli"; cursorCliChatId: string } },
@@ -255,6 +267,8 @@ test("getSlot 可读取当前活跃 slot 或按名称读取指定 slot", async (
   let createCount = 0;
   const acp: FakeAcpRuntime = {
     supportsLoadSession: false,
+    supportsSetSessionMode: false,
+    supportsSetSessionModel: false,
     async newSession(
       cwd?: string,
     ): Promise<{ sessionId: string; recovery?: { kind: "cursor-cli"; cursorCliChatId: string } }> {

@@ -73,9 +73,9 @@ function createMessage(): FeishuMessage {
   } as unknown as FeishuMessage;
 }
 
-function createSession(): UserSession {
+function createSession(backend: UserSession["backend"] = "cursor-official"): UserSession {
   return {
-    backend: "cursor-official",
+    backend,
     sessionId: "session-1",
     workspaceRoot: "/tmp",
     chatId: "chat-1",
@@ -113,6 +113,8 @@ function createHarness(
     bridgeClient: bridgeClient as any,
     initializeResult: null,
     supportsLoadSession: true,
+    supportsSetSessionMode: true,
+    supportsSetSessionModel: true,
     async start(): Promise<void> {},
     async initializeAndAuth(): Promise<void> {},
     async newSession() {
@@ -335,4 +337,50 @@ test("ConversationService 在长回答拆卡时仍保留完整 reply 内容", as
   );
   assert.equal(reply?.includes(longAnswer), true);
   assert.equal(reply?.includes("📖 读取文件 — completed"), true);
+});
+
+test("ConversationService 仅在 legacy backend 下把鉴权样式超时改写为 Cursor CLI 超时提示", async () => {
+  const authLike =
+    "Unable to process your request because cursor-agent CLI is not authenticated.\n\nPlease run cursor-agent login.";
+  const originalNow = Date.now;
+  let now = 0;
+  Date.now = () => now;
+  try {
+    const legacy = createHarness([
+      {
+        type: "agent_message_chunk",
+        sessionId: "session-1",
+        text: authLike,
+      },
+    ]);
+    const codex = createHarness([
+      {
+        type: "agent_message_chunk",
+        sessionId: "session-1",
+        text: authLike,
+      },
+    ]);
+
+    now = 0;
+    const legacyPromise = legacy.service.handleUserPrompt(
+      createMessage(),
+      createSession("cursor-legacy"),
+    );
+    now = 120_000;
+    const legacyReply = await legacyPromise;
+
+    now = 0;
+    const codexPromise = codex.service.handleUserPrompt(
+      createMessage(),
+      createSession("codex"),
+    );
+    now = 120_000;
+    const codexReply = await codexPromise;
+
+    assert.match(legacyReply ?? "", /Cursor CLI 超时/);
+    assert.doesNotMatch(codexReply ?? "", /Cursor CLI 超时/);
+    assert.match(codexReply ?? "", /cursor-agent CLI is not authenticated/i);
+  } finally {
+    Date.now = originalNow;
+  }
 });

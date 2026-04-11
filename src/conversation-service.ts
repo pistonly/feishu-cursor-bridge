@@ -244,6 +244,7 @@ export class ConversationService {
 
       const elapsedMs = Date.now() - startedAt;
       if (
+        session.backend === "cursor-legacy" &&
         isLikelyTimeoutMisclassifiedAsAuth(aggregatedMain, elapsedMs)
       ) {
         state.setMainText(AUTH_TIMEOUT_HINT_BODY);

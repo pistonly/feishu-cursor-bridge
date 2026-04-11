@@ -501,14 +501,28 @@ export class Bridge {
         // /mode [modeId]
         // ----------------------------------------------------------------
         if (bridgeManagedCommand.kind === "mode") {
+          const session = await this.sessionManager.getActiveSession(
+            msg.chatId,
+            msg.senderId,
+            msg.chatType,
+            this.threadScope(msg),
+          );
+          const runtime = session ? this.runtimeForSession(session) : undefined;
           if (!bridgeManagedCommand.modeId) {
-            const snap = this.activeSnapshot(msg);
-            const runtime = snap ? this.runtimeForSession(snap.activeSlot.session) : undefined;
+            if (session && runtime && !runtime.supportsSetSessionMode) {
+              await this.feishuBot.sendText(
+                msg.chatId,
+                "❌ 当前 backend 未宣告 `session/set_mode`，无法通过桥接切换模式。",
+                msg.messageId,
+                this.threadReplyOpts(msg),
+              );
+              return;
+            }
             await this.feishuBot.sendText(
               msg.chatId,
               formatModeUsage(
-                snap
-                  ? runtime?.getSessionModeState(snap.activeSlot.session.sessionId)
+                session
+                  ? runtime?.getSessionModeState(session.sessionId)
                   : undefined,
               ),
               msg.messageId,
@@ -519,12 +533,6 @@ export class Bridge {
           let sessionId: string | undefined;
           let activeSession: Awaited<ReturnType<SessionManager["getActiveSession"]>> | undefined;
           try {
-            const session = await this.sessionManager.getActiveSession(
-              msg.chatId,
-              msg.senderId,
-              msg.chatType,
-              this.threadScope(msg),
-            );
             if (!session) {
               await this.feishuBot.sendText(
                 msg.chatId,
@@ -536,7 +544,15 @@ export class Bridge {
             }
             activeSession = session;
             sessionId = session.sessionId;
-            const runtime = this.runtimeForSession(session);
+            if (!runtime?.supportsSetSessionMode) {
+              await this.feishuBot.sendText(
+                msg.chatId,
+                "❌ 当前 backend 未宣告 `session/set_mode`，无法通过桥接切换模式。",
+                msg.messageId,
+                this.threadReplyOpts(msg),
+              );
+              return;
+            }
             await this.flushPendingSessionNotices(msg);
             const modeState = runtime.getSessionModeState(session.sessionId);
             const resolved = resolveSessionModeInput(
@@ -993,7 +1009,7 @@ export class Bridge {
     }
 
     // 非 tmux ACP 后端在 prompt 里识别 /model 后仍会把整句发给 CLI，导致大模型「解释命令」。
-    // Claude / Cursor ACP 类后端在 bridge 侧直接走 session/set_model；tmux 需要把命令真实送进 pane。
+    // 仅在 backend 真正宣告 session/set_model 时，bridge 才接管该命令；tmux 继续把命令真实送进 pane。
     const modelMatch = content.trim().match(/^\/model(?:\s+(\S+))?$/i);
     const activeSessionForModel = await this.sessionManager.getActiveSession(
       msg.chatId,
@@ -1003,6 +1019,15 @@ export class Bridge {
     );
     if (modelMatch && activeSessionForModel && activeSessionForModel.backend !== "cursor-tmux") {
       const runtime = this.runtimeForSession(activeSessionForModel);
+      if (!runtime.supportsSetSessionModel) {
+        await this.feishuBot.sendText(
+          msg.chatId,
+          "❌ 当前 backend 未宣告 `session/set_model`，无法通过桥接切换模型。",
+          msg.messageId,
+          this.threadReplyOpts(msg),
+        );
+        return;
+      }
       const modelId = modelMatch[1]?.trim();
       if (!modelId) {
         await this.feishuBot.sendText(
@@ -1313,4 +1338,3 @@ ${lines.join("\n\n")}
     console.log("[bridge] Service stopped");
   }
 }
-

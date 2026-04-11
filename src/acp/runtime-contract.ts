@@ -51,6 +51,8 @@ export interface BridgeAcpRuntime {
   readonly bridgeClient: FeishuBridgeClient;
   readonly initializeResult: InitializeResponse | null;
   readonly supportsLoadSession: boolean;
+  readonly supportsSetSessionMode: boolean;
+  readonly supportsSetSessionModel: boolean;
 
   start(): Promise<void>;
   initializeAndAuth(): Promise<void>;
