@@ -7,6 +7,7 @@ test("formatBridgeCommandsHelp 含核心命令且随后端区分说明", () => {
   assert.match(official, /\/commands/);
   assert.ok(official.includes("单独 `/`"));
   assert.match(official, /\/new list/);
+  assert.match(official, /codex/);
   assert.match(official, /桥接调用 ACP/);
 
   const tmux = formatBridgeCommandsHelp("cursor-tmux");

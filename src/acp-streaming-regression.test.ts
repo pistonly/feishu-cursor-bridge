@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { loadConfig, type Config } from "./config.js";
 import type { FeishuBridgeClient } from "./acp/feishu-bridge-client.js";
 import { ClaudeAcpRuntime } from "./acp/claude-runtime.js";
+import { CodexAcpRuntime } from "./acp/codex-runtime.js";
 import { OfficialAcpRuntime } from "./acp/official-runtime.js";
 import {
   AcpRuntime,
@@ -54,6 +55,8 @@ function createTestConfig(): Config {
       officialAuthToken: undefined,
       claudeSpawnCommand: "npx",
       claudeSpawnArgs: ["-y", "@agentclientprotocol/claude-agent-acp"],
+      codexSpawnCommand: "npx",
+      codexSpawnArgs: ["-y", "@zed-industries/codex-acp"],
       tmuxTsxCliEntry: "/tmp/tsx-cli.mjs",
       tmuxServerEntry: "/tmp/tmux-acp-server.ts",
       tmuxSessionStorePath: path.join(tmpRoot, "tmux-acp-sessions.json"),
@@ -375,6 +378,12 @@ test("createAcpRuntime 会按 ACP_BACKEND 返回对应实现", () => {
     tmuxConfig,
     {} as FeishuBridgeClient,
   );
+  const codexConfig = createTestConfig();
+  codexConfig.acp.backend = "codex";
+  const codexRuntime = createAcpRuntime(
+    codexConfig,
+    {} as FeishuBridgeClient,
+  );
 
   assert.equal(legacyRuntime.backend, "cursor-legacy");
   assert.ok(legacyRuntime instanceof AcpRuntime);
@@ -382,6 +391,8 @@ test("createAcpRuntime 会按 ACP_BACKEND 返回对应实现", () => {
   assert.ok(officialRuntime instanceof OfficialAcpRuntime);
   assert.equal(tmuxRuntime.backend, "cursor-tmux");
   assert.ok(tmuxRuntime instanceof TmuxAcpRuntime);
+  assert.equal(codexRuntime.backend, "codex");
+  assert.ok(codexRuntime instanceof CodexAcpRuntime);
 });
 
 test("TmuxAcpRuntime 会透传自定义 start command", () => {
@@ -409,6 +420,8 @@ test("loadConfig 会解析官方 ACP 后端开关与命令参数", async () => {
       FEISHU_APP_ID: "app-id",
       FEISHU_APP_SECRET: "app-secret",
       ACP_BACKEND: "cursor-official",
+      ACP_ENABLED_BACKENDS: undefined,
+      BRIDGE_WORK_ALLOWLIST: undefined,
       CURSOR_AGENT_PATH: "/usr/local/bin/agent",
       CURSOR_API_KEY: "api-key-1",
       CURSOR_AUTH_TOKEN: "auth-token-1",
@@ -432,6 +445,8 @@ test("loadConfig 未设置 ACP_BACKEND 时默认走官方 ACP", async () => {
       FEISHU_APP_ID: "app-id",
       FEISHU_APP_SECRET: "app-secret",
       ACP_BACKEND: undefined,
+      ACP_ENABLED_BACKENDS: undefined,
+      BRIDGE_WORK_ALLOWLIST: undefined,
       CURSOR_WORK_ALLOWLIST: tmpRoot,
     },
     () => {
@@ -448,6 +463,8 @@ test("loadConfig 仍允许显式切回 legacy", async () => {
       FEISHU_APP_ID: "app-id",
       FEISHU_APP_SECRET: "app-secret",
       ACP_BACKEND: "cursor-legacy",
+      ACP_ENABLED_BACKENDS: undefined,
+      BRIDGE_WORK_ALLOWLIST: undefined,
       CURSOR_WORK_ALLOWLIST: tmpRoot,
     },
     () => {
@@ -464,15 +481,48 @@ test("loadConfig 在默认 official 且启用 legacy 时也会准备 legacy adap
       FEISHU_APP_ID: "app-id",
       FEISHU_APP_SECRET: "app-secret",
       ACP_BACKEND: "cursor-official",
-      ACP_ENABLED_BACKENDS: "official,legacy,tmux",
+      ACP_ENABLED_BACKENDS: "official,legacy,tmux,codex",
+      BRIDGE_WORK_ALLOWLIST: undefined,
       CURSOR_WORK_ALLOWLIST: tmpRoot,
     },
     () => {
       const config = loadConfig();
       assert.equal(config.acp.backend, "cursor-official");
-      assert.deepEqual(config.acp.enabledBackends, ["cursor-official", "cursor-legacy", "cursor-tmux"]);
+      assert.deepEqual(config.acp.enabledBackends, [
+        "cursor-official",
+        "cursor-legacy",
+        "cursor-tmux",
+        "codex",
+      ]);
       assert.ok(config.acp.adapterEntry.length > 0);
       assert.equal(config.acp.adapterTsxCli, undefined);
+    },
+  );
+});
+
+test("loadConfig 会解析 Codex ACP 后端与默认命令", async () => {
+  const tmpRoot = path.join(os.tmpdir(), "feishu-cursor-bridge-config-codex-tests");
+  await withEnv(
+    {
+      FEISHU_APP_ID: "app-id",
+      FEISHU_APP_SECRET: "app-secret",
+      ACP_BACKEND: "codex",
+      ACP_ENABLED_BACKENDS: "codex",
+      BRIDGE_WORK_ALLOWLIST: undefined,
+      CODEX_AGENT_ACP_COMMAND: "node /tmp/codex-acp.js --stdio",
+      CODEX_AGENT_ACP_EXTRA_ARGS: "--log-level debug",
+      CURSOR_WORK_ALLOWLIST: tmpRoot,
+    },
+    () => {
+      const config = loadConfig();
+      assert.equal(config.acp.backend, "codex");
+      assert.equal(config.acp.codexSpawnCommand, "node");
+      assert.deepEqual(config.acp.codexSpawnArgs, [
+        "/tmp/codex-acp.js",
+        "--stdio",
+        "--log-level",
+        "debug",
+      ]);
     },
   );
 });
@@ -490,6 +540,8 @@ test("loadConfig legacy 在 tsx src/index.ts 入口下默认使用适配器源�
         FEISHU_APP_ID: "app-id",
         FEISHU_APP_SECRET: "app-secret",
         ACP_BACKEND: "cursor-legacy",
+        ACP_ENABLED_BACKENDS: undefined,
+        BRIDGE_WORK_ALLOWLIST: undefined,
         CURSOR_WORK_ALLOWLIST: tmpRoot,
       },
       () => {
@@ -512,6 +564,8 @@ test("loadConfig 会解析 tmux ACP 后端与内置 server 配置", async () => 
       FEISHU_APP_ID: "app-id",
       FEISHU_APP_SECRET: "app-secret",
       ACP_BACKEND: "cursor-tmux",
+      ACP_ENABLED_BACKENDS: undefined,
+      BRIDGE_WORK_ALLOWLIST: undefined,
       TMUX_ACP_TSX_CLI: "/tmp/tsx-cli.mjs",
       TMUX_ACP_SERVER_ENTRY: "/tmp/tmux-acp-server.ts",
       TMUX_ACP_SESSION_STORE: "/tmp/tmux-acp-sessions.json",
@@ -535,6 +589,8 @@ test("loadConfig 会解析飞书卡片拆分阈值", async () => {
     {
       FEISHU_APP_ID: "app-id",
       FEISHU_APP_SECRET: "app-secret",
+      ACP_ENABLED_BACKENDS: undefined,
+      BRIDGE_WORK_ALLOWLIST: undefined,
       CURSOR_WORK_ALLOWLIST: tmpRoot,
       FEISHU_CARD_SPLIT_MARKDOWN_THRESHOLD: "4200",
       FEISHU_CARD_SPLIT_TOOL_THRESHOLD: "12",
@@ -552,6 +608,8 @@ test("loadConfig 未设置 CURSOR_WORK_ALLOWLIST 时报错", async () => {
     {
       FEISHU_APP_ID: "app-id",
       FEISHU_APP_SECRET: "app-secret",
+      ACP_ENABLED_BACKENDS: undefined,
+      BRIDGE_WORK_ALLOWLIST: undefined,
       CURSOR_WORK_ALLOWLIST: undefined,
     },
     () => {

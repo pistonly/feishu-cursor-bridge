@@ -75,6 +75,11 @@ async function main() {
       `[main] Official ACP command: ${config.acp.officialAgentPath} acp${authHints ? ` (${authHints})` : ""}`,
     );
   }
+  if (config.acp.enabledBackends.includes("codex")) {
+    console.log(
+      `[main] Codex ACP command: ${config.acp.codexSpawnCommand} ${config.acp.codexSpawnArgs.join(" ")}`.trim(),
+    );
+  }
   if (config.acp.enabledBackends.includes("cursor-tmux")) {
     console.log(`[main] tmux ACP server entry: ${config.acp.tmuxServerEntry}`);
     console.log(`[main] tmux ACP tsx cli: ${config.acp.tmuxTsxCliEntry}`);

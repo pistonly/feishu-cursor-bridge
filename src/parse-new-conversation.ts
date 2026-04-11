@@ -173,6 +173,9 @@ function normalizeBackend(raw: string | undefined): AcpBackend | undefined {
   if (normalized === "claude") {
     return "claude";
   }
+  if (normalized === "codex") {
+    return "codex";
+  }
   return undefined;
 }
 

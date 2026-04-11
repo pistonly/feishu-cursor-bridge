@@ -101,13 +101,14 @@
 /new 1 --name frontend
 /new 1 --backend cursor-official --name frontend
 /new ~/projects/api --backend cursor-legacy --name api
+/new 2 --backend codex --name review
 ```
 
 指定 backend 的格式：
 
 ```text
-/new <路径> --backend <cursor-official|cursor-legacy|cursor-tmux|claude>
-/new <序号> --backend <cursor-official|cursor-legacy|cursor-tmux|claude>
+/new <路径> --backend <cursor-official|cursor-legacy|cursor-tmux|claude|codex>
+/new <序号> --backend <cursor-official|cursor-legacy|cursor-tmux|claude|codex>
 ```
 
 说明：

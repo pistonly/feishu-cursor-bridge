@@ -42,6 +42,16 @@ test("parseNewConversationCommand 将裸 /new 解析为 list", () => {
   });
 });
 
+test("parseNewConversationCommand 支持 /new --backend codex", () => {
+  assert.deepEqual(parseNewConversationCommand("/new 1 --backend codex"), {
+    kind: "new",
+    variant: "preset",
+    index: 1,
+    backend: "codex",
+    name: undefined,
+  });
+});
+
 test("matchesInterruptUserCommand 识别纯文本 /stop、/cancel", () => {
   assert.equal(matchesInterruptUserCommand("/stop"), true);
   assert.equal(matchesInterruptUserCommand("/cancel"), true);

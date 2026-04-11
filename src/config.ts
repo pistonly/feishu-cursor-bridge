@@ -45,6 +45,9 @@ export interface Config {
     /** Claude ACP 子进程命令 */
     claudeSpawnCommand: string;
     claudeSpawnArgs: string[];
+    /** Codex ACP 子进程命令 */
+    codexSpawnCommand: string;
+    codexSpawnArgs: string[];
     /** 启动 tmux ACP server 时使用的 tsx CLI 入口 */
     tmuxTsxCliEntry: string;
     /** 仓库内置的 tmux ACP server TypeScript 入口 */
@@ -112,6 +115,7 @@ const ACP_BACKENDS = new Set<AcpBackend>([
   "cursor-legacy",
   "cursor-tmux",
   "claude",
+  "codex",
 ]);
 
 const LEGACY_BACKEND_ALIASES: Record<string, AcpBackend> = {
@@ -119,6 +123,7 @@ const LEGACY_BACKEND_ALIASES: Record<string, AcpBackend> = {
   legacy: "cursor-legacy",
   tmux: "cursor-tmux",
   claude: "claude",
+  codex: "codex",
 };
 
 function requireEnv(name: string): string {
@@ -254,6 +259,25 @@ function resolveClaudeAgentAcpSpawn(): { command: string; args: string[] } {
   return {
     command: "npx",
     args: ["-y", "@agentclientprotocol/claude-agent-acp", ...extra],
+  };
+}
+
+function resolveCodexAgentAcpSpawn(): { command: string; args: string[] } {
+  const envRaw = process.env["CODEX_AGENT_ACP_COMMAND"]?.trim();
+  const extra = parseExtraArgs(process.env["CODEX_AGENT_ACP_EXTRA_ARGS"]);
+  if (envRaw) {
+    const tokens = parseShellLikeArgs(envRaw);
+    if (tokens.length === 0) {
+      throw new Error("CODEX_AGENT_ACP_COMMAND 解析为空");
+    }
+    return {
+      command: tokens[0]!,
+      args: [...tokens.slice(1), ...extra],
+    };
+  }
+  return {
+    command: "npx",
+    args: ["-y", "@zed-industries/codex-acp", ...extra],
   };
 }
 
@@ -510,6 +534,7 @@ export function loadConfig(): Config {
     process.env["CURSOR_AUTH_TOKEN"]?.trim() || undefined;
 
   const claudeSpawn = resolveClaudeAgentAcpSpawn();
+  const codexSpawn = resolveCodexAgentAcpSpawn();
 
   return {
     feishu: {
@@ -529,6 +554,8 @@ export function loadConfig(): Config {
       officialAuthToken,
       claudeSpawnCommand: claudeSpawn.command,
       claudeSpawnArgs: claudeSpawn.args,
+      codexSpawnCommand: codexSpawn.command,
+      codexSpawnArgs: codexSpawn.args,
       tmuxTsxCliEntry,
       tmuxServerEntry,
       tmuxSessionStorePath,

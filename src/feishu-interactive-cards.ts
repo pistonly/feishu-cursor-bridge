@@ -74,7 +74,7 @@ export function buildWorkspaceWithBackendSelectCardMarkdown(
     }
 
     lines.push("");
-    lines.push("示例: `/new 1 --backend claude --name my-project`");
+    lines.push("示例: `/new 1 --backend codex --name my-project`");
   }
 
   return lines.join("\n");
@@ -106,9 +106,11 @@ export function buildWelcomeCardMarkdown(): string {
     "   • `cursor-legacy` - 内嵌适配器后端",
     "   • `cursor-tmux` - tmux 集成后端",
     "   • `claude` - Claude AI 后端",
+    "   • `codex` - Codex ACP 后端",
     "",
     "**3. 命令示例:**",
     "   • `/new 1 --backend claude` - 使用第 1 个工作区和 Claude 后端",
+    "   • `/new 1 --backend codex` - 使用第 1 个工作区和 Codex 后端",
     "   • `/new /path/to/project --name my-project` - 自定义路径并命名",
     "   • `/new /path/to/project --backend cursor-tmux` - 使用 tmux 后端",
     "",

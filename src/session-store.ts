@@ -75,6 +75,7 @@ const BACKEND_ALIASES: Record<string, AcpBackend> = {
   "cursor-legacy": "cursor-legacy",
   "cursor-tmux": "cursor-tmux",
   claude: "claude",
+  codex: "codex",
 };
 
 function normalizeBackend(

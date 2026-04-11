@@ -26,6 +26,8 @@ function createTestConfig(): Config {
       officialAuthToken: undefined,
       claudeSpawnCommand: "npx",
       claudeSpawnArgs: ["-y", "@agentclientprotocol/claude-agent-acp"],
+      codexSpawnCommand: "npx",
+      codexSpawnArgs: ["-y", "@zed-industries/codex-acp"],
       tmuxTsxCliEntry: "/tmp/tsx-cli.mjs",
       tmuxServerEntry: "/tmp/tmux-acp-server.ts",
       tmuxSessionStorePath: "/tmp/tmux-acp-sessions.json",

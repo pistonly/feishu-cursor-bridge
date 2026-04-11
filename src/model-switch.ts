@@ -78,7 +78,7 @@ export function formatModelUsage(
 ): string {
   const body = ["用法：`/model <模型ID>`"];
   if (!modelState || modelState.availableModels.length === 0) {
-    body.push("", "可在本机终端执行 `cursor-agent models` 查看可用 ID。");
+    body.push("", "可先在当前会话完成一轮对话，或在本机查看对应 ACP 后端支持的模型列表。");
     return body.join("\n");
   }
   body.push("", formatAvailableModels(modelState, options));
