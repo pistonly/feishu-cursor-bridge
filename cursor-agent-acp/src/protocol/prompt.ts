@@ -220,6 +220,12 @@ export class PromptHandler {
       // Determine specific refusal subtype for better client handling
       let reason: string;
       if (error) {
+        const normalizedErrorMessage = error.message.toLowerCase();
+        const isTimeoutError =
+          error.name === 'TimeoutError' ||
+          normalizedErrorMessage.includes('timed out') ||
+          normalizedErrorMessage.includes('timeout');
+
         // Categorize errors by type
         // Check for cursor-agent CLI specific errors first
         if (
@@ -238,6 +244,8 @@ export class PromptHandler {
 
           if (isNotInstalledError) {
             reason = 'capability_unavailable'; // cursor-agent CLI not installed
+          } else if (isTimeoutError) {
+            reason = 'timeout';
           } else if (
             // Check for explicit authentication errors
             error.message.includes('not authenticated') ||
@@ -260,7 +268,7 @@ export class PromptHandler {
             if (
               error.name === 'CursorError' ||
               (error.message.includes('Cursor CLI error') &&
-                !error.message.includes('timeout') &&
+                !isTimeoutError &&
                 !error.message.includes('rate limit'))
             ) {
               reason = 'authentication'; // Likely authentication issue
@@ -404,7 +412,9 @@ export class PromptHandler {
         if (
           error.message.includes('Cursor CLI error') &&
           !error.message.includes('not installed') &&
-          !error.message.includes('not found')
+          !error.message.includes('not found') &&
+          !error.message.toLowerCase().includes('timed out') &&
+          !error.message.toLowerCase().includes('timeout')
         ) {
           // cursor-agent CLI is installed but failing - likely authentication
           explanationText =
@@ -418,6 +428,9 @@ export class PromptHandler {
       // cursor-agent CLI not authenticated
       explanationText =
         'Unable to process your request because cursor-agent CLI is not authenticated.\n\nTo authenticate, run: `cursor-agent login`';
+    } else if (reason === 'timeout') {
+      explanationText =
+        `Unable to process your request because cursor-agent CLI timed out after ${this.config.cursor.timeout}ms.\n\nTry a smaller request, or increase the legacy adapter timeout with \`--timeout <ms>\`.`;
     } else {
       // Generic error
       explanationText = `Unable to process your request: ${error.message}`;

@@ -1342,6 +1342,7 @@ export class CursorCliBridge {
     const { abortSignal, onData, cwd } = options;
 
     return new Promise((resolve, reject) => {
+      let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
       const childProcess = spawn('cursor-agent', command, {
         // Use 'ignore' for stdin since cursor-agent gets input from args
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -1351,11 +1352,25 @@ export class CursorCliBridge {
 
       let stdout = '';
       let stderr = '';
+      const resetIdleTimeout = () => {
+        if (timeoutHandle) {
+          clearTimeout(timeoutHandle);
+        }
+        timeoutHandle = setTimeout(() => {
+          if (!childProcess.killed) {
+            childProcess.kill('SIGTERM');
+            reject(new CursorError('Streaming command timed out'));
+          }
+        }, this.config.cursor.timeout);
+      };
+
+      resetIdleTimeout();
 
       if (childProcess.stdout) {
         childProcess.stdout.on('data', async (data: Buffer) => {
           const chunk = data.toString();
           stdout += chunk;
+          resetIdleTimeout();
 
           // Check for abort signal
           if (abortSignal?.aborted) {
@@ -1377,6 +1392,7 @@ export class CursorCliBridge {
       if (childProcess.stderr) {
         childProcess.stderr.on('data', (data: Buffer) => {
           stderr += data.toString();
+          resetIdleTimeout();
         });
       }
 
@@ -1401,16 +1417,11 @@ export class CursorCliBridge {
         reject(new CursorError(`Process error: ${error.message}`, error));
       });
 
-      // Handle timeout
-      const timeout = setTimeout(() => {
-        if (!childProcess.killed) {
-          childProcess.kill('SIGTERM');
-          reject(new CursorError('Streaming command timed out'));
-        }
-      }, this.config.cursor.timeout);
-
       childProcess.on('close', () => {
-        clearTimeout(timeout);
+        if (timeoutHandle) {
+          clearTimeout(timeoutHandle);
+          timeoutHandle = null;
+        }
       });
 
       // Handle abort signal

@@ -17,12 +17,38 @@ const AUTH_LIKE_REPLY_PREFIXES = [
   "unable to process your request because cursor-agent cli is not authenticated.",
   "unable to process your request because cursor-agent cli is not authenticated.\n\n",
 ];
-const MISLEADING_AUTH_TIMEOUT_MS = 110_000;
+const DEFAULT_LEGACY_CURSOR_TIMEOUT_MS = 120_000;
+const MISLEADING_AUTH_TIMEOUT_TOLERANCE_MS = 5_000;
 
-const AUTH_TIMEOUT_HINT_BODY =
-  "⏱️ 本次请求在长时间执行后被中断，更可能是 Cursor CLI 超时（约 120 秒），而不是登录失效。\n\n请先尝试把任务拆小后重试；若短请求也出现同样报错，再执行 `cursor-agent login`。";
+function formatLegacyTimeoutSeconds(timeoutMs: number): string {
+  const seconds = Math.max(1, Math.round(timeoutMs / 1000));
+  return `约 ${seconds} 秒`;
+}
 
-const AUTH_TIMEOUT_USER_MARKDOWN = AUTH_TIMEOUT_HINT_BODY;
+function parseLegacyCursorTimeoutMs(extraArgs: string[]): number {
+  for (let i = 0; i < extraArgs.length; i += 1) {
+    const arg = extraArgs[i];
+    if (!arg) continue;
+
+    if (arg === "--timeout" || arg === "-t") {
+      const raw = extraArgs[i + 1];
+      const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
+      if (Number.isFinite(parsed) && parsed > 0) return parsed;
+      continue;
+    }
+
+    if (arg.startsWith("--timeout=")) {
+      const parsed = Number.parseInt(arg.slice("--timeout=".length), 10);
+      if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    }
+  }
+
+  return DEFAULT_LEGACY_CURSOR_TIMEOUT_MS;
+}
+
+function buildAuthTimeoutHintBody(timeoutMs: number): string {
+  return `⏱️ 本次请求在长时间执行后被中断，更可能是 Cursor CLI 超时（${formatLegacyTimeoutSeconds(timeoutMs)}），而不是登录失效。\n\n请先尝试把任务拆小后重试；若短请求也出现同样报错，再执行 \`cursor-agent login\`。`;
+}
 
 function normalizeText(text: string): string {
   return text.toLowerCase().replace(/\r/g, "").trim();
@@ -37,12 +63,13 @@ function isStandaloneAuthLikeReply(text: string): boolean {
 function isLikelyTimeoutMisclassifiedAsAuth(
   text: string,
   elapsedMs: number,
+  timeoutMs: number,
 ): boolean {
   const normalized = normalizeText(text);
   const hasAuthHint = AUTH_HINT_PATTERNS.some((p) => normalized.includes(p));
   if (!hasAuthHint) return false;
   if (!isStandaloneAuthLikeReply(normalized)) return false;
-  return elapsedMs >= MISLEADING_AUTH_TIMEOUT_MS;
+  return elapsedMs >= Math.max(1_000, timeoutMs - MISLEADING_AUTH_TIMEOUT_TOLERANCE_MS);
 }
 
 export class ConversationService {
@@ -57,6 +84,8 @@ export class ConversationService {
     session: UserSession,
   ): Promise<string | undefined> {
     const startedAt = Date.now();
+    const legacyCursorTimeoutMs = parseLegacyCursorTimeoutMs(this.config.acp.extraArgs);
+    const authTimeoutHintBody = buildAuthTimeoutHintBody(legacyCursorTimeoutMs);
     const throttleMs = this.config.bridge.cardUpdateThrottleMs;
     const cardSplitMarkdownThreshold =
       this.config.bridge.cardSplitMarkdownThreshold;
@@ -245,15 +274,19 @@ export class ConversationService {
       const elapsedMs = Date.now() - startedAt;
       if (
         session.backend === "cursor-legacy" &&
-        isLikelyTimeoutMisclassifiedAsAuth(aggregatedMain, elapsedMs)
+        isLikelyTimeoutMisclassifiedAsAuth(
+          aggregatedMain,
+          elapsedMs,
+          legacyCursorTimeoutMs,
+        )
       ) {
-        state.setMainText(AUTH_TIMEOUT_HINT_BODY);
+        state.setMainText(authTimeoutHintBody);
         if (state.hasMainText()) {
           syncRenderedCards(true, "[conversation] auth-remap syncRenderedCards failed");
           await awaitPatchChain();
         } else {
           try {
-            await this.feishu.updateCard(loadingCardId, AUTH_TIMEOUT_USER_MARKDOWN);
+            await this.feishu.updateCard(loadingCardId, authTimeoutHintBody);
           } catch (err) {
             console.warn(
               `[conversation] auth-remap updateCard (loading) failed sessionId=${session.sessionId}`,

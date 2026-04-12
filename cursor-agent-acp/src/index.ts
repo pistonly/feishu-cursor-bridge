@@ -89,7 +89,7 @@ export const DEFAULT_CONFIG: AdapterConfig = {
     },
   },
   cursor: {
-    timeout: 30000,
+    timeout: 120000,
     retries: 3,
   },
 };

@@ -5,13 +5,21 @@
  * and different authentication response formats.
  */
 
+import { EventEmitter } from 'events';
+import { jest } from '@jest/globals';
+import { spawn } from 'child_process';
 import { CursorCliBridge } from '../../../src/cursor/cli-bridge';
 import type { AdapterConfig, Logger, CursorResponse } from '../../../src/types';
+
+jest.mock('child_process', () => ({
+  spawn: jest.fn(),
+}));
 
 describe('CursorCliBridge - Authentication Status Parsing', () => {
   let bridge: CursorCliBridge;
   let mockConfig: AdapterConfig;
   let mockLogger: Logger;
+  const mockSpawn = spawn as jest.MockedFunction<typeof spawn>;
 
   beforeEach(() => {
     mockConfig = {
@@ -47,6 +55,7 @@ describe('CursorCliBridge - Authentication Status Parsing', () => {
 
   afterEach(() => {
     jest.clearAllMocks();
+    jest.useRealTimers();
   });
 
   describe('checkAuthentication', () => {
@@ -244,6 +253,72 @@ describe('CursorCliBridge - Authentication Status Parsing', () => {
 
       expect(result.authenticated).toBe(true);
       expect(result.email).toBe('developer@company.com');
+    });
+  });
+
+  describe('streaming timeout', () => {
+    function createMockChildProcess() {
+      const child = new EventEmitter() as EventEmitter & {
+        stdout: EventEmitter;
+        stderr: EventEmitter;
+        killed: boolean;
+        kill: jest.Mock<boolean, [NodeJS.Signals?]>;
+      };
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.killed = false;
+      child.kill = jest.fn((_: NodeJS.Signals | undefined) => {
+        child.killed = true;
+        return true;
+      });
+      return child;
+    }
+
+    test('should refresh streaming timeout whenever stdout data arrives', async () => {
+      jest.useFakeTimers();
+      const child = createMockChildProcess();
+      mockSpawn.mockReturnValue(child as any);
+
+      const promise = (bridge as any).executeStreamingCommand(['agent'], {
+        onData: jest.fn().mockResolvedValue(undefined),
+      });
+
+      await jest.advanceTimersByTimeAsync(20_000);
+      child.stdout.emit('data', Buffer.from('chunk-1'));
+      await Promise.resolve();
+
+      await jest.advanceTimersByTimeAsync(20_000);
+      child.stdout.emit('data', Buffer.from('chunk-2'));
+      await Promise.resolve();
+
+      await jest.advanceTimersByTimeAsync(20_000);
+      expect(child.kill).not.toHaveBeenCalled();
+
+      child.emit('close', 0);
+      await expect(promise).resolves.toMatchObject({
+        success: true,
+        stdout: 'chunk-1chunk-2',
+      });
+    });
+
+    test('should timeout when streaming becomes idle for longer than configured timeout', async () => {
+      jest.useFakeTimers();
+      const child = createMockChildProcess();
+      mockSpawn.mockReturnValue(child as any);
+
+      const promise = (bridge as any).executeStreamingCommand(['agent'], {
+        onData: jest.fn().mockResolvedValue(undefined),
+      });
+
+      child.stdout.emit('data', Buffer.from('chunk-1'));
+      await Promise.resolve();
+
+      await jest.advanceTimersByTimeAsync(29_000);
+      expect(child.kill).not.toHaveBeenCalled();
+
+      await jest.advanceTimersByTimeAsync(1_001);
+      expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+      await expect(promise).rejects.toThrow('Streaming command timed out');
     });
   });
 });

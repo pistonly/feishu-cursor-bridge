@@ -150,7 +150,7 @@ function createHarness(
 
   const service = new ConversationService(config, runtime, feishu as any);
 
-  return { service, sendCardCalls, updateCardCalls };
+  return { service, sendCardCalls, updateCardCalls, config, runtime, feishu };
 }
 
 test("ConversationService 会把交错的工具事件持续合并到同一张卡片", async () => {
@@ -378,8 +378,45 @@ test("ConversationService 仅在 legacy backend 下把鉴权样式超时改写�
     const codexReply = await codexPromise;
 
     assert.match(legacyReply ?? "", /Cursor CLI 超时/);
+    assert.match(legacyReply ?? "", /约 120 秒/);
     assert.doesNotMatch(codexReply ?? "", /Cursor CLI 超时/);
     assert.match(codexReply ?? "", /cursor-agent CLI is not authenticated/i);
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+test("ConversationService 会按 legacy adapter timeout 动态改写超时提示", async () => {
+  const authLike =
+    "Unable to process your request because cursor-agent CLI is not authenticated.\n\nPlease run cursor-agent login.";
+  const originalNow = Date.now;
+  let now = 0;
+  Date.now = () => now;
+  try {
+    const harness = createHarness([
+      {
+        type: "agent_message_chunk",
+        sessionId: "session-1",
+        text: authLike,
+      },
+    ]);
+    harness.config.acp.extraArgs = ["--timeout", "45000"];
+    const service = new ConversationService(
+      harness.config,
+      harness.runtime,
+      harness.feishu as any,
+    );
+
+    now = 0;
+    const replyPromise = service.handleUserPrompt(
+      createMessage(),
+      createSession("cursor-legacy"),
+    );
+    now = 45_000;
+    const reply = await replyPromise;
+
+    assert.match(reply ?? "", /Cursor CLI 超时/);
+    assert.match(reply ?? "", /约 45 秒/);
   } finally {
     Date.now = originalNow;
   }

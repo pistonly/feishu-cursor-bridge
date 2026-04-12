@@ -752,6 +752,48 @@ describe('PromptHandler', () => {
           'authentication'
         );
       });
+
+      it('should classify cursor-agent timeouts as timeout instead of authentication', async () => {
+        const mockSendNotification = jest.fn();
+        const handlerWithMock = new PromptHandler({
+          sessionManager: mockSessionManager as any,
+          cursorBridge: mockCursorBridge as any,
+          config: mockConfig,
+          logger: mockLogger,
+          sendNotification: mockSendNotification,
+        });
+
+        mockSessionManager.loadSession.mockResolvedValue({
+          id: 'test-session-1',
+          metadata: {
+            cwd: '/tmp/test-project',
+          },
+        });
+        mockSessionManager.getSessionModel.mockReturnValue('default');
+        mockSessionManager.getCursorChatId.mockReturnValue(undefined);
+        mockCursorBridge.sendPrompt.mockResolvedValue({
+          success: false,
+          error: 'Streaming command timed out after 30000ms',
+        });
+
+        const response = await handlerWithMock.processPrompt(validRequest);
+        expect(response.result?._meta?.stopReasonDetails?.reason).toBe(
+          'timeout'
+        );
+
+        const errorNotification = mockSendNotification.mock.calls.find(
+          (call) =>
+            call[0].method === 'session/update' &&
+            call[0].params?.update?.sessionUpdate === 'agent_message_chunk' &&
+            call[0].params?.update?.content?.annotations?._meta?.errorType ===
+              'timeout'
+        );
+
+        expect(errorNotification).toBeDefined();
+        const content = errorNotification[0].params.update.content;
+        expect(content.text).toContain('timed out after 30000ms');
+        expect(content.text).toContain('--timeout <ms>');
+      });
     });
   });
 
