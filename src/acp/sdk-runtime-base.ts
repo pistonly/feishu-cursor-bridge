@@ -102,18 +102,13 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
     return this.initResult?.agentCapabilities?.loadSession === true;
   }
 
+  /** ACP `initialize` 对 set_mode / set_model 的宣告与真实能力经常不一致，桥接不据此禁用。 */
   get supportsSetSessionMode(): boolean {
-    const meta = this.initResult?.agentCapabilities?.sessionCapabilities?._meta as
-      | { supportsSetMode?: unknown; supportsSessionModes?: unknown }
-      | undefined;
-    return meta?.supportsSetMode === true || meta?.supportsSessionModes === true;
+    return true;
   }
 
   get supportsSetSessionModel(): boolean {
-    const meta = this.initResult?.agentCapabilities?.sessionCapabilities?._meta as
-      | { supportsSetModel?: unknown }
-      | undefined;
-    return meta?.supportsSetModel === true;
+    return true;
   }
 
   protected get supportsListSessions(): boolean {
@@ -459,9 +454,6 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
   async setSessionMode(sessionId: string, modeId: string): Promise<void> {
     const conn = this.connection;
     if (!conn) throw new Error("ACP not started");
-    if (!this.supportsSetSessionMode) {
-      throw new Error("Agent does not advertise session/set_mode");
-    }
     await conn.setSessionMode({ sessionId, modeId });
     const current = this.sessionModeStates.get(sessionId);
     this.sessionModeStates.set(sessionId, {
@@ -473,9 +465,6 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
   async setSessionModel(sessionId: string, modelId: string): Promise<void> {
     const conn = this.connection;
     if (!conn) throw new Error("ACP not started");
-    if (!this.supportsSetSessionModel) {
-      throw new Error("Agent does not advertise session/set_model");
-    }
     await conn.unstable_setSessionModel({ sessionId, modelId });
     const current = this.sessionModelStates.get(sessionId);
     this.sessionModelStates.set(sessionId, {

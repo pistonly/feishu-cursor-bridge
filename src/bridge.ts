@@ -509,15 +509,6 @@ export class Bridge {
           );
           const runtime = session ? this.runtimeForSession(session) : undefined;
           if (!bridgeManagedCommand.modeId) {
-            if (session && runtime && !runtime.supportsSetSessionMode) {
-              await this.feishuBot.sendText(
-                msg.chatId,
-                "❌ 当前 backend 未宣告 `session/set_mode`，无法通过桥接切换模式。",
-                msg.messageId,
-                this.threadReplyOpts(msg),
-              );
-              return;
-            }
             await this.feishuBot.sendText(
               msg.chatId,
               formatModeUsage(
@@ -544,22 +535,14 @@ export class Bridge {
             }
             activeSession = session;
             sessionId = session.sessionId;
-            if (!runtime?.supportsSetSessionMode) {
-              await this.feishuBot.sendText(
-                msg.chatId,
-                "❌ 当前 backend 未宣告 `session/set_mode`，无法通过桥接切换模式。",
-                msg.messageId,
-                this.threadReplyOpts(msg),
-              );
-              return;
-            }
+            const modeRuntime = this.runtimeForSession(session);
             await this.flushPendingSessionNotices(msg);
-            const modeState = runtime.getSessionModeState(session.sessionId);
+            const modeState = modeRuntime.getSessionModeState(session.sessionId);
             const resolved = resolveSessionModeInput(
               bridgeManagedCommand.modeId,
               modeState,
             );
-            await runtime.setSessionMode(session.sessionId, resolved.modeId);
+            await modeRuntime.setSessionMode(session.sessionId, resolved.modeId);
             await this.feishuBot.sendText(
               msg.chatId,
               `✅ 已切换模式为 \`${resolved.modeId}\`（后续对话将按该模式处理）。`,
@@ -1009,7 +992,7 @@ export class Bridge {
     }
 
     // 非 tmux ACP 后端在 prompt 里识别 /model 后仍会把整句发给 CLI，导致大模型「解释命令」。
-    // 仅在 backend 真正宣告 session/set_model 时，bridge 才接管该命令；tmux 继续把命令真实送进 pane。
+    // 因此由 bridge 接管并调用 ACP session/set_model；tmux 继续把命令原样送进 pane。
     const modelMatch = content.trim().match(/^\/model(?:\s+(\S+))?$/i);
     const activeSessionForModel = await this.sessionManager.getActiveSession(
       msg.chatId,
@@ -1019,15 +1002,6 @@ export class Bridge {
     );
     if (modelMatch && activeSessionForModel && activeSessionForModel.backend !== "cursor-tmux") {
       const runtime = this.runtimeForSession(activeSessionForModel);
-      if (!runtime.supportsSetSessionModel) {
-        await this.feishuBot.sendText(
-          msg.chatId,
-          "❌ 当前 backend 未宣告 `session/set_model`，无法通过桥接切换模型。",
-          msg.messageId,
-          this.threadReplyOpts(msg),
-        );
-        return;
-      }
       const modelId = modelMatch[1]?.trim();
       if (!modelId) {
         await this.feishuBot.sendText(
