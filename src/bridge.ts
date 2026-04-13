@@ -938,6 +938,8 @@ export class Bridge {
         body += `\n• CLI resume ID：\`${recovery.cursorCliChatId}\``;
       } else if (recovery?.kind === "claude-session") {
         body += `\n• Claude 恢复会话：\`${recovery.resumeSessionId}\``;
+      } else if (activeSession?.backend === "claude" && activeSession.sessionId) {
+        body += `\n• Claude 恢复会话：\`${activeSession.sessionId}\``;
       } else if (activeSession?.backend === "codex" && activeSession.sessionId) {
         body += `\n• Codex sessionId：\`${activeSession.sessionId}\``;
       } else if (activeSession?.backend === "cursor-official") {
