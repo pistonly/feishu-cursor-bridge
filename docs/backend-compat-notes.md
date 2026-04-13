@@ -1,6 +1,6 @@
 # Backend Compatibility Notes
 
-记录时间：2026-04-11
+记录时间：2026-04-13
 
 本文件汇总以下 4 个 backend 的真实探针结果：
 
@@ -18,12 +18,12 @@
 
 ## 一览结论
 
-| backend | `initialize` 宣告是否基本可信 | `loadSession` | `set_mode` | `set_model` | `session/list` | `session/close` | model 语义 |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `cursor-official` | 部分可信 | 宣告支持；对刚创建 session 的探针失败 | 实测可用，但未明确宣告 | 实测可用，但未明确宣告 | 不可用 | 不可用 | **精确 selector** |
-| `cursor-legacy` | 基本可信 | 可用 | 可用 | 可用 | 不可用 | 不可用 | **alias 风格** |
-| `claude` | 基本可信 | 可用 | 可用 | 可用 | 可用 | 可用 | Claude 自身返回值 |
-| `codex` | 不完全可信 | 宣告支持；对真实历史 session 可用，但对刚新建 session 的临时探针不稳定 | 实测可用，但未明确宣告 | 实测可用，但未明确宣告 | 可用 | 可用 | Codex 自身返回值 |
+| backend | `initialize` 宣告是否基本可信 | `loadSession` | `set_mode` | `set_model` | `session/cancel` | `session/list` | `session/close` | model 语义 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `cursor-official` | 部分可信 | 宣告支持；对刚创建 session 的探针失败 | 实测可用，但未明确宣告 | 实测可用，但未明确宣告 | 未单独复测 | 不可用 | 不可用 | **精确 selector** |
+| `cursor-legacy` | 基本可信 | 可用 | 可用 | 可用 | 未单独复测 | 不可用 | 不可用 | **alias 风格** |
+| `claude` | 基本可信 | 可用 | 可用 | 可用 | 未单独复测 | 可用 | 可用 | Claude 自身返回值 |
+| `codex` | 不完全可信 | 宣告支持；对真实历史 session 可用，但对刚新建 session 的临时探针不稳定 | 实测可用，但未明确宣告 | 实测可用，但未明确宣告 | 实测可用；真实 prompt 被中断并返回 `stopReason=cancelled` | 可用 | 可用 | Codex 自身返回值 |
 
 ## `initialize` 宣告对比
 
@@ -36,12 +36,12 @@
 
 ## 实测 RPC 对比
 
-| backend | `newSession` | `loadSession` | `setSessionMode` | `setSessionModel` | `listSessions` | `closeSession` |
-| --- | --- | --- | --- | --- | --- | --- |
-| `cursor-official` | 成功 | 对刚创建 session 失败，报 `Session not found` | 成功 | 成功，但必须传精确 selector | `Method not found` | `Method not found` |
-| `cursor-legacy` | 成功 | 成功 | 成功 | 成功，但必须传 legacy alias | `Method not found` | `Method not found` |
-| `claude` | 成功 | 成功 | 成功，但必须传 Claude mode id | 成功 | 成功 | 成功 |
-| `codex` | 成功 | 对真实历史 session 成功；对刚创建 session 的临时探针曾返回 `Resource not found` | 成功，但必须传 Codex mode id | 成功，但必须传 Codex model id | 成功 | 成功 |
+| backend | `newSession` | `loadSession` | `setSessionMode` | `setSessionModel` | `cancelSession` | `listSessions` | `closeSession` |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `cursor-official` | 成功 | 对刚创建 session 失败，报 `Session not found` | 成功 | 成功，但必须传精确 selector | 未单独复测 | `Method not found` | `Method not found` |
+| `cursor-legacy` | 成功 | 成功 | 成功 | 成功，但必须传 legacy alias | 未单独复测 | `Method not found` | `Method not found` |
+| `claude` | 成功 | 成功 | 成功，但必须传 Claude mode id | 成功 | 未单独复测 | 成功 | 成功 |
+| `codex` | 成功 | 对真实历史 session 成功；对刚创建 session 的临时探针曾返回 `Resource not found` | 成功，但必须传 Codex mode id | 成功，但必须传 Codex model id | 成功；真实 prompt 被取消后返回 `cancelled` | 成功 | 成功 |
 
 ## mode 语义对比
 
@@ -95,6 +95,13 @@
 - `official` / `legacy`：不可用
 - `claude` / `codex`：可用
 
+### 2.5 `session/cancel` 必须看真实探针，不能只看 bridge UI
+
+- bridge 层的 `/stop` 只是调用 ACP `session/cancel`
+- 若 runtime 吞掉 `cancel` 异常，飞书侧可能误报“已发送中断请求”
+- 当前项目已修正为不再吞掉 `cancel` 失败
+- `codex` 已在真实 prompt 上验证 `session/cancel -> stopReason=cancelled`
+
 ### 3. mode/model 值完全是 backend-specific
 
 - 不能做统一常量表然后全 backend 复用
@@ -115,6 +122,7 @@
   - `loadSession`
   - `set_mode`
   - `set_model`
+  - `cancelSession`
   - `listSessions`
   - `closeSession`
 - 单独补“宣告与真实行为不一致”的回归测试

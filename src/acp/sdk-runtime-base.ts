@@ -476,11 +476,7 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
   async cancelSession(sessionId: string): Promise<void> {
     const conn = this.connection;
     if (!conn) return;
-    try {
-      await conn.cancel({ sessionId });
-    } catch {
-      /* ignore */
-    }
+    await conn.cancel({ sessionId });
   }
 
   async closeSession(sessionId: string): Promise<void> {

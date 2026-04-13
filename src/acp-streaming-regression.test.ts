@@ -308,6 +308,41 @@ test("OfficialAcpRuntime 会缓存 new/load 返回的模式与模型状态，并
   });
 });
 
+test("SdkAcpRuntimeBase.cancelSession 会把后端取消失败向上抛出", async () => {
+  const config = createTestConfig();
+  config.acp.backend = "codex";
+  const runtime = new CodexAcpRuntime(
+    config,
+    {} as FeishuBridgeClient,
+  );
+
+  const fakeConnection = {
+    cancel: async () => {
+      throw new Error("cancel not supported");
+    },
+  };
+
+  Object.assign(runtime as object, {
+    connection: fakeConnection,
+  });
+
+  await assert.rejects(
+    runtime.cancelSession("session-1"),
+    /cancel not supported/,
+  );
+});
+
+test("SdkAcpRuntimeBase.cancelSession 在 ACP 未启动时直接返回", async () => {
+  const config = createTestConfig();
+  config.acp.backend = "codex";
+  const runtime = new CodexAcpRuntime(
+    config,
+    {} as FeishuBridgeClient,
+  );
+
+  await assert.doesNotReject(runtime.cancelSession("session-1"));
+});
+
 test("OfficialAcpRuntime.closeSession 与 stop 会清理缓存的模式与模型状态", async () => {
   const config = createTestConfig();
   config.acp.backend = "cursor-official";
