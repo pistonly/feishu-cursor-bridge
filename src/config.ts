@@ -207,6 +207,27 @@ function parseExtraArgs(raw: string | undefined): string[] {
   return parseShellLikeArgs(raw.trim());
 }
 
+function hasCodexConfigOverride(args: string[], key: string): boolean {
+  for (let i = 0; i < args.length; i++) {
+    const current = args[i];
+    if (!current) continue;
+    if (current === "-c" || current === "--config") {
+      const next = args[i + 1];
+      if (typeof next === "string" && next.startsWith(`${key}=`)) {
+        return true;
+      }
+      continue;
+    }
+    if (current.startsWith("--config=")) {
+      const value = current.slice("--config=".length);
+      if (value.startsWith(`${key}=`)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 function parseAcpBackend(raw: string | undefined): AcpBackend {
   const normalized = raw?.trim().toLowerCase() || "cursor-official";
   const mapped = LEGACY_BACKEND_ALIASES[normalized] ?? normalized;
@@ -265,19 +286,40 @@ function resolveClaudeAgentAcpSpawn(): { command: string; args: string[] } {
 function resolveCodexAgentAcpSpawn(): { command: string; args: string[] } {
   const envRaw = process.env["CODEX_AGENT_ACP_COMMAND"]?.trim();
   const extra = parseExtraArgs(process.env["CODEX_AGENT_ACP_EXTRA_ARGS"]);
+  const autoApprovePermissions =
+    (process.env["AUTO_APPROVE_PERMISSIONS"] ?? "true").toLowerCase() ===
+    "true";
   if (envRaw) {
     const tokens = parseShellLikeArgs(envRaw);
     if (tokens.length === 0) {
       throw new Error("CODEX_AGENT_ACP_COMMAND 解析为空");
     }
+    const args = [...tokens.slice(1), ...extra];
+    if (autoApprovePermissions) {
+      if (!hasCodexConfigOverride(args, "sandbox_mode")) {
+        args.push("-c", 'sandbox_mode="danger-full-access"');
+      }
+      if (!hasCodexConfigOverride(args, "approval_policy")) {
+        args.push("-c", 'approval_policy="never"');
+      }
+    }
     return {
       command: tokens[0]!,
-      args: [...tokens.slice(1), ...extra],
+      args,
     };
+  }
+  const args = ["-y", "@zed-industries/codex-acp", ...extra];
+  if (autoApprovePermissions) {
+    if (!hasCodexConfigOverride(args, "sandbox_mode")) {
+      args.push("-c", 'sandbox_mode="danger-full-access"');
+    }
+    if (!hasCodexConfigOverride(args, "approval_policy")) {
+      args.push("-c", 'approval_policy="never"');
+    }
   }
   return {
     command: "npx",
-    args: ["-y", "@zed-industries/codex-acp", ...extra],
+    args,
   };
 }
 

@@ -568,6 +568,72 @@ test("loadConfig 会解析 Codex ACP 后端与默认命令", async () => {
         "--stdio",
         "--log-level",
         "debug",
+        "-c",
+        'sandbox_mode="danger-full-access"',
+        "-c",
+        'approval_policy="never"',
+      ]);
+    },
+  );
+});
+
+test("loadConfig 在关闭 AUTO_APPROVE_PERMISSIONS 时不为 Codex 注入 danger-full-access", async () => {
+  const tmpRoot = path.join(
+    os.tmpdir(),
+    "feishu-cursor-bridge-config-codex-safe-tests",
+  );
+  await withEnv(
+    {
+      FEISHU_APP_ID: "app-id",
+      FEISHU_APP_SECRET: "app-secret",
+      ACP_BACKEND: "codex",
+      ACP_ENABLED_BACKENDS: "codex",
+      AUTO_APPROVE_PERMISSIONS: "false",
+      BRIDGE_WORK_ALLOWLIST: undefined,
+      CODEX_AGENT_ACP_COMMAND: "node /tmp/codex-acp.js --stdio",
+      CODEX_AGENT_ACP_EXTRA_ARGS: "--log-level debug",
+      CURSOR_WORK_ALLOWLIST: tmpRoot,
+    },
+    () => {
+      const config = loadConfig();
+      assert.deepEqual(config.acp.codexSpawnArgs, [
+        "/tmp/codex-acp.js",
+        "--stdio",
+        "--log-level",
+        "debug",
+      ]);
+    },
+  );
+});
+
+test("loadConfig 会保留用户显式传入的 Codex sandbox 与 approval 配置", async () => {
+  const tmpRoot = path.join(
+    os.tmpdir(),
+    "feishu-cursor-bridge-config-codex-explicit-override-tests",
+  );
+  await withEnv(
+    {
+      FEISHU_APP_ID: "app-id",
+      FEISHU_APP_SECRET: "app-secret",
+      ACP_BACKEND: "codex",
+      ACP_ENABLED_BACKENDS: "codex",
+      BRIDGE_WORK_ALLOWLIST: undefined,
+      CODEX_AGENT_ACP_COMMAND: "node /tmp/codex-acp.js --stdio",
+      CODEX_AGENT_ACP_EXTRA_ARGS:
+        "--log-level debug -c 'sandbox_mode=\"workspace-write\"' -c 'approval_policy=\"on-request\"'",
+      CURSOR_WORK_ALLOWLIST: tmpRoot,
+    },
+    () => {
+      const config = loadConfig();
+      assert.deepEqual(config.acp.codexSpawnArgs, [
+        "/tmp/codex-acp.js",
+        "--stdio",
+        "--log-level",
+        "debug",
+        "-c",
+        'sandbox_mode="workspace-write"',
+        "-c",
+        'approval_policy="on-request"',
       ]);
     },
   );

@@ -197,7 +197,7 @@ Notes:
 | `FEISHU_CARD_THROTTLE_MS` | Card update throttle | `800` |
 | `FEISHU_CARD_SPLIT_MARKDOWN_THRESHOLD` | Roll over to a new card when a card gets this long | `3500` |
 | `FEISHU_CARD_SPLIT_TOOL_THRESHOLD` | Roll over to a new card when tool rows exceed this count | `8` |
-| `AUTO_APPROVE_PERMISSIONS` | Auto-pick allow-style permission options | `true` |
+| `AUTO_APPROVE_PERMISSIONS` | Auto-pick allow-style permission options; for `codex`, also injects `sandbox_mode="danger-full-access"` + `approval_policy="never"` at backend startup unless `CODEX_AGENT_ACP_*` already overrides them | `true` |
 | `LOG_LEVEL` | `debug` / `info` / `warn` / `error` | `info` |
 | `BRIDGE_DEBUG` | Verbose logs + `/status` details | `false` |
 | `EXPERIMENT_LOG_TO_FILE` | Experimental: append `console.*` to file | `false` |
