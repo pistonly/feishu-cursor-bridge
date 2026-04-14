@@ -60,7 +60,7 @@ const DEFAULT_TOOL_ELAPSED_HINT_OPTIONS: ToolElapsedHintOptions = {
 };
 
 type RenderSection = {
-  kind: "status" | "mode" | "plan" | "tool" | "thought" | "main" | "commands";
+  kind: "mode" | "plan" | "tool" | "thought" | "main" | "commands";
   markdown: string;
 };
 
@@ -315,7 +315,11 @@ export class FeishuCardState {
     }
 
     if (current) chunks.push(current);
-    return chunks.length > 0 ? chunks : ["_（暂无输出）_"];
+    const withStatus = this.appendStatusSummaryToLastChunk(
+      chunks.length > 0 ? chunks : ["_（暂无输出）_"],
+      opts.maxMarkdownLength,
+    );
+    return withStatus.length > 0 ? withStatus : ["_（暂无输出）_"];
   }
 
   toMarkdown(nowMs = Date.now()): string {
@@ -328,16 +332,6 @@ export class FeishuCardState {
   /** 按时间线顺序展开为区块（思考为行内 🤔/💡；同类型连续条目先合并再切分长度）。 */
   private buildSections(opts: CardChunkOptions, nowMs: number): RenderSection[] {
     const parts: RenderSection[] = [];
-    if (this.statusSummary) {
-      parts.push(
-        ...this.splitPlainSection(
-          "status",
-          "**会话状态**",
-          this.statusSummary,
-          opts.maxMarkdownLength,
-        ),
-      );
-    }
     let i = 0;
     const tl = this.timeline;
 
@@ -429,26 +423,20 @@ export class FeishuCardState {
     return parts;
   }
 
-  private splitPlainSection(
-    kind: RenderSection["kind"],
-    title: string,
-    body: string,
+  private appendStatusSummaryToLastChunk(
+    chunks: string[],
     maxMarkdownLength: number,
-  ): RenderSection[] {
-    const prefix = `${title}\n\n`;
-    const maxBodyLength = Math.max(1, maxMarkdownLength - prefix.length);
-    if (prefix.length + body.length <= maxMarkdownLength) {
-      return [{ kind, markdown: `${prefix}${body}` }];
+  ): string[] {
+    if (!this.statusSummary) return chunks;
+    const last = chunks.at(-1);
+    if (!last) return [this.statusSummary];
+
+    const appended = `${last}\n\n${this.statusSummary}`;
+    if (appended.length <= maxMarkdownLength) {
+      return [...chunks.slice(0, -1), appended];
     }
 
-    const chunks: RenderSection[] = [];
-    for (let j = 0; j < body.length; j += maxBodyLength) {
-      chunks.push({
-        kind,
-        markdown: `${prefix}${body.slice(j, j + maxBodyLength)}`,
-      });
-    }
-    return chunks;
+    return [...chunks, this.statusSummary];
   }
 
   /**

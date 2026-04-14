@@ -38,6 +38,21 @@ interface SpawnSpec {
   label: string;
 }
 
+function normalizePositiveTokenCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : undefined;
+}
+
+function extractPromptResponseTotalTokens(raw: unknown): number | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const usage = (raw as { usage?: unknown }).usage;
+  if (!usage || typeof usage !== "object") return undefined;
+  return normalizePositiveTokenCount(
+    (usage as { totalTokens?: unknown }).totalTokens,
+  );
+}
+
 /** 调试打印 env 时对疑似敏感变量名脱敏 */
 function redactEnvForLog(env: NodeJS.ProcessEnv): Record<string, string | undefined> {
   const sensitive = /secret|password|token|credential|authorization|api_?key|private/i;
@@ -58,6 +73,7 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
   private readonly sessionModeStates = new Map<string, AcpSessionModeState>();
   private readonly sessionModelStates = new Map<string, AcpSessionModelState>();
   private readonly sessionUsageStates = new Map<string, AcpSessionUsageState>();
+  private readonly sessionPromptUsageFallbacks = new Map<string, number>();
 
   protected constructor(
     config: Config,
@@ -113,6 +129,19 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
   getSessionUsageState(sessionId: string): AcpSessionUsageState | undefined {
     const state = this.sessionUsageStates.get(sessionId);
     if (!state) return undefined;
+    const fallbackUsedTokens = this.sessionPromptUsageFallbacks.get(sessionId);
+    if (
+      state.usedTokens <= 0 &&
+      state.maxTokens > 0 &&
+      fallbackUsedTokens != null &&
+      fallbackUsedTokens > 0
+    ) {
+      return {
+        usedTokens: fallbackUsedTokens,
+        maxTokens: state.maxTokens,
+        percent: (fallbackUsedTokens / state.maxTokens) * 100,
+      };
+    }
     return { ...state };
   }
 
@@ -204,6 +233,7 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
 
   protected deleteSessionUsageState(sessionId: string): void {
     this.sessionUsageStates.delete(sessionId);
+    this.sessionPromptUsageFallbacks.delete(sessionId);
   }
 
   protected updateSessionModeState(
@@ -547,6 +577,10 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
       await this.logPromptNullDiagnostics(sessionId, conn);
       return { stopReason: "unknown" };
     }
+    const totalTokens = extractPromptResponseTotalTokens(res);
+    if (totalTokens != null) {
+      this.sessionPromptUsageFallbacks.set(sessionId, totalTokens);
+    }
     return { stopReason: String((res as PromptResponse).stopReason) };
   }
 
@@ -602,5 +636,6 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
     this.sessionModeStates.clear();
     this.sessionModelStates.clear();
     this.sessionUsageStates.clear();
+    this.sessionPromptUsageFallbacks.clear();
   }
 }

@@ -131,9 +131,9 @@ export class ConversationService {
     const state = new FeishuCardState(showCommands);
     const syncStatusSummary = (): void => {
       state.setStatusSummary(
-        `后端：\`${session.backend}\` | 模型：${formatCurrentModel(
+        `\`${session.backend}\` | ${formatCurrentModel(
           this.acp.getSessionModelState(session.sessionId),
-        )} | Context：${formatContextUsage(
+        )} | ${formatContextUsage(
           this.acp.getSessionUsageState(session.sessionId),
         )}`,
       );
@@ -286,6 +286,7 @@ export class ConversationService {
       const result = await this.acp.prompt(session.sessionId, msg.content);
 
       await acpQueue;
+      syncStatusSummary();
 
       if (this.config.bridgeDebug) {
         console.log(

@@ -199,6 +199,91 @@ test("OfficialAcpRuntime.prompt 使用标准 prompt 参数，不透传 legacy st
   });
 });
 
+test("SdkAcpRuntimeBase 会在 usage_update.used 为 0 时回退到 prompt 返回的 totalTokens", async () => {
+  const config = createTestConfig();
+  config.acp.backend = "claude";
+  const handler = new EventEmitter() as FeishuBridgeClient;
+  const runtime = new ClaudeAcpRuntime(
+    config,
+    handler,
+  );
+
+  const fakeConnection = {
+    prompt: async () => ({
+      stopReason: "end_turn",
+      usage: {
+        totalTokens: 19_783,
+      },
+    }),
+  };
+
+  Object.assign(runtime as object, {
+    connection: fakeConnection,
+  });
+
+  handler.emit("acp", {
+    type: "usage_update",
+    sessionId: "session-1",
+    summary: "用量统计已更新",
+    usage: {
+      usedTokens: 0,
+      maxTokens: 200_000,
+      percent: 0,
+    },
+  });
+
+  const result = await runtime.prompt("session-1", "hello");
+
+  assert.equal(result.stopReason, "end_turn");
+  assert.deepEqual(runtime.getSessionUsageState("session-1"), {
+    usedTokens: 19_783,
+    maxTokens: 200_000,
+    percent: (19_783 / 200_000) * 100,
+  });
+});
+
+test("SdkAcpRuntimeBase 不会用 prompt totalTokens 覆盖正常的 usage_update", async () => {
+  const config = createTestConfig();
+  config.acp.backend = "claude";
+  const handler = new EventEmitter() as FeishuBridgeClient;
+  const runtime = new ClaudeAcpRuntime(
+    config,
+    handler,
+  );
+
+  const fakeConnection = {
+    prompt: async () => ({
+      stopReason: "end_turn",
+      usage: {
+        totalTokens: 19_783,
+      },
+    }),
+  };
+
+  Object.assign(runtime as object, {
+    connection: fakeConnection,
+  });
+
+  handler.emit("acp", {
+    type: "usage_update",
+    sessionId: "session-1",
+    summary: "用量统计已更新",
+    usage: {
+      usedTokens: 83_000,
+      maxTokens: 216_000,
+      percent: (83_000 / 216_000) * 100,
+    },
+  });
+
+  await runtime.prompt("session-1", "hello");
+
+  assert.deepEqual(runtime.getSessionUsageState("session-1"), {
+    usedTokens: 83_000,
+    maxTokens: 216_000,
+    percent: (83_000 / 216_000) * 100,
+  });
+});
+
 test("OfficialAcpRuntime 会缓存 new/load 返回的模式与模型状态，并在切换后更新当前值", async () => {
   const config = createTestConfig();
   config.acp.backend = "cursor-official";
