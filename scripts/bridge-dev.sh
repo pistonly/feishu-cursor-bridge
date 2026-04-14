@@ -7,6 +7,10 @@ cd "$ROOT"
 
 LOCK_FILE="${BRIDGE_SINGLE_INSTANCE_LOCK:-$HOME/.feishu-cursor-bridge/bridge.lock}"
 LOG_FILE="${BRIDGE_DEV_LOG_FILE:-$HOME/.feishu-cursor-bridge/logs/bridge-dev.log}"
+SERVICE_SCRIPT="$ROOT/service.sh"
+UNAME_S="$(uname -s)"
+LAUNCHD_LABEL="com.feishu-cursor-bridge"
+SYSTEMD_UNIT="feishu-cursor-bridge.service"
 
 # 从 .env 读取 BRIDGE_SINGLE_INSTANCE_LOCK（仅当环境中未设置该变量时）
 if [[ -z "${BRIDGE_SINGLE_INSTANCE_LOCK+x}" ]] && [[ -f "$ROOT/.env" ]]; then
@@ -88,6 +92,31 @@ wait_for_lock_ready() {
   return 1
 }
 
+managed_service_loaded() {
+  case "$UNAME_S" in
+    Darwin)
+      launchctl print "gui/$(id -u)/$LAUNCHD_LABEL" >/dev/null 2>&1
+      ;;
+    Linux)
+      command -v systemctl >/dev/null 2>&1 && systemctl --user is-active --quiet "$SYSTEMD_UNIT"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+stop_managed_service_if_needed() {
+  [[ -f "$SERVICE_SCRIPT" ]] || return 0
+  if ! managed_service_loaded; then
+    return 0
+  fi
+
+  echo "[bridge-dev] Managed service is running; stopping it before starting dev ..."
+  bash "$SERVICE_SCRIPT" stop
+  sleep 1
+}
+
 stop_bridge() {
   local pid
   pid="$(read_lock_pid)"
@@ -151,6 +180,7 @@ case "$cmd" in
     exit 1
     ;;
   restart | dev | run | "")
+    stop_managed_service_if_needed
     stop_bridge
     mkdir -p "$(dirname "$LOG_FILE")"
     echo "[bridge-dev] Starting in background: npm run dev"
@@ -167,7 +197,7 @@ case "$cmd" in
     cat <<'EOF'
 用法: scripts/bridge-dev.sh [命令]
 
-  (默认) restart|dev|run   先尝试停止已有实例，再执行 npm run dev
+  (默认) restart|dev|run   先停止正式服务与已有实例，再执行 npm run dev
   stop                    仅停止（按锁文件 PID 发 SIGTERM）
   status                  是否运行（读锁文件）；未运行则 exit 1
   -h, --help              帮助
