@@ -3,7 +3,10 @@ import type {
   SessionUpdate,
   PlanEntry,
 } from "@agentclientprotocol/sdk";
-import type { BridgeAcpEvent } from "./types.js";
+import type {
+  BridgeAcpEvent,
+  BridgeConfigOptionValue,
+} from "./types.js";
 
 function summarizePlan(entries: Array<PlanEntry>): string {
   return entries
@@ -13,6 +16,33 @@ function summarizePlan(entries: Array<PlanEntry>): string {
       return `${i + 1}. [${status}] ${body}`.trim();
     })
     .join("\n");
+}
+
+function normalizeConfigOptionValues(
+  raw: unknown,
+): BridgeConfigOptionValue[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: BridgeConfigOptionValue[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const option = item as {
+      id?: unknown;
+      currentValue?: unknown;
+      category?: unknown;
+    };
+    const id = typeof option.id === "string" ? option.id.trim() : "";
+    const currentValue =
+      typeof option.currentValue === "string" ? option.currentValue.trim() : "";
+    if (!id || !currentValue) continue;
+    out.push({
+      id,
+      currentValue,
+      ...(typeof option.category === "string" && option.category.trim()
+        ? { category: option.category.trim() }
+        : {}),
+    });
+  }
+  return out.length > 0 ? out : undefined;
 }
 
 /**
@@ -106,10 +136,14 @@ export function mapSessionUpdateToBridgeEvents(
       break;
     }
     case "config_option_update": {
+      const configOptions = normalizeConfigOptionValues(
+        (update as { configOptions?: unknown }).configOptions,
+      );
       out.push({
         type: "config_option_update",
         sessionId,
         summary: "配置项已更新",
+        ...(configOptions ? { configOptions } : {}),
       });
       break;
     }

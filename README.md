@@ -213,7 +213,7 @@ Proxy precedence: `wss_proxy` / `ws_proxy` > `https_proxy` / `http_proxy` / `all
 - **Multi-session**: `/new <index or path>` creates and switches (old session stays connected); bare `/new` lists presets; `/sessions` lists; `/switch <index or name>` switches active (no arg → last used); `/close` closes one; `/rename` helps name-based switching. Full syntax: `docs/feishu-commands.md`
 - `/status` or `/状态`: session stats, always shows ACP backend; `cursor-official` / `cursor-legacy` / `claude` / `codex` show known mode for the active session; `cursor-tmux` does not show a bridge-faked mode; recovery metadata is shown when available; `cursor-official` now shows the active ACP `sessionId`, `claude` stably shows the current Claude resume session id, and `codex` shows the active ACP `sessionId` by default; with `BRIDGE_DEBUG=true`, adds more paths, modes, and session details.
 - `/mode <id>`: `cursor-official` / `cursor-legacy` / `claude` / `codex` use ACP `session/set_mode`; `cursor-tmux` forwards `/mode ...` verbatim to the real Cursor CLI pane
-- `/model <id>`: `cursor-legacy` / `cursor-official` / `claude` / `codex` use ACP `session/set_model` (`cursor-official` keeps selector-by-index UX); `cursor-tmux` forwards to CLI pane
+- `/model <id>`: `cursor-legacy` / `cursor-official` / `claude` / `codex` use ACP `session/set_model` and support selecting from the current session's model list by 1-based index; `cursor-tmux` forwards to CLI pane
 
 ## Manual smoke checklist
 
@@ -459,7 +459,7 @@ docker-compose -f docker/compose.yaml run --rm claude-acp-smoke
 - **多 session 切换**：`/new <序号或路径>` 新建并切到该 session（裸 `/new` 等同列表）；`/sessions` 列表；`/switch <编号或名称>` 切换活跃 session（无参数时切到上一次用过的）；`/close` 关闭指定；`/rename` 便于用名称切换。完整语法与快捷列表见 `docs/feishu-commands.md`
 - `/status` 或 `/状态`：会话统计，始终展示当前 ACP 后端；`cursor-official` / `cursor-legacy` / `claude` / `codex` 下还会展示当前活跃 session 已知 mode，`cursor-tmux` 下不再显示 bridge 侧伪造的 mode；若是 `cursor-legacy`，会额外显示当前活跃 slot 的 CLI resume ID，若是 `cursor-official` 则默认显示当前 Official ACP `sessionId`，若是 `claude` 则稳定显示当前 Claude 恢复会话 id（新建 session 时回退为当前 ACP `sessionId`），若是 `codex` 则默认显示当前 ACP `sessionId`；`BRIDGE_DEBUG=true` 时额外含更多 ACP `sessionId`、路径、可用模式等调试信息
 - `/mode <模式ID>`：`cursor-official` / `cursor-legacy` / `claude` / `codex` 下通过 ACP `session/set_mode` 切换当前活跃 session 的 mode；`cursor-tmux` 下则把 `/mode ...` 原样发给真实 Cursor CLI pane，由 CLI 自己处理
-- `/model <模型ID>`：`cursor-legacy` / `cursor-official` / `claude` / `codex` 后端下通过 ACP `session/set_model` 切换当前活跃 session 的模型；其中 `cursor-official` 以当前 ACP session 返回的 selector 为准；`cursor-tmux` 后端下则把 `/model ...` 原样发给真实 Cursor CLI pane，由 CLI 自己处理；仅 `cursor-official` 支持桥接侧 `/model <序号>`
+- `/model <模型ID>`：`cursor-legacy` / `cursor-official` / `claude` / `codex` 后端下通过 ACP `session/set_model` 切换当前活跃 session 的模型；桥接会以当前 ACP session 返回的可用模型列表为准，并统一支持桥接侧 `/model <序号>`（1-based）；`cursor-tmux` 后端下则把 `/model ...` 原样发给真实 Cursor CLI pane，由 CLI 自己处理
 
 ## 最小验证清单（手工）
 

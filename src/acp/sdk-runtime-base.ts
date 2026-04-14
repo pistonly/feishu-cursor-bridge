@@ -21,6 +21,7 @@ import type {
   AcpSessionModelState,
   BridgeAcpRuntime,
 } from "./runtime-contract.js";
+import type { BridgeConfigOptionValue } from "./types.js";
 
 type PromptParams = Parameters<ClientSideConnection["prompt"]>[0];
 type NewSessionParams = Parameters<ClientSideConnection["newSession"]>[0];
@@ -64,12 +65,17 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
     this.bridgeClient = handler;
     if (typeof handler.on === "function") {
       handler.on("acp", (ev) => {
-        if (ev.type !== "current_mode_update") return;
-        const current = this.sessionModeStates.get(ev.sessionId);
-        this.sessionModeStates.set(ev.sessionId, {
-          currentModeId: ev.modeId,
-          availableModes: current?.availableModes.map((mode) => ({ ...mode })) ?? [],
-        });
+        if (ev.type === "current_mode_update") {
+          const current = this.sessionModeStates.get(ev.sessionId);
+          this.sessionModeStates.set(ev.sessionId, {
+            currentModeId: ev.modeId,
+            availableModes: current?.availableModes.map((mode) => ({ ...mode })) ?? [],
+          });
+          return;
+        }
+        if (ev.type === "config_option_update" && ev.configOptions?.length) {
+          this.applyConfigOptionUpdate(ev.sessionId, ev.configOptions);
+        }
       });
     }
   }
@@ -188,6 +194,75 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
 
   protected deleteSessionModeState(sessionId: string): void {
     this.sessionModeStates.delete(sessionId);
+  }
+
+  private applyConfigOptionUpdate(
+    sessionId: string,
+    options: BridgeConfigOptionValue[],
+  ): void {
+    const pick = (predicate: (option: BridgeConfigOptionValue) => boolean) =>
+      options.find((option) => predicate(option))?.currentValue;
+
+    const nextModeId = pick(
+      (option) => option.id === "mode" || option.category === "mode",
+    );
+    if (nextModeId) {
+      const current = this.sessionModeStates.get(sessionId);
+      this.sessionModeStates.set(sessionId, {
+        currentModeId: nextModeId,
+        availableModes: current?.availableModes.map((mode) => ({ ...mode })) ?? [],
+      });
+    }
+
+    const modelBase = pick(
+      (option) => option.id === "model" || option.category === "model",
+    );
+    const reasoningEffort = pick(
+      (option) =>
+        option.id === "reasoning_effort" || option.category === "thought_level",
+    );
+    const current = this.sessionModelStates.get(sessionId);
+    const nextModelId = this.resolveModelIdFromConfigOptions(
+      current,
+      modelBase,
+      reasoningEffort,
+    );
+    if (!nextModelId) return;
+    this.sessionModelStates.set(sessionId, {
+      currentModelId: nextModelId,
+      availableModels: current?.availableModels.map((model) => ({ ...model })) ?? [],
+    });
+  }
+
+  private resolveModelIdFromConfigOptions(
+    current: AcpSessionModelState | undefined,
+    modelBase: string | undefined,
+    reasoningEffort: string | undefined,
+  ): string | undefined {
+    if (!modelBase && !reasoningEffort) return undefined;
+
+    const knownModels = new Set(
+      current?.availableModels.map((model) => model.modelId) ?? [],
+    );
+    const currentModelId = current?.currentModelId;
+    const [currentBase, currentReasoning] = currentModelId?.split("/", 2) ?? [];
+
+    const candidate =
+      modelBase && reasoningEffort
+        ? `${modelBase}/${reasoningEffort}`
+        : modelBase
+          ? currentReasoning && knownModels.has(`${modelBase}/${currentReasoning}`)
+            ? `${modelBase}/${currentReasoning}`
+            : modelBase
+          : currentBase
+            ? `${currentBase}/${reasoningEffort}`
+            : undefined;
+
+    if (!candidate) return undefined;
+    if (knownModels.size === 0 || knownModels.has(candidate)) {
+      return candidate;
+    }
+    return currentModelId;
   }
 
   private normalizeSessionModelState(rawModels: unknown): AcpSessionModelState | undefined {

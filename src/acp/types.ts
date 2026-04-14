@@ -1,5 +1,11 @@
 import type { ToolKind } from "@agentclientprotocol/sdk";
 
+export interface BridgeConfigOptionValue {
+  id: string;
+  currentValue: string;
+  category?: string;
+}
+
 /**
  * 桥接内部统一事件：由 ACP SessionNotification / SessionUpdate 归一化而来，供飞书渲染与调试。
  */
@@ -54,6 +60,7 @@ export type BridgeAcpEvent =
       type: "config_option_update";
       sessionId: string;
       summary: string;
+      configOptions?: BridgeConfigOptionValue[];
     }
   | {
       type: "session_info_update";

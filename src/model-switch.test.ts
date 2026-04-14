@@ -3,13 +3,20 @@ import test from "node:test";
 import {
   formatModelSwitchFailure,
   formatModelUsage,
-  resolveOfficialModelSelectorInput,
+  resolveModelSelectorInput,
 } from "./model-switch.js";
 
 test("formatModelUsage 在缺少模型状态时回退到基础用法提示", () => {
   assert.equal(
     formatModelUsage(),
     "用法：`/model <模型ID>`\n\n可先在当前会话完成一轮对话，或在本机查看对应 ACP 后端支持的模型列表。",
+  );
+});
+
+test("formatModelUsage 在 numbered 下会显示可用序号用法", () => {
+  assert.equal(
+    formatModelUsage(undefined, { numbered: true }),
+    "用法：`/model <模型ID或序号>`\n\n可先在当前会话完成一轮对话，或在本机查看对应 ACP 后端支持的模型列表。",
   );
 });
 
@@ -33,7 +40,7 @@ test("formatModelUsage 会列出可用模型与当前模型", () => {
   );
 });
 
-test("formatModelUsage 在 officialNumbered 下列出带【序号】的模型", () => {
+test("formatModelUsage 在 numbered 下列出带【序号】的模型", () => {
   assert.equal(
     formatModelUsage(
       {
@@ -43,10 +50,10 @@ test("formatModelUsage 在 officialNumbered 下列出带【序号】的模型", 
           { modelId: "b", name: "B" },
         ],
       },
-      { officialNumbered: true },
+      { numbered: true },
     ),
     [
-      "用法：`/model <模型ID>`",
+      "用法：`/model <模型ID或序号>`",
       "",
       "可用模型（`【n】` 为序号，可直接 `/model n`；亦可完整复制反引号内精确值）：",
       "• 【1】A -> `a`",
@@ -56,18 +63,18 @@ test("formatModelUsage 在 officialNumbered 下列出带【序号】的模型", 
   );
 });
 
-test("resolveOfficialModelSelectorInput 非数字原样返回", () => {
+test("resolveModelSelectorInput 非数字原样返回", () => {
   assert.deepEqual(
-    resolveOfficialModelSelectorInput("composer-2[fast=true]", {
+    resolveModelSelectorInput("composer-2[fast=true]", {
       availableModels: [{ modelId: "x" }],
     }),
     { modelId: "composer-2[fast=true]" },
   );
 });
 
-test("resolveOfficialModelSelectorInput 按 1-based 序号解析", () => {
+test("resolveModelSelectorInput 按 1-based 序号解析", () => {
   assert.deepEqual(
-    resolveOfficialModelSelectorInput("2", {
+    resolveModelSelectorInput("2", {
       availableModels: [
         { modelId: "first", name: "One" },
         { modelId: "composer-2[fast=true]", name: "Composer 2" },
@@ -77,30 +84,30 @@ test("resolveOfficialModelSelectorInput 按 1-based 序号解析", () => {
   );
 });
 
-test("resolveOfficialModelSelectorInput 序号无效时抛错", () => {
+test("resolveModelSelectorInput 序号无效时抛错", () => {
   assert.throws(
     () =>
-      resolveOfficialModelSelectorInput("0", {
+      resolveModelSelectorInput("0", {
         availableModels: [{ modelId: "a" }],
       }),
     /序号 0 无效/,
   );
   assert.throws(
     () =>
-      resolveOfficialModelSelectorInput("3", {
+      resolveModelSelectorInput("3", {
         availableModels: [{ modelId: "a" }, { modelId: "b" }],
       }),
     /序号 3 无效/,
   );
 });
 
-test("resolveOfficialModelSelectorInput 无列表时纯数字抛错", () => {
+test("resolveModelSelectorInput 无列表时纯数字抛错", () => {
   assert.throws(
-    () => resolveOfficialModelSelectorInput("1", undefined),
+    () => resolveModelSelectorInput("1", undefined),
     /尚无可用模型列表/,
   );
   assert.throws(
-    () => resolveOfficialModelSelectorInput("1", { availableModels: [] }),
+    () => resolveModelSelectorInput("1", { availableModels: [] }),
     /尚无可用模型列表/,
   );
 });
@@ -148,14 +155,14 @@ test("formatModelSwitchFailure 会追加可用模型列表与当前模型", () =
   );
 });
 
-test("formatModelSwitchFailure 在 officialNumbered 下列出带序号", () => {
+test("formatModelSwitchFailure 在 numbered 下列出带序号", () => {
   const message = formatModelSwitchFailure(
     new Error("bad"),
     {
       currentModelId: "auto",
       availableModels: [{ modelId: "auto", name: "Auto" }],
     },
-    { officialNumbered: true },
+    { numbered: true },
   );
   assert.ok(message.includes("【1】"));
   assert.ok(message.includes("可直接 `/model n`"));

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -440,6 +441,73 @@ test("SdkAcpRuntimeBase 不依赖 initialize 宣告即可切换模式与模型",
   await runtime.setSessionModel("session-1", "gpt-5");
   assert.equal(modeCalls, 1);
   assert.equal(modelCalls, 1);
+});
+
+test("CodexAcpRuntime 会根据 config_option_update 更新当前模式与模型", async () => {
+  const config = createTestConfig();
+  config.acp.backend = "codex";
+  const handler = new EventEmitter() as FeishuBridgeClient;
+  const runtime = new CodexAcpRuntime(
+    config,
+    handler,
+  );
+
+  const fakeConnection = {
+    newSession: async () => ({
+      sessionId: "session-1",
+      modes: {
+        currentModeId: "auto",
+        availableModes: [
+          { id: "read-only", name: "Read Only" },
+          { id: "auto", name: "Default" },
+          { id: "full-access", name: "Full Access" },
+        ],
+      },
+      models: {
+        currentModelId: "gpt-5.3-codex/medium",
+        availableModels: [
+          { modelId: "gpt-5.3-codex/medium", name: "gpt-5.3-codex (medium)" },
+          { modelId: "gpt-5.4/high", name: "gpt-5.4 (high)" },
+        ],
+      },
+    }),
+  };
+
+  Object.assign(runtime as object, {
+    connection: fakeConnection,
+  });
+
+  await runtime.newSession("/tmp/workspace");
+  handler.emit("acp", {
+    type: "config_option_update",
+    sessionId: "session-1",
+    summary: "配置项已更新",
+    configOptions: [
+      { id: "mode", currentValue: "read-only", category: "mode" },
+      { id: "model", currentValue: "gpt-5.4", category: "model" },
+      {
+        id: "reasoning_effort",
+        currentValue: "high",
+        category: "thought_level",
+      },
+    ],
+  });
+
+  assert.deepEqual(runtime.getSessionModeState("session-1"), {
+    currentModeId: "read-only",
+    availableModes: [
+      { modeId: "read-only", name: "Read Only" },
+      { modeId: "auto", name: "Default" },
+      { modeId: "full-access", name: "Full Access" },
+    ],
+  });
+  assert.deepEqual(runtime.getSessionModelState("session-1"), {
+    currentModelId: "gpt-5.4/high",
+    availableModels: [
+      { modelId: "gpt-5.3-codex/medium", name: "gpt-5.3-codex (medium)" },
+      { modelId: "gpt-5.4/high", name: "gpt-5.4 (high)" },
+    ],
+  });
 });
 
 test("createAcpRuntime 会按 ACP_BACKEND 返回对应实现", () => {

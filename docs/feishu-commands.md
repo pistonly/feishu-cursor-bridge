@@ -340,7 +340,7 @@ backend 差异：
 
 **作用**：
 
-- `cursor-legacy` / `cursor-official` backend：bridge 直接调用 ACP `session/set_model` 切换**当前活跃 session** 的模型，**不会**把整条消息再发给大模型（避免仅出现「解释 /model」类回复）。
+- `cursor-legacy` / `cursor-official` / `claude` / `codex` backend：bridge 直接调用 ACP `session/set_model` 切换**当前活跃 session** 的模型，**不会**把整条消息再发给大模型（避免仅出现「解释 /model」类回复）。
 - `cursor-tmux` backend：bridge 会把 `/model ...` 原样发给真实的交互式 Cursor CLI pane，由 CLI 自己处理；此时不走 ACP `session/set_model`，也不依赖 bridge 侧缓存的模型列表。
 
 **示例**：
@@ -355,12 +355,12 @@ backend 差异：
 
 - 默认 `cursor-official` backend 下，以**当前 ACP session 返回的 `availableModels`** 为准，而不是 `cursor-agent models` 的 alias 列表。
 - 机器人返回列表时，反引号中的值就是可直接提交给 ACP `session/set_model` 的**精确 selector**；若带 `[]` 或其它参数后缀，必须完整带上。
-- `official` backend 下，列表会带 `【n】` 序号，可直接使用 `/model <序号>`；桥接会按当前 session 的可用模型列表做 1-based 解析。
-- `cursor-legacy` / `cursor-official` backend 下，若当前 session 尚未拿到模型状态，机器人会回退到基础用法提示；此时请先让该 slot 建立/恢复 session 并完成一轮交互，再使用模型 id、selector 或序号（仅 `official`）。
+- 除 `cursor-tmux` 外，只要 `/model` 由 bridge 接管，列表都会带 `【n】` 序号，可直接使用 `/model <序号>`；桥接会按当前 session 的可用模型列表做 1-based 解析。
+- `cursor-legacy` / `cursor-official` / `claude` / `codex` backend 下，若当前 session 尚未拿到模型状态，机器人会回退到基础用法提示；此时请先让该 slot 建立/恢复 session 并完成一轮交互，再使用模型 id、selector 或序号。
 
 未带参数时：
 
-- `cursor-legacy` / `cursor-official` backend 下，若当前 session 已拿到模型状态，机器人会直接返回可用模型列表与当前模型；否则回退到基础用法提示。
+- `cursor-legacy` / `cursor-official` / `claude` / `codex` backend 下，若当前 session 已拿到模型状态，机器人会直接返回可用模型列表与当前模型；否则回退到基础用法提示。
 - `cursor-tmux` backend 下，会把 `/model` 原样发给 Cursor CLI，由 CLI 自己展示当前模型或可选项。
 
 ---

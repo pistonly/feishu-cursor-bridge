@@ -2,8 +2,8 @@ import type { AcpSessionModelState } from "./acp/runtime-contract.js";
 import { formatJsonRpcLikeError } from "./format-json-rpc-error.js";
 
 export interface ModelSwitchFormatOptions {
-  /** 仅官方 ACP：列表带【序号】并提示可用 `/model <n>` */
-  officialNumbered?: boolean;
+  /** 列表带【序号】并提示可用 `/model <n>` */
+  numbered?: boolean;
 }
 
 function formatModelLine(
@@ -36,7 +36,7 @@ function formatAvailableModels(
   modelState: AcpSessionModelState,
   options?: ModelSwitchFormatOptions,
 ): string {
-  const numbered = options?.officialNumbered === true;
+  const numbered = options?.numbered === true;
   const header = numbered
     ? "可用模型（`【n】` 为序号，可直接 `/model n`；亦可完整复制反引号内精确值）："
     : "可用模型 ID（请完整复制反引号中的值；若带 `[]` 或参数后缀也要一并带上）：";
@@ -47,10 +47,10 @@ function formatAvailableModels(
 }
 
 /**
- * 将用户在官方 ACP 下输入的 `/model` 参数解析为可提交给 `session/set_model` 的精确 selector。
+ * 将用户输入的 `/model` 参数解析为可提交给 `session/set_model` 的精确模型值。
  * 纯数字参数按 1-based 序号映射到当前会话缓存的 `availableModels`；非数字原样返回。
  */
-export function resolveOfficialModelSelectorInput(
+export function resolveModelSelectorInput(
   raw: string,
   modelState: AcpSessionModelState | undefined,
 ): { modelId: string; pickedByIndex?: number } {
@@ -62,7 +62,7 @@ export function resolveOfficialModelSelectorInput(
   const list = modelState?.availableModels ?? [];
   if (list.length === 0) {
     throw new Error(
-      "当前会话尚无可用模型列表。请先在本 slot 完成一轮对话（或确保 session 已建立），再使用序号；也可直接使用完整精确值。",
+      "当前会话尚无可用模型列表。请先在本 slot 完成一轮对话（或确保 session 已建立），再使用序号；也可直接使用完整模型 ID / selector。",
     );
   }
   if (n < 1 || n > list.length) {
@@ -76,7 +76,7 @@ export function formatModelUsage(
   modelState?: AcpSessionModelState,
   options?: ModelSwitchFormatOptions,
 ): string {
-  const body = ["用法：`/model <模型ID>`"];
+  const body = [options?.numbered ? "用法：`/model <模型ID或序号>`" : "用法：`/model <模型ID>`"];
   if (!modelState || modelState.availableModels.length === 0) {
     body.push("", "可先在当前会话完成一轮对话，或在本机查看对应 ACP 后端支持的模型列表。");
     return body.join("\n");

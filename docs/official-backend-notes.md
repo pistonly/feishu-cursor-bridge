@@ -39,7 +39,7 @@
 ## 注意点
 
 - `set_model` 不能依赖 `gpt-5` 这类简写；应优先使用当前 ACP session 返回的精确 selector
-- 当前 bridge 对官方 backend 使用“按当前 session 返回的可用模型列表解析 `/model <序号>`”是正确方向
+- 当前 bridge 对官方 backend 使用“按当前 session 返回的可用模型列表解析 `/model <序号>`”是正确方向；其它 bridge 接管的 backend 也应沿用同一套按 session 列表解析的方式
 - 官方 backend 没有宣告 `session/list` / `session/close`，实测也确实不可用
 - 官方 backend 宣告了 `loadSession: true`，但对刚创建 session 的恢复行为与预期不完全一致，需要额外验证历史真实 session 的恢复路径
 - 官方 backend 没有明确宣告 `supportsSetMode` / `supportsSetModel`，但实测两者可用

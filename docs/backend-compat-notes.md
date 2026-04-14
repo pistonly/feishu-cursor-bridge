@@ -76,7 +76,7 @@
 
 ## 当前 bridge 设计的正确点
 
-- 官方 backend 的 `/model` 采用“按当前 session 返回的 selector / 序号解析”是正确的
+- bridge 侧 `/model` 采用“按当前 session 返回的可用模型列表做精确值 / 序号解析”是正确的
 - legacy backend 的恢复链路依赖 `cursorChatId` 是正确的
 - Claude backend 用 `resumeSessionId` 做恢复绑定是正确的
 - Codex backend 需要少量特判，因为其 capability 宣告不完整

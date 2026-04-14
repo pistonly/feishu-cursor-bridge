@@ -64,6 +64,6 @@
   - `set_mode`
   - `set_model`
 - 在 README 中明确 legacy 与 official 的模型参数差异：
-  - legacy 用 alias
-  - official 用 ACP session 返回的精确 selector
+  - 两者都应优先以当前 ACP session 返回的值为准
+  - bridge 可额外提供统一的 `/model <序号>` 入口，底层仍映射为 session 返回的精确值
 - 若后续增加 `/model` 的跨 backend 提示，应明确提醒用户不要混用 official / legacy 的模型值

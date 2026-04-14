@@ -28,7 +28,7 @@ import { captureAcpReplayDuring } from "./acp/replay-capture.js";
 import {
   formatModelSwitchFailure,
   formatModelUsage,
-  resolveOfficialModelSelectorInput,
+  resolveModelSelectorInput,
 } from "./model-switch.js";
 import {
   formatModeSwitchFailure,
@@ -1000,8 +1000,8 @@ export class Bridge {
       return;
     }
 
-    // 非 tmux ACP 后端在 prompt 里识别 /model 后仍会把整句发给 CLI，导致大模型「解释命令」。
-    // 因此由 bridge 接管并调用 ACP session/set_model；tmux 继续把命令原样送进 pane。
+    // bridge 接管非 tmux backend 的 /model，避免整句继续发给 CLI 后被大模型「解释命令」。
+    // tmux backend 仍保持原样转发给 pane，由真实 Cursor CLI 自己处理。
     const modelMatch = content.trim().match(/^\/model(?:\s+(\S+))?$/i);
     const activeSessionForModel = await this.sessionManager.getActiveSession(
       msg.chatId,
@@ -1017,9 +1017,7 @@ export class Bridge {
           msg.chatId,
           formatModelUsage(
             runtime.getSessionModelState(activeSessionForModel.sessionId),
-            {
-              officialNumbered: activeSessionForModel.backend === "cursor-official",
-            },
+            { numbered: true },
           ),
           msg.messageId,
           this.threadReplyOpts(msg),
@@ -1027,15 +1025,11 @@ export class Bridge {
         return;
       }
       let sessionId: string | undefined;
-      const officialNumbered = activeSessionForModel.backend === "cursor-official";
       try {
         sessionId = activeSessionForModel.sessionId;
         await this.flushPendingSessionNotices(msg);
         const modelState = runtime.getSessionModelState(activeSessionForModel.sessionId);
-        const resolved =
-          officialNumbered
-            ? resolveOfficialModelSelectorInput(modelId, modelState)
-            : { modelId };
+        const resolved = resolveModelSelectorInput(modelId, modelState);
         await runtime.setSessionModel(activeSessionForModel.sessionId, resolved.modelId);
         const okText =
           resolved.pickedByIndex != null
@@ -1053,7 +1047,7 @@ export class Bridge {
           formatModelSwitchFailure(
             err,
             sessionId ? runtime.getSessionModelState(sessionId) : undefined,
-            officialNumbered ? { officialNumbered: true } : undefined,
+            { numbered: true },
           ),
           msg.messageId,
           this.threadReplyOpts(msg),
