@@ -33,6 +33,8 @@ export function formatBridgeCommandsHelp(backend: AcpBackend): string {
     "• `/mode` — 查看或切换模式（行为取决于当前 session backend）",
     "",
     "**其它**",
+    "• `/restart` / `/restart --force` — 重启 bridge 服务（仅管理员私聊）",
+    "• `/update` / `/update --force` — `npm install` + `npm run build` 后重启（仅管理员私聊）",
     "• `/resume` — 对当前活跃 session 执行 ACP `session/load`（需当前 backend 支持）",
     "• `/status` / `/状态` — 桥接与当前 session 统计",
     "• `/commands` / `/help` / `/帮助` / 单独 `/`（或全角 `／`）— 显示本列表（无需 session）",

@@ -52,6 +52,22 @@ test("parseNewConversationCommand 支持 /new --backend codex", () => {
   });
 });
 
+test("parseNewConversationCommand 支持维护命令与 --force", () => {
+  assert.deepEqual(parseNewConversationCommand("/restart"), {
+    kind: "restart",
+    force: false,
+  });
+  assert.deepEqual(parseNewConversationCommand("/update --force"), {
+    kind: "update",
+    force: true,
+  });
+  assert.deepEqual(parseNewConversationCommand("/restart now"), {
+    kind: "restart",
+    force: false,
+    invalidUsage: true,
+  });
+});
+
 test("matchesInterruptUserCommand 识别纯文本 /stop、/cancel", () => {
   assert.equal(matchesInterruptUserCommand("/stop"), true);
   assert.equal(matchesInterruptUserCommand("/cancel"), true);
@@ -91,4 +107,3 @@ test("matchesBridgeStartCommand 仅匹配显式 /start", () => {
   assert.equal(matchesBridgeStartCommand("请发 /start"), false);
   assert.equal(matchesBridgeStartCommand("/start now"), false);
 });
-

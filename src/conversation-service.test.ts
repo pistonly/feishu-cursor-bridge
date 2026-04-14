@@ -41,6 +41,7 @@ function createTestConfig(): Config {
       adapterSessionDir: "/tmp/acp-sessions",
     },
     bridge: {
+      adminUserIds: [],
       maxSessionsPerUser: 10,
       sessionIdleTimeoutMs: 60_000,
       sessionStorePath: "/tmp/sessions.json",
@@ -49,8 +50,10 @@ function createTestConfig(): Config {
       cardSplitToolThreshold: 8,
       workspacePresetsPath: "/tmp/workspace-presets.json",
       workspacePresetsSeed: [],
+      maintenanceStatePath: "/tmp/maintenance-state.json",
       singleInstanceLockPath: "/tmp/bridge.lock",
       allowMultipleInstances: false,
+      managedByService: false,
       experimentalLogToFile: false,
       experimentalLogFilePath: "/tmp/bridge.log",
       showAcpAvailableCommands: false,

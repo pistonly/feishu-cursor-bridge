@@ -262,6 +262,8 @@ generate_plist() {
 		<string>$HOME</string>
 		<key>PATH</key>
 		<string>$(service_path_macos)</string>
+		<key>BRIDGE_MANAGED_BY_SERVICE</key>
+		<string>1</string>
 	</dict>
 
 	<key>RunAtLoad</key>
@@ -301,6 +303,7 @@ Restart=always
 RestartSec=3
 Environment=HOME=$HOME
 Environment=PATH=$path_env
+Environment=BRIDGE_MANAGED_BY_SERVICE=1
 
 [Install]
 WantedBy=default.target

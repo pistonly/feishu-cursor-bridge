@@ -69,6 +69,8 @@ export interface Config {
     adapterSessionDir: string;
   };
   bridge: {
+    /** 允许执行 `/restart`、`/update` 的飞书用户 ID（逗号分隔） */
+    adminUserIds: string[];
     /**
      * 同一飞书用户存活 session（非空闲过期）总数上限；`0` 表示不限制。
      * @default 10
@@ -85,10 +87,14 @@ export interface Config {
     workspacePresetsPath: string;
     /** 列表文件为空时，用环境变量种子初始化（绝对路径） */
     workspacePresetsSeed: string[];
+    /** `/restart`、`/update` 的持久化状态文件 */
+    maintenanceStatePath: string;
     /** 单实例锁文件路径（`BRIDGE_SINGLE_INSTANCE_LOCK`） */
     singleInstanceLockPath: string;
     /** 为 true 时不创建锁，允许多进程（仅调试用） */
     allowMultipleInstances: boolean;
+    /** 当前进程是否由 launchd/systemd 等服务管理器拉起 */
+    managedByService: boolean;
     /** 实验参数：将 console.* 镜像写入日志文件 */
     experimentalLogToFile: boolean;
     /** 实验参数：日志文件路径 */
@@ -365,6 +371,14 @@ function parsePositiveIntegerThreshold(
   return Math.max(minValue, Math.floor(parsed));
 }
 
+function parseStringList(raw: string | undefined): string[] {
+  if (!raw?.trim()) return [];
+  return raw
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item, index, all) => item.length > 0 && all.indexOf(item) === index);
+}
+
 /**
  * 允许列表中的每个根须为目录；不存在则 `mkdir -p`（与旧版单一路径行为一致）。
  * ACP 子进程 `spawn(..., { cwd })` 要求 cwd 必须存在。
@@ -455,6 +469,17 @@ export function loadConfig(): Config {
     ),
   );
 
+  const defaultMaintenanceState = path.join(
+    os.homedir(),
+    ".feishu-cursor-bridge",
+    "maintenance-state.json",
+  );
+  const maintenanceStatePath = path.resolve(
+    expandHome(
+      process.env["BRIDGE_MAINTENANCE_STATE_FILE"]?.trim() || defaultMaintenanceState,
+    ),
+  );
+
   const defaultTmuxSessionStore = path.join(
     os.homedir(),
     ".feishu-cursor-bridge",
@@ -480,6 +505,11 @@ export function loadConfig(): Config {
   const allowMultipleInstances =
     (process.env["BRIDGE_ALLOW_MULTIPLE_INSTANCES"] ?? "false").toLowerCase() ===
     "true";
+  const managedByService =
+    ["1", "true", "yes"].includes(
+      (process.env["BRIDGE_MANAGED_BY_SERVICE"] ?? "").trim().toLowerCase(),
+    ) ||
+    !!process.env["INVOCATION_ID"]?.trim();
 
   const defaultExperimentalLogFile = path.join(
     os.homedir(),
@@ -525,6 +555,7 @@ export function loadConfig(): Config {
   const maxSessionsPerUser = parseMaxSessionsPerUser(
     process.env["BRIDGE_MAX_SESSIONS_PER_USER"],
   );
+  const adminUserIds = parseStringList(process.env["BRIDGE_ADMIN_USER_IDS"]);
 
   const cardUpdateThrottleMs = Math.max(
     200,
@@ -607,6 +638,7 @@ export function loadConfig(): Config {
       adapterSessionDir,
     },
     bridge: {
+      adminUserIds,
       maxSessionsPerUser,
       sessionIdleTimeoutMs,
       sessionStorePath,
@@ -615,8 +647,10 @@ export function loadConfig(): Config {
       cardSplitToolThreshold,
       workspacePresetsPath,
       workspacePresetsSeed,
+      maintenanceStatePath,
       singleInstanceLockPath,
       allowMultipleInstances,
+      managedByService,
       experimentalLogToFile,
       experimentalLogFilePath,
       showAcpAvailableCommands,

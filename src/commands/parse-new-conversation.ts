@@ -66,7 +66,9 @@ export type NewConversationCommand =
   | { kind: "rename"; target: number | string | null; name: string }
   | { kind: "close"; target: number | string }
   | { kind: "sessions" }
-  | { kind: "resume" };
+  | { kind: "resume" }
+  | { kind: "restart"; force: boolean; invalidUsage?: boolean }
+  | { kind: "update"; force: boolean; invalidUsage?: boolean };
 
 export function parseNewConversationCommand(
   content: string,
@@ -88,13 +90,18 @@ export function parseNewConversationCommand(
     cmd !== "mode" &&
     cmd !== "sessions" &&
     cmd !== "session" &&
-    cmd !== "resume"
+    cmd !== "resume" &&
+    cmd !== "restart" &&
+    cmd !== "update"
   ) {
     return null;
   }
 
   if (cmd === "sessions" || cmd === "session") return { kind: "sessions" };
   if (cmd === "resume") return { kind: "resume" };
+  if (cmd === "restart" || cmd === "update") {
+    return parseMaintenanceCommand(cmd, tokens.slice(1));
+  }
   if (cmd === "mode") {
     const modeId = tokens[1]?.trim();
     return modeId ? { kind: "mode", modeId } : { kind: "mode" };
@@ -214,4 +221,21 @@ function extractNewFlags(tokens: string[]): {
     }
   }
   return { name, backend, remainingTokens: remaining };
+}
+
+function parseMaintenanceCommand(
+  cmd: "restart" | "update",
+  tokens: string[],
+): Extract<NewConversationCommand, { kind: "restart" | "update" }> {
+  let force = false;
+  let invalidUsage = false;
+  for (const token of tokens) {
+    const normalized = token.trim().toLowerCase();
+    if (normalized === "--force") {
+      force = true;
+      continue;
+    }
+    invalidUsage = true;
+  }
+  return invalidUsage ? { kind: cmd, force, invalidUsage: true } : { kind: cmd, force };
 }

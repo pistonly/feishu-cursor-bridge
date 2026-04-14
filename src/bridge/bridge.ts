@@ -1,4 +1,5 @@
 import type { Config } from "../config/index.js";
+import { spawn } from "node:child_process";
 import * as path from "node:path";
 import {
   AcpRuntimeRegistry,
@@ -47,10 +48,23 @@ import {
 } from "../commands/fileback-command.js";
 import { formatBridgeCommandsHelp } from "./bridge-commands-help.js";
 import { buildWorkspaceWithBackendSelectCardMarkdown, buildWelcomeCardMarkdown } from "../feishu/interactive-cards.js";
+import {
+  BridgeMaintenanceStateStore,
+  type BridgeMaintenanceCommandKind,
+  type CompletedBridgeMaintenanceTask,
+} from "./maintenance-state.js";
 
 /** 无活跃 session 时，普通对话与部分命令的统一提示 */
 const NO_SESSION_HINT =
   "当前没有可用的 session。请先发送 `/new list` 查看工作区列表，再用 `/new <序号>` 或 `/new <目录绝对路径>` 创建 session。\n\n发送 `/commands`、`/help` 或只发 `/`（全角 `／` 亦可）可查看本桥接支持的全部命令，**无需先建 session**。";
+const MAINTENANCE_OUTPUT_LIMIT = 12_000;
+
+type RunningMaintenanceTask = {
+  kind: BridgeMaintenanceCommandKind;
+  requestedBy: string;
+  requestedAt: number;
+  forced: boolean;
+};
 
 function formatIncomingAttachmentPrompt(
   relativePath: string,
@@ -136,6 +150,53 @@ function formatSessionModel(
   return `\`${modelState.currentModelId}\``;
 }
 
+function appendWithLimit(buffer: string, chunk: string, limit: number): string {
+  if (!chunk) return buffer;
+  const merged = buffer + chunk;
+  return merged.length > limit ? merged.slice(-limit) : merged;
+}
+
+async function runCapturedCommand(
+  command: string,
+  args: string[],
+  cwd: string,
+): Promise<{ stdout: string; stderr: string }> {
+  return await new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd,
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => {
+      stdout = appendWithLimit(stdout, chunk, MAINTENANCE_OUTPUT_LIMIT);
+    });
+    child.stderr?.on("data", (chunk: string) => {
+      stderr = appendWithLimit(stderr, chunk, MAINTENANCE_OUTPUT_LIMIT);
+    });
+    child.on("error", (error) => {
+      reject(error);
+    });
+    child.on("close", (code, signal) => {
+      if (code === 0) {
+        resolve({ stdout, stderr });
+        return;
+      }
+      const lines = [`命令失败：\`${command} ${args.join(" ")}\``];
+      if (code != null) lines.push(`退出码：${code}`);
+      if (signal) lines.push(`信号：${signal}`);
+      const output = [stdout.trim(), stderr.trim()].filter(Boolean).join("\n");
+      if (output) {
+        lines.push("", "最近输出：", output.slice(-MAINTENANCE_OUTPUT_LIMIT));
+      }
+      reject(new Error(lines.join("\n")));
+    });
+  });
+}
+
 export class Bridge {
   private config: Config;
   private runtimeRegistry: AcpRuntimeRegistry;
@@ -146,6 +207,10 @@ export class Bridge {
   private conversations: Map<AcpBackend, ConversationService>;
   /** key: `<sessionKey>:<slotIndex>` — 同一 slot 同一时刻只能有一个 prompt 在跑 */
   private activePrompts = new Set<string>();
+  private maintenanceStateStore: BridgeMaintenanceStateStore;
+  private maintenanceStateReady: Promise<void> | null = null;
+  private activeMaintenance: RunningMaintenanceTask | null = null;
+  private restartTimer: ReturnType<typeof setTimeout> | null = null;
   private cleanupInterval: ReturnType<typeof setInterval> | null = null;
   /** 记录已发送过欢迎消息的用户 */
   private welcomedUsers = new Set<string>();
@@ -162,6 +227,9 @@ export class Bridge {
     this.sessionStore = new SessionStore(
       config.bridge.sessionStorePath,
       config.acp.backend,
+    );
+    this.maintenanceStateStore = new BridgeMaintenanceStateStore(
+      config.bridge.maintenanceStatePath,
     );
     this.presetsStore = new WorkspacePresetsStore(
       config.bridge.workspacePresetsPath,
@@ -187,6 +255,7 @@ export class Bridge {
       );
     }
 
+    await this.ensureMaintenanceStateLoaded();
     await this.sessionManager.init();
     await this.presetsStore.load(this.config.bridge.workspacePresetsSeed);
 
@@ -322,6 +391,227 @@ export class Bridge {
     return `${msg.chatId}:${msg.senderId}`;
   }
 
+  private async ensureMaintenanceStateLoaded(): Promise<void> {
+    if (!this.maintenanceStateReady) {
+      this.maintenanceStateReady = (async () => {
+        await this.maintenanceStateStore.load();
+        const completed = await this.maintenanceStateStore.finalizePendingRestart(
+          "服务已重新拉起。",
+        );
+        if (completed) {
+          console.log(
+            `[bridge] 完成维护任务 /${completed.kind} at ${new Date(completed.finishedAt).toISOString()}`,
+          );
+        }
+      })();
+    }
+    await this.maintenanceStateReady;
+  }
+
+  private isBridgeAdmin(senderId: string): boolean {
+    return this.config.bridge.adminUserIds.includes(senderId);
+  }
+
+  private async isManagedByService(): Promise<boolean> {
+    if (this.config.bridge.managedByService) return true;
+    if (process.ppid <= 1) return true;
+    try {
+      const { stdout } = await runCapturedCommand(
+        "ps",
+        ["-o", "comm=", "-p", String(process.ppid)],
+        process.cwd(),
+      );
+      return /(?:^|\/)(launchd|systemd)\s*$/i.test(stdout.trim());
+    } catch {
+      return false;
+    }
+  }
+
+  private formatIsoTimestamp(ms: number): string {
+    return new Date(ms).toISOString().replace(".000Z", "Z");
+  }
+
+  private formatMaintenanceTaskSummary(
+    task: CompletedBridgeMaintenanceTask,
+  ): string {
+    const statusLabel = task.status === "succeeded" ? "成功" : "失败";
+    const forceLabel = task.forced ? "，强制执行" : "";
+    const detail = task.detail?.trim() ? `\n  详情：${task.detail.trim()}` : "";
+    return `/${task.kind} ${statusLabel}（完成于 ${this.formatIsoTimestamp(task.finishedAt)}${forceLabel}）${detail}`;
+  }
+
+  private maintenanceUsage(kind: BridgeMaintenanceCommandKind): string {
+    return `用法：\`/${kind}\` 或 \`/${kind} --force\``;
+  }
+
+  private async runBridgeUpdateBuild(): Promise<string> {
+    const cwd = process.cwd();
+    const install = await runCapturedCommand("npm", ["install"], cwd);
+    const build = await runCapturedCommand("npm", ["run", "build"], cwd);
+    const output = [install.stdout, install.stderr, build.stdout, build.stderr]
+      .map((chunk) => chunk.trim())
+      .filter(Boolean)
+      .join("\n");
+    return output ? output.slice(-MAINTENANCE_OUTPUT_LIMIT) : "npm install 与 npm run build 已完成。";
+  }
+
+  private scheduleSelfRestart(kind: BridgeMaintenanceCommandKind): void {
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+    }
+    this.restartTimer = setTimeout(() => {
+      console.log(`[bridge] 维护命令 /${kind} 完成，准备自退等待服务管理器拉起`);
+      process.kill(process.pid, "SIGTERM");
+    }, 800);
+  }
+
+  private async handleMaintenanceCommand(
+    msg: FeishuMessage,
+    command: { kind: "restart" | "update"; force: boolean; invalidUsage?: boolean },
+  ): Promise<void> {
+    await this.ensureMaintenanceStateLoaded();
+    if (command.invalidUsage) {
+      await this.feishuBot.sendText(
+        msg.chatId,
+        this.maintenanceUsage(command.kind),
+        msg.messageId,
+        this.threadReplyOpts(msg),
+      );
+      return;
+    }
+    if (msg.chatType !== "p2p") {
+      await this.feishuBot.sendText(
+        msg.chatId,
+        "❌ `/restart`、`/update` 仅允许管理员在私聊中执行。",
+        msg.messageId,
+        this.threadReplyOpts(msg),
+      );
+      return;
+    }
+    if (this.config.bridge.adminUserIds.length === 0) {
+      await this.feishuBot.sendText(
+        msg.chatId,
+        "❌ 当前未配置 `BRIDGE_ADMIN_USER_IDS`，维护命令未启用。",
+        msg.messageId,
+        this.threadReplyOpts(msg),
+      );
+      return;
+    }
+    if (!this.isBridgeAdmin(msg.senderId)) {
+      await this.feishuBot.sendText(
+        msg.chatId,
+        "❌ 该命令仅允许管理员执行。",
+        msg.messageId,
+        this.threadReplyOpts(msg),
+      );
+      return;
+    }
+    if (!(await this.isManagedByService())) {
+      await this.feishuBot.sendText(
+        msg.chatId,
+        "❌ 当前进程未检测到 launchd/systemd 托管，无法保证自重启。请先使用 `bash service.sh install` 或确保由服务管理器拉起。",
+        msg.messageId,
+        this.threadReplyOpts(msg),
+      );
+      return;
+    }
+    if (this.activeMaintenance) {
+      await this.feishuBot.sendText(
+        msg.chatId,
+        `⏳ 已有维护任务进行中：\`/${this.activeMaintenance.kind}\`（开始于 ${this.formatIsoTimestamp(this.activeMaintenance.requestedAt)}）。`,
+        msg.messageId,
+        this.threadReplyOpts(msg),
+      );
+      return;
+    }
+    if (this.activePrompts.size > 0 && !command.force) {
+      await this.feishuBot.sendText(
+        msg.chatId,
+        `❌ 当前仍有 ${this.activePrompts.size} 个请求在处理中。请等待完成或先中断，再执行 \`/${command.kind}\`；若确认要直接维护，可改用 \`/${command.kind} --force\`。`,
+        msg.messageId,
+        this.threadReplyOpts(msg),
+      );
+      return;
+    }
+
+    const requestedAt = Date.now();
+    this.activeMaintenance = {
+      kind: command.kind,
+      requestedBy: msg.senderId,
+      requestedAt,
+      forced: command.force,
+    };
+
+    try {
+      const startText =
+        command.kind === "update"
+          ? `🛠️ 已开始执行 \`/update\`${command.force ? "（--force）" : ""}：将运行 \`npm install\`、\`npm run build\`，成功后自动重启服务。`
+          : `🛠️ 已接受 \`/restart\`${command.force ? "（--force）" : ""}：bridge 进程即将退出，并由服务管理器自动拉起。`;
+      await this.feishuBot.sendText(
+        msg.chatId,
+        startText,
+        msg.messageId,
+        this.threadReplyOpts(msg),
+      );
+    } catch (error) {
+      console.warn(
+        `[bridge] 维护命令 /${command.kind} 起始通知发送失败: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+
+    try {
+      let detail: string | undefined;
+      if (command.kind === "update") {
+        detail = await this.runBridgeUpdateBuild();
+      }
+      await this.maintenanceStateStore.setPendingRestart({
+        kind: command.kind,
+        requestedBy: msg.senderId,
+        requestedAt,
+        forced: command.force,
+      });
+      const finishText =
+        command.kind === "update"
+          ? "✅ `npm install` 与 `npm run build` 已完成，bridge 即将重启。稍后发送 `/status` 可查看结果。"
+          : "✅ bridge 即将重启。稍后发送 `/status` 可查看结果。";
+      try {
+        await this.feishuBot.sendText(
+          msg.chatId,
+          finishText,
+          msg.messageId,
+          this.threadReplyOpts(msg),
+        );
+      } catch (error) {
+        console.warn(
+          `[bridge] 维护命令 /${command.kind} 完成通知发送失败: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      if (detail) {
+        console.log(`[bridge] /update build output (tail):\n${detail}`);
+      }
+      this.scheduleSelfRestart(command.kind);
+    } catch (error) {
+      this.activeMaintenance = null;
+      const detail =
+        error instanceof Error ? error.message : String(error);
+      await this.maintenanceStateStore.setLastTask({
+        kind: command.kind,
+        status: "failed",
+        requestedBy: msg.senderId,
+        requestedAt,
+        finishedAt: Date.now(),
+        forced: command.force,
+        detail,
+      });
+      await this.feishuBot.sendText(
+        msg.chatId,
+        `❌ \`/${command.kind}\` 失败：\n${detail}`,
+        msg.messageId,
+        this.threadReplyOpts(msg),
+      );
+    }
+  }
+
   /**
    * `/topic …` 普通命令：整条消息直接丢弃，不调 SessionManager、不连 ACP、不建 session。
    * 飞书富文本常把 `/topic` 包在 **、`` ` `` 里，行首不是 `/`，需额外判断。
@@ -420,6 +710,7 @@ export class Bridge {
     }
 
     if (!content) return;
+    await this.ensureMaintenanceStateLoaded();
 
     if (matchesBridgeStartCommand(contentMultiline)) {
       await this.sendWelcomeCard(msg);
@@ -445,6 +736,14 @@ export class Bridge {
     const bridgeManagedCommand = newConv;
     if (bridgeManagedCommand) {
       try {
+        if (
+          bridgeManagedCommand.kind === "restart" ||
+          bridgeManagedCommand.kind === "update"
+        ) {
+          await this.handleMaintenanceCommand(msg, bridgeManagedCommand);
+          return;
+        }
+
         // ----------------------------------------------------------------
         // /sessions — list all slots
         // ----------------------------------------------------------------
@@ -970,6 +1269,9 @@ export class Bridge {
           ? runtime?.getSessionUsageState(activeSession.sessionId)
           : undefined;
       const usageLabel = formatSessionUsage(usageState);
+      const maintenanceEnabled =
+        this.config.bridge.adminUserIds.length > 0 && (await this.isManagedByService());
+      const lastMaintenanceTask = this.maintenanceStateStore.getLastTask();
       let body = `📊 活跃/内存 slot: ${stats.active}/${stats.total}`;
       body += `
 • 默认 backend：${this.config.acp.backend}`;
@@ -977,6 +1279,14 @@ export class Bridge {
 • 已启用 backend：${this.config.acp.enabledBackends.join(", ")}`;
       body += `
 • 当前 session backend：${activeSession?.backend ?? "（尚无）"}`;
+      body += `
+• 维护命令：${
+        this.config.bridge.adminUserIds.length === 0
+          ? "未启用（未配置 BRIDGE_ADMIN_USER_IDS）"
+          : maintenanceEnabled
+            ? "已启用（仅管理员私聊）"
+            : "受限（当前进程未检测到服务托管）"
+      }`;
       if (currentModeId) {
         body += `
 • 当前模式：\`${currentModeId}\``;
@@ -1001,6 +1311,11 @@ export class Bridge {
         body += `\n• Codex sessionId：\`${activeSession.sessionId}\``;
       } else {
         body += "\n• 恢复绑定：暂无（尚无活跃会话或后端未返回恢复元信息）";
+      }
+      if (this.activeMaintenance) {
+        body += `\n• 维护任务：进行中（\`/${this.activeMaintenance.kind}\`，开始于 ${this.formatIsoTimestamp(this.activeMaintenance.requestedAt)}）`;
+      } else if (lastMaintenanceTask) {
+        body += `\n• 上次维护：${this.formatMaintenanceTaskSummary(lastMaintenanceTask)}`;
       }
       if (this.config.bridgeDebug) {
         const idleLabel = snap
@@ -1358,6 +1673,10 @@ ${lines.join("\n\n")}
   }
 
   async stop(): Promise<void> {
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
     if (this.cleanupInterval) {
       clearInterval(this.cleanupInterval);
       this.cleanupInterval = null;

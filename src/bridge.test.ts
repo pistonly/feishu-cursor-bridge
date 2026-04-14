@@ -34,6 +34,7 @@ function createTestConfig(): Config {
       adapterSessionDir: "/tmp/acp-sessions",
     },
     bridge: {
+      adminUserIds: ["user-1"],
       maxSessionsPerUser: 10,
       sessionIdleTimeoutMs: 60_000,
       sessionStorePath: "/tmp/sessions.json",
@@ -42,8 +43,10 @@ function createTestConfig(): Config {
       cardSplitToolThreshold: 8,
       workspacePresetsPath: "/tmp/workspace-presets.json",
       workspacePresetsSeed: [],
+      maintenanceStatePath: "/tmp/bridge-maintenance-state.json",
       singleInstanceLockPath: "/tmp/bridge.lock",
       allowMultipleInstances: false,
+      managedByService: true,
       experimentalLogToFile: false,
       experimentalLogFilePath: "/tmp/bridge.log",
       showAcpAvailableCommands: false,
@@ -55,11 +58,11 @@ function createTestConfig(): Config {
   };
 }
 
-function createStatusMessage(): FeishuMessage {
+function createMessage(content: string, overrides: Partial<FeishuMessage> = {}): FeishuMessage {
   return {
     chatId: "chat-1",
     messageId: "msg-1",
-    content: "/status",
+    content,
     contentType: "text",
     mentions: [],
     inlineMentionIds: [],
@@ -67,6 +70,7 @@ function createStatusMessage(): FeishuMessage {
     senderType: "user",
     chatType: "p2p",
     replyInThread: false,
+    ...overrides,
   } as unknown as FeishuMessage;
 }
 
@@ -119,6 +123,20 @@ test("/status 会显示当前模型与 context 用量", async () => {
       return runtime;
     },
   };
+  (bridge as any).ensureMaintenanceStateLoaded = async () => {};
+  (bridge as any).isManagedByService = async () => true;
+  (bridge as any).maintenanceStateStore = {
+    getLastTask() {
+      return {
+        kind: "restart",
+        status: "succeeded",
+        requestedBy: "user-1",
+        requestedAt: 1_710_000_000_000,
+        finishedAt: 1_710_000_060_000,
+        forced: false,
+      };
+    },
+  };
   (bridge as any).sessionManager = {
     async getSessionSnapshotLoaded() {
       return {
@@ -157,11 +175,81 @@ test("/status 会显示当前模型与 context 用量", async () => {
     },
   };
 
-  await (bridge as any).handleFeishuMessage(createStatusMessage());
+  await (bridge as any).handleFeishuMessage(createMessage("/status"));
 
   assert.equal(sentTexts.length, 1);
   assert.match(sentTexts[0] ?? "", /当前 session backend：codex/);
+  assert.match(sentTexts[0] ?? "", /维护命令：已启用/);
+  assert.match(sentTexts[0] ?? "", /上次维护：\/restart 成功/);
   assert.match(sentTexts[0] ?? "", /当前模式：`auto`/);
   assert.match(sentTexts[0] ?? "", /当前模型：GPT-5\.4/);
   assert.match(sentTexts[0] ?? "", /Context 用量：1\.1% \(10,633 \/ 950,000\)/);
+});
+
+test("/update --force 会执行构建并登记待重启状态", async () => {
+  const bridge = new Bridge(createTestConfig());
+  const sentTexts: string[] = [];
+  const pendingRestarts: unknown[] = [];
+  let scheduledKind: string | undefined;
+  let updateBuildCalls = 0;
+
+  (bridge as any).ensureMaintenanceStateLoaded = async () => {};
+  (bridge as any).isManagedByService = async () => true;
+  (bridge as any).runBridgeUpdateBuild = async () => {
+    updateBuildCalls += 1;
+    return "build ok";
+  };
+  (bridge as any).scheduleSelfRestart = (kind: string) => {
+    scheduledKind = kind;
+  };
+  (bridge as any).maintenanceStateStore = {
+    async setPendingRestart(task: unknown) {
+      pendingRestarts.push(task);
+    },
+    async setLastTask(): Promise<void> {
+      throw new Error("unexpected failure");
+    },
+    getLastTask() {
+      return undefined;
+    },
+  };
+  (bridge as any).activePrompts = new Set(["dm:user-1:1"]);
+  (bridge as any).feishuBot = {
+    stripBotMentionKeepLines(content: string) {
+      return content;
+    },
+    async sendText(_chatId: string, body: string): Promise<void> {
+      sentTexts.push(body);
+    },
+  };
+
+  await (bridge as any).handleFeishuMessage(createMessage("/update --force"));
+
+  assert.equal(updateBuildCalls, 1);
+  assert.equal(pendingRestarts.length, 1);
+  assert.equal(scheduledKind, "update");
+  assert.match(sentTexts[0] ?? "", /已开始执行 `\/update`/);
+  assert.match(sentTexts[1] ?? "", /npm install/);
+});
+
+test("/restart 会拒绝非管理员", async () => {
+  const config = createTestConfig();
+  config.bridge.adminUserIds = ["admin-user"];
+  const bridge = new Bridge(config);
+  const sentTexts: string[] = [];
+
+  (bridge as any).ensureMaintenanceStateLoaded = async () => {};
+  (bridge as any).feishuBot = {
+    stripBotMentionKeepLines(content: string) {
+      return content;
+    },
+    async sendText(_chatId: string, body: string): Promise<void> {
+      sentTexts.push(body);
+    },
+  };
+
+  await (bridge as any).handleFeishuMessage(createMessage("/restart"));
+
+  assert.equal(sentTexts.length, 1);
+  assert.match(sentTexts[0] ?? "", /仅允许管理员执行/);
 });
