@@ -2,7 +2,11 @@ import * as path from "node:path";
 import type { Config } from "./config.js";
 import { assertPathInWorkspace } from "./acp/fs-sandbox.js";
 import type { BridgeAcpEvent } from "./acp/types.js";
-import type { BridgeAcpRuntime } from "./acp/runtime-contract.js";
+import type {
+  AcpSessionModelState,
+  AcpSessionUsageState,
+  BridgeAcpRuntime,
+} from "./acp/runtime-contract.js";
 import { FeishuBot, type FeishuMessage } from "./feishu-bot.js";
 import { FeishuCardState, isRenderableEvent } from "./feishu-renderer.js";
 import type { UserSession } from "./session-manager.js";
@@ -54,6 +58,30 @@ function normalizeText(text: string): string {
   return text.toLowerCase().replace(/\r/g, "").trim();
 }
 
+function formatNumber(value: number): string {
+  return new Intl.NumberFormat("en-US").format(value);
+}
+
+function formatPercent(value: number): string {
+  return `${value.toFixed(1).replace(/\.0$/, "")}%`;
+}
+
+function formatCurrentModel(modelState: AcpSessionModelState | undefined): string {
+  if (!modelState?.currentModelId) return "—";
+  const current = modelState.availableModels.find(
+    (model) => model.modelId === modelState.currentModelId,
+  );
+  if (current?.name && current.name !== current.modelId) {
+    return current.name;
+  }
+  return `\`${modelState.currentModelId}\``;
+}
+
+function formatContextUsage(usageState: AcpSessionUsageState | undefined): string {
+  if (!usageState) return "—";
+  return `${formatPercent(usageState.percent)} (${formatNumber(usageState.usedTokens)} / ${formatNumber(usageState.maxTokens)})`;
+}
+
 function isStandaloneAuthLikeReply(text: string): boolean {
   const normalized = normalizeText(text);
   if (!normalized) return false;
@@ -101,9 +129,20 @@ export class ConversationService {
     );
 
     const state = new FeishuCardState(showCommands);
+    const syncStatusSummary = (): void => {
+      state.setStatusSummary(
+        `后端：\`${session.backend}\` | 模型：${formatCurrentModel(
+          this.acp.getSessionModelState(session.sessionId),
+        )} | Context：${formatContextUsage(
+          this.acp.getSessionUsageState(session.sessionId),
+        )}`,
+      );
+    };
+    syncStatusSummary();
     const cardMessageIds: string[] = [loadingCardId];
     let lastRenderedChunks: string[] = [];
     let aggregatedMain = "";
+    let sawRenderableEvent = false;
 
     let lastFlush = 0;
     let cardPatchChain: Promise<void> = Promise.resolve();
@@ -186,8 +225,11 @@ export class ConversationService {
         aggregatedMain += ev.text;
       }
 
+      syncStatusSummary();
+
       if (!isRenderableEvent(ev, showCommands)) return;
 
+      sawRenderableEvent = true;
       state.apply(ev);
       syncRenderedCards(false, "[conversation] syncRenderedCards failed");
     };
@@ -301,7 +343,7 @@ export class ConversationService {
         }
       }
 
-      if (!state.hasContent()) {
+      if (!sawRenderableEvent) {
         try {
           await this.feishu.updateCard(loadingCardId, "（无响应内容）");
         } catch (err) {

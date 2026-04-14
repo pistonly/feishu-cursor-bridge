@@ -7,6 +7,7 @@ import type {
   BridgeAcpEvent,
   BridgeConfigOptionValue,
 } from "./types.js";
+import type { AcpSessionUsageState } from "./runtime-contract.js";
 
 function summarizePlan(entries: Array<PlanEntry>): string {
   return entries
@@ -43,6 +44,29 @@ function normalizeConfigOptionValues(
     });
   }
   return out.length > 0 ? out : undefined;
+}
+
+function normalizeUsageUpdate(
+  raw: unknown,
+): AcpSessionUsageState | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const usage = raw as { used?: unknown; size?: unknown };
+  const used =
+    typeof usage.used === "number" && Number.isFinite(usage.used) && usage.used >= 0
+      ? usage.used
+      : undefined;
+  const size =
+    typeof usage.size === "number" && Number.isFinite(usage.size) && usage.size > 0
+      ? usage.size
+      : undefined;
+  if (used == null || size == null) {
+    return undefined;
+  }
+  return {
+    usedTokens: used,
+    maxTokens: size,
+    percent: (used / size) * 100,
+  };
 }
 
 /**
@@ -156,10 +180,14 @@ export function mapSessionUpdateToBridgeEvents(
       break;
     }
     case "usage_update": {
+      const usage = normalizeUsageUpdate(update);
       out.push({
         type: "usage_update",
         sessionId,
-        summary: "用量统计已更新",
+        summary: usage
+          ? `用量统计已更新（${usage.percent.toFixed(1).replace(/\.0$/, "")}%）`
+          : "用量统计已更新",
+        ...(usage ? { usage } : {}),
       });
       break;
     }

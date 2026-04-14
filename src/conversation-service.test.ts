@@ -4,7 +4,11 @@ import test from "node:test";
 import type { BridgeAcpEvent } from "./acp/types.js";
 import { ConversationService } from "./conversation-service.js";
 import type { Config } from "./config.js";
-import type { BridgeAcpRuntime } from "./acp/runtime-contract.js";
+import type {
+  AcpSessionModelState,
+  AcpSessionUsageState,
+  BridgeAcpRuntime,
+} from "./acp/runtime-contract.js";
 import type { FeishuMessage } from "./feishu-bot.js";
 import type { UserSession } from "./session-manager.js";
 
@@ -108,6 +112,34 @@ function createHarness(
     },
   };
 
+  let modelState: AcpSessionModelState | undefined = {
+    currentModelId: "auto",
+    availableModels: [
+      { modelId: "auto", name: "Auto" },
+      { modelId: "gpt-5", name: "GPT-5" },
+    ],
+  };
+  let usageState: AcpSessionUsageState | undefined;
+
+  bridgeClient.on("acp", (ev: BridgeAcpEvent) => {
+    if (ev.sessionId !== "session-1") return;
+    if (ev.type === "config_option_update" && ev.configOptions?.length) {
+      const currentModelId = ev.configOptions.find(
+        (option) => option.id === "model" || option.category === "model",
+      )?.currentValue;
+      if (currentModelId) {
+        modelState = {
+          currentModelId,
+          availableModels:
+            modelState?.availableModels.map((model) => ({ ...model })) ?? [],
+        };
+      }
+    }
+    if (ev.type === "usage_update" && ev.usage) {
+      usageState = { ...ev.usage };
+    }
+  });
+
   const runtime: BridgeAcpRuntime = {
     backend: "cursor-official",
     bridgeClient: bridgeClient as any,
@@ -133,7 +165,10 @@ function createHarness(
     },
     async setSessionModel(): Promise<void> {},
     getSessionModelState() {
-      return undefined;
+      return modelState;
+    },
+    getSessionUsageState() {
+      return usageState;
     },
     async cancelSession(): Promise<void> {},
     async closeSession(): Promise<void> {},
@@ -420,4 +455,63 @@ test("ConversationService 会按 legacy adapter timeout 动态改写超时提示
   } finally {
     Date.now = originalNow;
   }
+});
+
+test("ConversationService 会在卡片顶部显示 backend、model 和 context 百分比，并随事件刷新", async () => {
+  const { service, updateCardCalls } = createHarness([
+    {
+      type: "agent_message_chunk",
+      sessionId: "session-1",
+      text: "先来一段回答。",
+    },
+    {
+      type: "usage_update",
+      sessionId: "session-1",
+      summary: "用量统计已更新",
+      usage: {
+        usedTokens: 83000,
+        maxTokens: 216000,
+        percent: (83000 / 216000) * 100,
+      },
+    },
+    {
+      type: "config_option_update",
+      sessionId: "session-1",
+      summary: "配置项已更新",
+      configOptions: [{ id: "model", currentValue: "gpt-5", category: "model" }],
+    },
+  ]);
+
+  const reply = await service.handleUserPrompt(createMessage(), createSession("codex"));
+  const finalCard = updateCardCalls.at(-1)?.content ?? "";
+
+  assert.match(finalCard, /后端：`codex`/);
+  assert.match(finalCard, /模型：GPT-5/);
+  assert.match(finalCard, /Context：38\.4% \(83,000 \/ 216,000\)/);
+  assert.match(finalCard, /先来一段回答。/);
+  assert.match(reply ?? "", /后端：`codex`/);
+  assert.match(reply ?? "", /模型：GPT-5/);
+});
+
+test("ConversationService 只有 metadata 更新时也会渲染状态条而不是空响应", async () => {
+  const { service, updateCardCalls } = createHarness([
+    {
+      type: "usage_update",
+      sessionId: "session-1",
+      summary: "用量统计已更新",
+      usage: {
+        usedTokens: 10633,
+        maxTokens: 950000,
+        percent: 1.119263157894737,
+      },
+    },
+  ]);
+
+  const reply = await service.handleUserPrompt(createMessage(), createSession("codex"));
+  const finalCard = updateCardCalls.at(-1)?.content ?? "";
+
+  assert.match(finalCard, /后端：`codex`/);
+  assert.match(finalCard, /Context：1\.1% \(10,633 \/ 950,000\)/);
+  assert.doesNotMatch(finalCard, /无响应内容/);
+  assert.match(reply ?? "", /Context：1\.1% \(10,633 \/ 950,000\)/);
 });

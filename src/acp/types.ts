@@ -1,4 +1,5 @@
 import type { ToolKind } from "@agentclientprotocol/sdk";
+import type { AcpSessionUsageState } from "./runtime-contract.js";
 
 export interface BridgeConfigOptionValue {
   id: string;
@@ -71,4 +72,5 @@ export type BridgeAcpEvent =
       type: "usage_update";
       sessionId: string;
       summary: string;
+      usage?: AcpSessionUsageState;
     };

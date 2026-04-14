@@ -32,8 +32,10 @@ export function isRenderableEvent(
     case "agent_message_chunk":
     case "plan":
     case "current_mode_update":
+    case "config_option_update":
     case "tool_call":
     case "tool_call_update":
+    case "usage_update":
       return true;
     case "available_commands_update":
       return showAcpAvailableCommands;
@@ -48,7 +50,7 @@ type CardChunkOptions = {
 };
 
 type RenderSection = {
-  kind: "mode" | "plan" | "tool" | "thought" | "main" | "commands";
+  kind: "status" | "mode" | "plan" | "tool" | "thought" | "main" | "commands";
   markdown: string;
 };
 
@@ -69,8 +71,17 @@ type TimelineEntry =
 
 export class FeishuCardState {
   private timeline: TimelineEntry[] = [];
+  private statusSummary = "";
 
   constructor(private readonly showAcpAvailableCommands = false) {}
+
+  setStatusSummary(summary: string): void {
+    this.statusSummary = summary.trim();
+  }
+
+  hasStatusSummary(): boolean {
+    return this.statusSummary.length > 0;
+  }
 
   apply(ev: BridgeAcpEvent): void {
     switch (ev.type) {
@@ -167,11 +178,12 @@ export class FeishuCardState {
   clone(): FeishuCardState {
     const next = new FeishuCardState(this.showAcpAvailableCommands);
     next.timeline = this.timeline.map((e) => ({ ...e }));
+    next.statusSummary = this.statusSummary;
     return next;
   }
 
   hasContent(): boolean {
-    return this.timeline.length > 0;
+    return this.timeline.length > 0 || this.hasStatusSummary();
   }
 
   getMainText(): string {
@@ -251,6 +263,16 @@ export class FeishuCardState {
   /** 按时间线顺序展开为区块（思考为行内 🤔/💡；同类型连续条目先合并再切分长度）。 */
   private buildSections(opts: CardChunkOptions): RenderSection[] {
     const parts: RenderSection[] = [];
+    if (this.statusSummary) {
+      parts.push(
+        ...this.splitPlainSection(
+          "status",
+          "**会话状态**",
+          this.statusSummary,
+          opts.maxMarkdownLength,
+        ),
+      );
+    }
     let i = 0;
     const tl = this.timeline;
 

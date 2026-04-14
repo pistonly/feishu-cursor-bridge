@@ -5,7 +5,12 @@ import {
   formatAcpBackendLabel,
   resolveAdapterSessionTimeoutMs,
 } from "./acp/runtime.js";
-import type { AcpBackend, BridgeAcpRuntime } from "./acp/runtime-contract.js";
+import type {
+  AcpBackend,
+  AcpSessionModelState,
+  AcpSessionUsageState,
+  BridgeAcpRuntime,
+} from "./acp/runtime-contract.js";
 import { formatJsonRpcLikeError } from "./format-json-rpc-error.js";
 import {
   FeishuBot,
@@ -101,6 +106,34 @@ function formatDurationMs(ms: number): string {
     return `${ms / (60 * 60_000)} 小时`;
   }
   return `${Math.round(ms / 60_000)} 分钟`;
+}
+
+export function formatNumber(value: number): string {
+  return new Intl.NumberFormat("en-US").format(value);
+}
+
+export function formatPercent(value: number): string {
+  return `${value.toFixed(1).replace(/\.0$/, "")}%`;
+}
+
+export function formatSessionUsage(
+  usage: AcpSessionUsageState | undefined,
+): string | undefined {
+  if (!usage) return undefined;
+  return `${formatPercent(usage.percent)} (${formatNumber(usage.usedTokens)} / ${formatNumber(usage.maxTokens)})`;
+}
+
+function formatSessionModel(
+  modelState: AcpSessionModelState | undefined,
+): string | undefined {
+  if (!modelState?.currentModelId) return undefined;
+  const current = modelState.availableModels.find(
+    (model) => model.modelId === modelState.currentModelId,
+  );
+  if (current?.name && current.name !== current.modelId) {
+    return current.name;
+  }
+  return `\`${modelState.currentModelId}\``;
 }
 
 export class Bridge {
@@ -928,6 +961,15 @@ export class Bridge {
         activeSession && activeSession.backend !== "cursor-tmux"
           ? runtime?.getSessionModeState(activeSession.sessionId)?.currentModeId
           : undefined;
+      const currentModelLabel =
+        activeSession && activeSession.backend !== "cursor-tmux"
+          ? formatSessionModel(runtime?.getSessionModelState(activeSession.sessionId))
+          : undefined;
+      const usageState =
+        activeSession && activeSession.backend !== "cursor-tmux"
+          ? runtime?.getSessionUsageState(activeSession.sessionId)
+          : undefined;
+      const usageLabel = formatSessionUsage(usageState);
       let body = `📊 活跃/内存 slot: ${stats.active}/${stats.total}`;
       body += `
 • 默认 backend：${this.config.acp.backend}`;
@@ -938,6 +980,14 @@ export class Bridge {
       if (currentModeId) {
         body += `
 • 当前模式：\`${currentModeId}\``;
+      }
+      if (currentModelLabel) {
+        body += `
+• 当前模型：${currentModelLabel}`;
+      }
+      if (usageLabel) {
+        body += `
+• Context 用量：${usageLabel}`;
       }
       if (recovery?.kind === "cursor-cli") {
         body += `\n• CLI resume ID：\`${recovery.cursorCliChatId}\``;
@@ -984,6 +1034,8 @@ export class Bridge {
 • 活跃 slot: #${slot?.slotIndex ?? "—"}${slot?.name ? ` (${slot.name})` : ""}
 • ACP sessionId: ${slot?.session.sessionId ?? "—"}
 • 当前模式: ${currentModeId ?? "—"}
+• 当前模型: ${currentModelLabel ?? "—"}
+• Context 用量: ${usageLabel ?? "—"}
 • 可用模式: ${availableModeIds || "—"}
 • 会话 cwd: ${slot?.session.workspaceRoot ?? "—"}
 • 空闲过期约: ${idleLabel}

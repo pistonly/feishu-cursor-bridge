@@ -35,6 +35,12 @@ export interface AcpSessionModelState {
   availableModels: AcpModelInfo[];
 }
 
+export interface AcpSessionUsageState {
+  usedTokens: number;
+  maxTokens: number;
+  percent: number;
+}
+
 export interface AcpModeInfo {
   modeId: string;
   name?: string;
@@ -67,6 +73,7 @@ export interface BridgeAcpRuntime {
   getSessionModeState(sessionId: string): AcpSessionModeState | undefined;
   setSessionModel(sessionId: string, modelId: string): Promise<void>;
   getSessionModelState(sessionId: string): AcpSessionModelState | undefined;
+  getSessionUsageState(sessionId: string): AcpSessionUsageState | undefined;
   cancelSession(sessionId: string): Promise<void>;
   closeSession(sessionId: string): Promise<void>;
   supportsCloseSession(): boolean;

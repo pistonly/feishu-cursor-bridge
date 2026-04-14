@@ -510,6 +510,33 @@ test("CodexAcpRuntime 会根据 config_option_update 更新当前模式与模型
   });
 });
 
+test("SdkAcpRuntimeBase 会缓存 usage_update 上下文占用状态", async () => {
+  const config = createTestConfig();
+  config.acp.backend = "codex";
+  const handler = new EventEmitter() as FeishuBridgeClient;
+  const runtime = new CodexAcpRuntime(
+    config,
+    handler,
+  );
+
+  handler.emit("acp", {
+    type: "usage_update",
+    sessionId: "session-1",
+    summary: "用量统计已更新",
+    usage: {
+      usedTokens: 50000,
+      maxTokens: 200000,
+      percent: 25,
+    },
+  });
+
+  assert.deepEqual(runtime.getSessionUsageState("session-1"), {
+    usedTokens: 50000,
+    maxTokens: 200000,
+    percent: 25,
+  });
+});
+
 test("createAcpRuntime 会按 ACP_BACKEND 返回对应实现", () => {
   const legacyRuntime = createAcpRuntime(
     createTestConfig(),

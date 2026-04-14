@@ -19,6 +19,7 @@ import type {
   AcpPromptResult,
   AcpSessionModeState,
   AcpSessionModelState,
+  AcpSessionUsageState,
   BridgeAcpRuntime,
 } from "./runtime-contract.js";
 import type { BridgeConfigOptionValue } from "./types.js";
@@ -56,6 +57,7 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
   protected initResult: InitializeResponse | null = null;
   private readonly sessionModeStates = new Map<string, AcpSessionModeState>();
   private readonly sessionModelStates = new Map<string, AcpSessionModelState>();
+  private readonly sessionUsageStates = new Map<string, AcpSessionUsageState>();
 
   protected constructor(
     config: Config,
@@ -75,6 +77,10 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
         }
         if (ev.type === "config_option_update" && ev.configOptions?.length) {
           this.applyConfigOptionUpdate(ev.sessionId, ev.configOptions);
+          return;
+        }
+        if (ev.type === "usage_update" && ev.usage) {
+          this.sessionUsageStates.set(ev.sessionId, { ...ev.usage });
         }
       });
     }
@@ -102,6 +108,12 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
       currentModelId: state.currentModelId,
       availableModels: state.availableModels.map((model) => ({ ...model })),
     };
+  }
+
+  getSessionUsageState(sessionId: string): AcpSessionUsageState | undefined {
+    const state = this.sessionUsageStates.get(sessionId);
+    if (!state) return undefined;
+    return { ...state };
   }
 
   get supportsLoadSession(): boolean {
@@ -188,6 +200,10 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
 
   protected deleteSessionModelState(sessionId: string): void {
     this.sessionModelStates.delete(sessionId);
+  }
+
+  protected deleteSessionUsageState(sessionId: string): void {
+    this.sessionUsageStates.delete(sessionId);
   }
 
   protected updateSessionModeState(
@@ -566,6 +582,7 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
     const conn = this.connection;
     this.deleteSessionModeState(sessionId);
     this.deleteSessionModelState(sessionId);
+    this.deleteSessionUsageState(sessionId);
     if (!conn || !this.supportsCloseSession()) return;
     try {
       await conn.unstable_closeSession({ sessionId });
@@ -584,5 +601,6 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
     this.initResult = null;
     this.sessionModeStates.clear();
     this.sessionModelStates.clear();
+    this.sessionUsageStates.clear();
   }
 }
