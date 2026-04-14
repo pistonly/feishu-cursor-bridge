@@ -914,8 +914,13 @@ export class Bridge {
     const statusTrim = content.trim();
     const statusLower = statusTrim.toLowerCase();
     if (statusTrim === "/状态" || statusLower === "/status") {
+      const snap = await this.sessionManager.getSessionSnapshotLoaded(
+        msg.chatId,
+        msg.senderId,
+        msg.chatType,
+        this.threadScope(msg),
+      );
       const stats = this.sessionManager.getStats();
-      const snap = this.activeSnapshot(msg);
       const activeSession = snap?.activeSlot.session;
       const runtime = activeSession ? this.runtimeForSession(activeSession) : undefined;
       const recovery = activeSession?.recovery;

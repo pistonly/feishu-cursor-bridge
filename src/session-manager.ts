@@ -559,6 +559,39 @@ export class SessionManager {
     };
   }
 
+  async getSessionSnapshotLoaded(
+    chatId: string,
+    userId: string,
+    chatTypeRaw: string,
+    threadId?: string,
+  ): Promise<SessionSnapshot | null> {
+    const chatType = this.chatType(chatTypeRaw);
+    const key = this.makeKey(chatId, userId, chatType, threadId);
+    let group = this.groups.get(key);
+    if (!group) {
+      group = await this.restoreGroupFromStore(
+        key,
+        chatId,
+        userId,
+        chatType,
+        Date.now(),
+        threadId,
+      );
+    }
+    if (!group) return null;
+    const activeSlot = this.findSlot(group, group.activeSlotIndex);
+    if (!activeSlot) return null;
+    return {
+      sessionKey: key,
+      group,
+      activeSlot,
+      idleExpiresInMs: this.getIdleExpiresInMs(
+        activeSlot.session.lastActiveAt,
+        Date.now(),
+      ),
+    };
+  }
+
   getStats(): { active: number; total: number } {
     let total = 0;
     const now = Date.now();

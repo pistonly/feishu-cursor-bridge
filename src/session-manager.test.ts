@@ -327,3 +327,45 @@ test("getSlot 可读取当前活跃 slot 或按名称读取指定 slot", async (
   assert.equal(firstSlot.lastReply, "first reply");
   await waitForFlushes();
 });
+
+test("getSessionSnapshotLoaded 会在内存为空时从 store 恢复当前快照", async () => {
+  const storeFile = await createStoreFile(createPersistedGroup("cli-old"));
+
+  const loadSessionCalls: string[] = [];
+  const acp: FakeAcpRuntime = {
+    supportsLoadSession: true,
+    supportsSetSessionMode: false,
+    supportsSetSessionModel: false,
+    async newSession(): Promise<{ sessionId: string }> {
+      throw new Error("should not create new session");
+    },
+    async loadSession(sessionId: string): Promise<void> {
+      loadSessionCalls.push(sessionId);
+    },
+    async cancelSession(): Promise<void> {},
+    async closeSession(): Promise<void> {},
+  };
+
+  const store = new SessionStore(storeFile);
+  const waitForFlushes = trackPendingFlushes(store);
+  const manager = new SessionManager(
+    acp as BridgeAcpRuntime,
+    store,
+    60_000,
+    { defaultWorkspaceRoot: WORKSPACE_ROOT, defaultBackend: "cursor-official" },
+  );
+
+  await manager.init();
+  const snapshot = await manager.getSessionSnapshotLoaded(
+    CHAT_ID,
+    USER_ID,
+    "p2p",
+  );
+
+  assert.ok(snapshot);
+  assert.equal(snapshot.activeSlot.session.sessionId, "acp-old");
+  assert.equal(snapshot.activeSlot.session.workspaceRoot, WORKSPACE_ROOT);
+  assert.deepEqual(loadSessionCalls, ["acp-old"]);
+  assert.deepEqual(manager.getStats(), { active: 1, total: 1 });
+  await waitForFlushes();
+});
