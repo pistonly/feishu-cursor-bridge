@@ -26,6 +26,14 @@ function findCodexConfigOverride(args: string[], key: string): string | undefine
 export class CodexAcpRuntime extends SdkAcpRuntimeBase {
   readonly backend = "codex" as const;
 
+  /**
+   * codex-acp 对刚创建的 session 执行 `loadSession` 可能返回 `Resource not found`，
+   * 若拿它做每次取活跃 session 前的探活，会把 slot 误判为失效并静默重建。
+   */
+  override get shouldProbeSessionAvailability(): boolean {
+    return false;
+  }
+
   constructor(config: Config, handler: FeishuBridgeClient) {
     super(config, handler);
   }

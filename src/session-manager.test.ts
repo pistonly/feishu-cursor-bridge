@@ -15,6 +15,7 @@ const WORKSPACE_ROOT = "/tmp/bridge-session-test";
 type FakeAcpRuntime = Pick<
   BridgeAcpRuntime,
   | "supportsLoadSession"
+  | "shouldProbeSessionAvailability"
   | "supportsSetSessionMode"
   | "supportsSetSessionModel"
   | "newSession"
@@ -258,6 +259,52 @@ test("活跃 slot 的 ACP session 被上游清理后会自动重建并保留 CLI
     { cwd: WORKSPACE_ROOT, cursorCliChatId: "cli-old" },
   ]);
   assert.deepEqual(manager.consumePendingNotices(CHAT_ID, USER_ID, "p2p"), []);
+  await waitForFlushes();
+});
+
+test("runtime 关闭主动探活时不会因 loadSession 探针误判而重建活跃 session", async () => {
+  const storeFile = await createEmptyStoreFile();
+
+  const loadSessionCalls: string[] = [];
+  const newSessionCalls: string[] = [];
+  const acp: FakeAcpRuntime = {
+    supportsLoadSession: true,
+    shouldProbeSessionAvailability: false,
+    supportsSetSessionMode: false,
+    supportsSetSessionModel: false,
+    async newSession(cwd?: string): Promise<{ sessionId: string }> {
+      newSessionCalls.push(path.resolve(cwd ?? WORKSPACE_ROOT));
+      return { sessionId: "codex-live" };
+    },
+    async loadSession(sessionId: string): Promise<void> {
+      loadSessionCalls.push(sessionId);
+      throw new Error(`Resource not found: ${sessionId}`);
+    },
+    async cancelSession(): Promise<void> {},
+    async closeSession(): Promise<void> {},
+  };
+
+  const store = new SessionStore(storeFile);
+  const waitForFlushes = trackPendingFlushes(store);
+  const manager = new SessionManager(
+    acp as BridgeAcpRuntime,
+    store,
+    7 * 24 * 60 * 60_000,
+    { defaultWorkspaceRoot: WORKSPACE_ROOT, defaultBackend: "codex" },
+  );
+
+  await manager.init();
+  await manager.createNewSlot(CHAT_ID, USER_ID, "p2p", WORKSPACE_ROOT, "codex");
+
+  const first = await manager.getActiveSession(CHAT_ID, USER_ID, "p2p");
+  const second = await manager.getActiveSession(CHAT_ID, USER_ID, "p2p");
+
+  assert.ok(first);
+  assert.ok(second);
+  assert.equal(first.sessionId, "codex-live");
+  assert.equal(second.sessionId, "codex-live");
+  assert.deepEqual(loadSessionCalls, []);
+  assert.deepEqual(newSessionCalls, [WORKSPACE_ROOT]);
   await waitForFlushes();
 });
 

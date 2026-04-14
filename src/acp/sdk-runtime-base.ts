@@ -108,6 +108,14 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
     return this.initResult?.agentCapabilities?.loadSession === true;
   }
 
+  /**
+   * 某些 backend（如 codex）对“刚创建好的活跃 session”执行 `loadSession`
+   * 并不稳定；默认仍启用探活，仅在具体 runtime 中按需关闭。
+   */
+  get shouldProbeSessionAvailability(): boolean {
+    return true;
+  }
+
   /** ACP `initialize` 对 set_mode / set_model 的宣告与真实能力经常不一致，桥接不据此禁用。 */
   get supportsSetSessionMode(): boolean {
     return true;

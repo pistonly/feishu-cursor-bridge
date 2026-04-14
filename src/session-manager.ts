@@ -899,7 +899,10 @@ export class SessionManager {
     noticeKey?: string,
   ): Promise<void> {
     const runtime = this.runtimeForSlot(slot);
-    if (!runtime.supportsLoadSession) {
+    if (
+      !runtime.supportsLoadSession ||
+      runtime.shouldProbeSessionAvailability === false
+    ) {
       return;
     }
     const { sessionId, workspaceRoot } = slot.session;
