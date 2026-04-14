@@ -313,6 +313,7 @@ backend 差异：
 - 当前活跃 session 的 backend（如果已有活跃 session）
 - 当前活跃 session 的已知模式（若当前 session backend 支持且已有状态）
 - 当前活跃 session 的 CLI resume ID（若该 backend 暴露或缓存了该字段）
+- 若当前 backend 为 `cursor-official`，默认显示当前 Official ACP `sessionId`
 - 若当前 backend 为 `claude`，默认显示当前 Claude 恢复会话 id（新建 session 时会回退为当前 ACP `sessionId`）
 - 若当前 backend 为 `codex`，额外显示当前 ACP `sessionId`
 

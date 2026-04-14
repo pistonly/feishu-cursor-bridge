@@ -940,10 +940,10 @@ export class Bridge {
         body += `\n• Claude 恢复会话：\`${recovery.resumeSessionId}\``;
       } else if (activeSession?.backend === "claude" && activeSession.sessionId) {
         body += `\n• Claude 恢复会话：\`${activeSession.sessionId}\``;
+      } else if (activeSession?.backend === "cursor-official" && activeSession.sessionId) {
+        body += `\n• Official ACP sessionId：\`${activeSession.sessionId}\``;
       } else if (activeSession?.backend === "codex" && activeSession.sessionId) {
         body += `\n• Codex sessionId：\`${activeSession.sessionId}\``;
-      } else if (activeSession?.backend === "cursor-official") {
-        body += "\n• CLI resume ID：当前官方 ACP 后端未暴露等价字段";
       } else {
         body += "\n• 恢复绑定：暂无（尚无活跃会话或后端未返回恢复元信息）";
       }
