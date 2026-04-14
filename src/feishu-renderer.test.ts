@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { FeishuCardState } from "./feishu-renderer.js";
+import { FeishuCardState } from "./feishu/renderer.js";
 
 test("FeishuCardState 会用 tool_call_update 覆盖同一工具的中间状态", () => {
   const state = new FeishuCardState();

@@ -13,7 +13,7 @@ import {
   type WriteTextFileResponse,
 } from "@agentclientprotocol/sdk";
 import * as path from "node:path";
-import type { Config } from "../config.js";
+import type { Config } from "../config/index.js";
 import { mapSessionNotificationToBridgeEvents } from "./events.js";
 import {
   assertPathInWorkspace,

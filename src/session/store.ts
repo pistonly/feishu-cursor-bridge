@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { AcpBackend, SessionRecovery } from "./acp/runtime-contract.js";
+import type { AcpBackend, SessionRecovery } from "../acp/runtime-contract.js";
 
 export interface PersistedSlotRecord {
   slotIndex: number;

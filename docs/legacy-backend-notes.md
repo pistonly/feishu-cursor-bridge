@@ -4,8 +4,8 @@
 
 ## 已验证现状
 
-- 本机实验入口：`node cursor-agent-acp/dist/bin/cursor-agent-acp.js`
-- 使用的构建产物：仓库内 `cursor-agent-acp/dist/`
+- 本机实验入口：`node vendor/cursor-agent-acp/dist/bin/cursor-agent-acp.js`
+- 使用的构建产物：仓库内 `vendor/cursor-agent-acp/dist/`
 - `initialize` 宣告能力：
   - `loadSession: true`
   - `promptCapabilities.image: true`

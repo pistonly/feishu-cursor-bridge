@@ -1,6 +1,6 @@
 import type { ToolKind } from "@agentclientprotocol/sdk";
-import { formatThoughtBlockInline } from "../feishu-renderer.js";
-import { emojiForToolKind } from "../tool-kind-emoji.js";
+import { formatThoughtBlockInline } from "../feishu/renderer.js";
+import { emojiForToolKind } from "../utils/tool-kind-emoji.js";
 import type { FeishuBridgeClient } from "./feishu-bridge-client.js";
 import type { BridgeAcpEvent } from "./types.js";
 

@@ -1,7 +1,7 @@
 import type { ToolKind } from "@agentclientprotocol/sdk";
-import type { BridgeAcpEvent } from "./acp/types.js";
-import { stripFeishuSendFileDirectives } from "./feishu-send-file.js";
-import { emojiForToolKind } from "./tool-kind-emoji.js";
+import type { BridgeAcpEvent } from "../acp/types.js";
+import { stripFeishuSendFileDirectives } from "./send-file.js";
+import { emojiForToolKind } from "../utils/tool-kind-emoji.js";
 
 /**
  * 思考块：🤔 与段落首行开头同行，💡 与末行结尾同行（不单独占行）。

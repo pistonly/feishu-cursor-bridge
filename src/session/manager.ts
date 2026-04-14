@@ -4,12 +4,12 @@ import type {
   AcpRuntimeResolver,
   BridgeAcpRuntime,
   SessionRecovery,
-} from "./acp/runtime-contract.js";
+} from "../acp/runtime-contract.js";
 import type {
   SessionStore,
   PersistedSessionGroup,
   PersistedSlotRecord,
-} from "./session-store.js";
+} from "./store.js";
 
 export interface UserSession {
   backend: AcpBackend;

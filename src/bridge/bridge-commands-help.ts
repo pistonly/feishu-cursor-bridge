@@ -1,4 +1,4 @@
-import type { AcpBackend } from "./acp/runtime-contract.js";
+import type { AcpBackend } from "../acp/runtime-contract.js";
 
 export function formatBridgeCommandsHelp(backend: AcpBackend): string {
   const acpNote =

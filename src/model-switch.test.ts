@@ -4,7 +4,7 @@ import {
   formatModelSwitchFailure,
   formatModelUsage,
   resolveModelSelectorInput,
-} from "./model-switch.js";
+} from "./commands/model-switch.js";
 
 test("formatModelUsage 在缺少模型状态时回退到基础用法提示", () => {
   assert.equal(

@@ -1,15 +1,15 @@
 import * as path from "node:path";
-import type { Config } from "./config.js";
-import { assertPathInWorkspace } from "./acp/fs-sandbox.js";
-import type { BridgeAcpEvent } from "./acp/types.js";
+import type { Config } from "../config/index.js";
+import { assertPathInWorkspace } from "../acp/fs-sandbox.js";
+import type { BridgeAcpEvent } from "../acp/types.js";
 import type {
   AcpSessionModelState,
   AcpSessionUsageState,
   BridgeAcpRuntime,
-} from "./acp/runtime-contract.js";
-import { FeishuBot, type FeishuMessage } from "./feishu-bot.js";
-import { FeishuCardState, isRenderableEvent } from "./feishu-renderer.js";
-import type { UserSession } from "./session-manager.js";
+} from "../acp/runtime-contract.js";
+import { FeishuBot, type FeishuMessage } from "../feishu/bot.js";
+import { FeishuCardState, isRenderableEvent } from "../feishu/renderer.js";
+import type { UserSession } from "../session/manager.js";
 
 const AUTH_HINT_PATTERNS = [
   "unable to process your request because cursor-agent cli is not authenticated",

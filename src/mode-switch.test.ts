@@ -4,7 +4,7 @@ import {
   formatModeSwitchFailure,
   formatModeUsage,
   resolveSessionModeInput,
-} from "./mode-switch.js";
+} from "./commands/mode-switch.js";
 
 test("formatModeUsage 在缺少模式状态时回退到基础用法提示", () => {
   assert.equal(

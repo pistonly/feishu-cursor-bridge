@@ -1,4 +1,4 @@
-import type { Config } from "../config.js";
+import type { Config } from "../config/index.js";
 import { FeishuBridgeClient } from "./feishu-bridge-client.js";
 import type {
   AcpNewSessionOptions,

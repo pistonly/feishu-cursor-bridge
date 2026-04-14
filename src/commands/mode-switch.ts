@@ -1,5 +1,5 @@
-import type { AcpSessionModeState } from "./acp/runtime-contract.js";
-import { formatJsonRpcLikeError } from "./format-json-rpc-error.js";
+import type { AcpSessionModeState } from "../acp/runtime-contract.js";
+import { formatJsonRpcLikeError } from "../utils/format-json-rpc-error.js";
 
 function formatModeLine(
   mode: AcpSessionModeState["availableModes"][number],

@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { expandHome } from "./config.js";
-import type { Config } from "./config.js";
+import { expandHome } from "../config/index.js";
+import type { Config } from "../config/index.js";
 
 /**
  * 判断 target 是否落在任一 root 之下（含与 root 相同）。

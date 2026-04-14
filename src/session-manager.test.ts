@@ -4,8 +4,8 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { BridgeAcpRuntime } from "./acp/runtime-contract.js";
-import { SessionManager } from "./session-manager.js";
-import { SessionStore, type PersistedSessionGroup } from "./session-store.js";
+import { SessionManager } from "./session/manager.js";
+import { SessionStore, type PersistedSessionGroup } from "./session/store.js";
 
 const USER_ID = "user-1";
 const CHAT_ID = "chat-1";

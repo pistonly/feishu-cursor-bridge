@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { Config } from "./config.js";
-import { Bridge, formatNumber, formatPercent, formatSessionUsage } from "./bridge.js";
+import type { Config } from "./config/index.js";
+import { Bridge, formatNumber, formatPercent, formatSessionUsage } from "./bridge/bridge.js";
 import type { BridgeAcpRuntime } from "./acp/runtime-contract.js";
-import type { FeishuMessage } from "./feishu-bot.js";
+import type { FeishuMessage } from "./feishu/bot.js";
 
 function createTestConfig(): Config {
   return {

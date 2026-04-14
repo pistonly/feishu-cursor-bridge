@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { formatBridgeCommandsHelp } from "./bridge-commands-help.js";
+import { formatBridgeCommandsHelp } from "./bridge/bridge-commands-help.js";
 
 test("formatBridgeCommandsHelp 含核心命令且随后端区分说明", () => {
   const official = formatBridgeCommandsHelp("cursor-official");

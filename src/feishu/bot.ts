@@ -5,11 +5,11 @@ import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { HttpsProxyAgent } from "https-proxy-agent";
-import { assertPathInWorkspace } from "./acp/fs-sandbox.js";
+import { assertPathInWorkspace } from "../acp/fs-sandbox.js";
 import {
   FEISHU_IM_FILE_MAX_BYTES,
   feishuImFileTypeForPath,
-} from "./feishu-send-file.js";
+} from "./send-file.js";
 
 // ---------------------------------------------------------------------------
 // Types

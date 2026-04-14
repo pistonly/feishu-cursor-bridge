@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   parseFilebackUserMessage,
   wrapFilebackPromptForAgent,
-} from "./fileback-command.js";
+} from "./commands/fileback-command.js";
 
 test("parseFilebackUserMessage 非命令", () => {
   assert.equal(parseFilebackUserMessage("hello").kind, "not-fileback");

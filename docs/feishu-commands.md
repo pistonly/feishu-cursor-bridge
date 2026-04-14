@@ -1,6 +1,6 @@
 # 飞书端支持的命令
 
-本文说明由 **飞书-Cursor 桥接服务**（`src/bridge.ts`）直接识别并处理的命令。其它以 `/` 开头的文本若未命中下表，会作为普通对话交给 Cursor Agent（`cursor-agent-acp`），行为与 Cursor 客户端内类似。**例外**：首条非空行以 `/topic` 开头的消息会被桥接直接忽略，不交给 Agent（见下文）。
+本文说明由 **飞书-Cursor 桥接服务**（`src/bridge/bridge.ts`）直接识别并处理的命令。其它以 `/` 开头的文本若未命中下表，会作为普通对话交给 Cursor Agent（`vendor/cursor-agent-acp`），行为与 Cursor 客户端内类似。**例外**：首条非空行以 `/topic` 开头的消息会被桥接直接忽略，不交给 Agent（见下文）。
 
 ## 私聊与群聊
 
@@ -31,7 +31,7 @@
 
 仅发送一个字符 **`/`**（ASCII U+002F）或全角 **`／`**（U+FF0F），且整段消息去掉首尾空白后**仅有该字符**时，与 `/help` 等价（便于快速唤起帮助）。
 
-**作用**：机器人回复本桥接内置命令的分类列表（精简版）；正文会说明**当前活跃 session 所属 backend** 下 **`/model` / `/mode`** 是由桥接调 ACP，还是原样交给 Cursor CLI（`cursor-tmux` backend）。若当前还没有活跃 session，则按默认 backend 说明。回复内容由 `src/bridge-commands-help.ts` 中的 `formatBridgeCommandsHelp` 生成。
+**作用**：机器人回复本桥接内置命令的分类列表（精简版）；正文会说明**当前活跃 session 所属 backend** 下 **`/model` / `/mode`** 是由桥接调 ACP，还是原样交给 Cursor CLI（`cursor-tmux` backend）。若当前还没有活跃 session，则按默认 backend 说明。回复内容由 `src/bridge/bridge-commands-help.ts` 中的 `formatBridgeCommandsHelp` 生成。
 
 **无需 session**：与 `/status` 类似，**没有活跃 session 也可使用**；无 session 时的统一提示里也会引导使用本组命令。
 

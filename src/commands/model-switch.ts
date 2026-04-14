@@ -1,5 +1,5 @@
-import type { AcpSessionModelState } from "./acp/runtime-contract.js";
-import { formatJsonRpcLikeError } from "./format-json-rpc-error.js";
+import type { AcpSessionModelState } from "../acp/runtime-contract.js";
+import { formatJsonRpcLikeError } from "../utils/format-json-rpc-error.js";
 
 export interface ModelSwitchFormatOptions {
   /** 列表带【序号】并提示可用 `/model <n>` */

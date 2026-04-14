@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
-import type { Config } from "./config.js";
+import type { Config } from "./config/index.js";
 import { FeishuBridgeClient } from "./acp/feishu-bridge-client.js";
 
 function createTestConfig(): Config {

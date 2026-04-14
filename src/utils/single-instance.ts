@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { Config } from "./config.js";
+import type { Config } from "../config/index.js";
 
 /**
  * 若 PID 仍存活则返回 true；ESRCH 视为已退出。

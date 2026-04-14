@@ -7,7 +7,7 @@
   "scripts": {
     "build": "npm run build:adapter && npm run build:bridge",
     "build:bridge": "tsc",
-    "build:adapter": "tsc -p cursor-agent-acp/tsconfig.json",
+    "build:adapter": "tsc -p vendor/cursor-agent-acp/tsconfig.json",
     "typecheck": "tsc --noEmit",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",

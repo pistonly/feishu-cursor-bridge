@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   parseIncomingResourceFromMessage,
   parsePostEmbeddedImageKeys,
-} from "./feishu-bot.js";
+} from "./feishu/bot.js";
 
 test("parseIncomingResourceFromMessage 识别 image 与 file", () => {
   assert.deepEqual(

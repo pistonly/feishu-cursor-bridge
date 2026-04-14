@@ -1,5 +1,5 @@
-import { parseShellLikeArgs } from "./config.js";
-import type { AcpBackend } from "./acp/runtime-contract.js";
+import { parseShellLikeArgs } from "../config/index.js";
+import type { AcpBackend } from "../acp/runtime-contract.js";
 
 export function matchesInterruptUserCommand(content: string): boolean {
   const normalized = content

@@ -1,52 +1,52 @@
-import type { Config } from "./config.js";
+import type { Config } from "../config/index.js";
 import * as path from "node:path";
 import {
   AcpRuntimeRegistry,
   formatAcpBackendLabel,
   resolveAdapterSessionTimeoutMs,
-} from "./acp/runtime.js";
+} from "../acp/runtime.js";
 import type {
   AcpBackend,
   AcpSessionModelState,
   AcpSessionUsageState,
   BridgeAcpRuntime,
-} from "./acp/runtime-contract.js";
-import { formatJsonRpcLikeError } from "./format-json-rpc-error.js";
+} from "../acp/runtime-contract.js";
+import { formatJsonRpcLikeError } from "../utils/format-json-rpc-error.js";
 import {
   FeishuBot,
   FEISHU_INCOMING_DIR_NAME,
   type FeishuIncomingResource,
   type FeishuMessage,
-} from "./feishu-bot.js";
+} from "../feishu/bot.js";
 import {
   matchesBridgeHelpCommand,
   matchesBridgeStartCommand,
   matchesInterruptUserCommand,
   parseNewConversationCommand,
-} from "./parse-new-conversation.js";
-import { SessionManager, type SessionSlot } from "./session-manager.js";
-import { SessionStore } from "./session-store.js";
+} from "../commands/parse-new-conversation.js";
+import { SessionManager, type SessionSlot } from "../session/manager.js";
+import { SessionStore } from "../session/store.js";
 import { ConversationService } from "./conversation-service.js";
-import { resolveAllowedWorkspaceDir } from "./workspace-policy.js";
-import { WorkspacePresetsStore } from "./workspace-presets-store.js";
-import { captureAcpReplayDuring } from "./acp/replay-capture.js";
+import { resolveAllowedWorkspaceDir } from "../session/workspace-policy.js";
+import { WorkspacePresetsStore } from "../session/workspace-presets-store.js";
+import { captureAcpReplayDuring } from "../acp/replay-capture.js";
 import {
   formatModelSwitchFailure,
   formatModelUsage,
   resolveModelSelectorInput,
-} from "./model-switch.js";
+} from "../commands/model-switch.js";
 import {
   formatModeSwitchFailure,
   formatModeUsage,
   resolveSessionModeInput,
-} from "./mode-switch.js";
+} from "../commands/mode-switch.js";
 import {
   parseFilebackUserMessage,
   FILEBACK_USAGE_TEXT,
   wrapFilebackPromptForAgent,
-} from "./fileback-command.js";
+} from "../commands/fileback-command.js";
 import { formatBridgeCommandsHelp } from "./bridge-commands-help.js";
-import { buildWorkspaceWithBackendSelectCardMarkdown, buildWelcomeCardMarkdown } from "./feishu-interactive-cards.js";
+import { buildWorkspaceWithBackendSelectCardMarkdown, buildWelcomeCardMarkdown } from "../feishu/interactive-cards.js";
 
 /** 无活跃 session 时，普通对话与部分命令的统一提示 */
 const NO_SESSION_HINT =

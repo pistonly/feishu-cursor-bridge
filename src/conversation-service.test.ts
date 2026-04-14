@@ -2,15 +2,15 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import test from "node:test";
 import type { BridgeAcpEvent } from "./acp/types.js";
-import { ConversationService } from "./conversation-service.js";
-import type { Config } from "./config.js";
+import { ConversationService } from "./bridge/conversation-service.js";
+import type { Config } from "./config/index.js";
 import type {
   AcpSessionModelState,
   AcpSessionUsageState,
   BridgeAcpRuntime,
 } from "./acp/runtime-contract.js";
-import type { FeishuMessage } from "./feishu-bot.js";
-import type { UserSession } from "./session-manager.js";
+import type { FeishuMessage } from "./feishu/bot.js";
+import type { UserSession } from "./session/manager.js";
 
 function createTestConfig(): Config {
   return {

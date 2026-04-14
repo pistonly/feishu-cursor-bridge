@@ -6,8 +6,8 @@ import {
   resolveLegacyAdapterSourceEntry,
   resolveBundledTmuxAcpServerEntry,
   resolveBundledTsxCliEntry,
-} from "./acp/paths.js";
-import type { AcpBackend } from "./acp/runtime-contract.js";
+} from "../acp/paths.js";
+import type { AcpBackend } from "../acp/runtime-contract.js";
 
 /**
  * 是否由 `tsx src/index.ts`（即 `npm run dev`）启动桥接主进程。

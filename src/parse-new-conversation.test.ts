@@ -5,7 +5,7 @@ import {
   matchesBridgeStartCommand,
   matchesInterruptUserCommand,
   parseNewConversationCommand,
-} from "./parse-new-conversation.js";
+} from "./commands/parse-new-conversation.js";
 
 test("parseNewConversationCommand 支持 /reply 默认当前活跃 session", () => {
   assert.deepEqual(parseNewConversationCommand("/reply"), {

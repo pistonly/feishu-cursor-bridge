@@ -5,7 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { loadConfig, type Config } from "./config.js";
+import { loadConfig, type Config } from "./config/index.js";
 import type { FeishuBridgeClient } from "./acp/feishu-bridge-client.js";
 import { ClaudeAcpRuntime } from "./acp/claude-runtime.js";
 import { CodexAcpRuntime } from "./acp/codex-runtime.js";
@@ -32,7 +32,7 @@ type CursorCliBridgeConstructor = new (
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const { CursorCliBridge } = require(
-  path.join(repoRoot, "cursor-agent-acp", "dist", "cursor", "cli-bridge.js"),
+  path.join(repoRoot, "vendor", "cursor-agent-acp", "dist", "cursor", "cli-bridge.js"),
 ) as {
   CursorCliBridge: CursorCliBridgeConstructor;
 };
@@ -790,7 +790,7 @@ test("loadConfig legacy 在 tsx src/index.ts 入口下默认使用适配器源�
         const config = loadConfig();
         assert.equal(config.acp.backend, "cursor-legacy");
         const norm = config.acp.adapterEntry.replace(/\\/g, "/");
-        assert.ok(norm.endsWith("cursor-agent-acp/src/bin/cursor-agent-acp.ts"));
+        assert.ok(norm.endsWith("vendor/cursor-agent-acp/src/bin/cursor-agent-acp.ts"));
         assert.ok(config.acp.adapterTsxCli && config.acp.adapterTsxCli.length > 0);
       },
     );

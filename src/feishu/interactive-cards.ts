@@ -1,4 +1,4 @@
-import type { AcpBackend } from "./acp/runtime-contract.js";
+import type { AcpBackend } from "../acp/runtime-contract.js";
 
 /**
  * 交互式卡片数据结构

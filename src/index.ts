@@ -1,9 +1,9 @@
 import "dotenv/config";
-import { loadConfig } from "./config.js";
+import { loadConfig } from "./config/index.js";
 import { formatAcpBackendLabel } from "./acp/runtime.js";
-import { Bridge } from "./bridge.js";
-import { installFileLogger } from "./file-logger.js";
-import { acquireSingleInstanceLock } from "./single-instance.js";
+import { Bridge } from "./bridge/bridge.js";
+import { installFileLogger } from "./utils/file-logger.js";
+import { acquireSingleInstanceLock } from "./utils/single-instance.js";
 
 function enableNodeEnvProxyForChildren(): void {
   if (process.env["NODE_USE_ENV_PROXY"]?.trim()) return;
