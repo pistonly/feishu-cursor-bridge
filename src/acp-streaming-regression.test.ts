@@ -1,10 +1,17 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import {
+  resolveBundledTsxCliEntry,
+  resolveLegacyAdapterDistEntry,
+  resolveLegacyAdapterSourceEntry,
+} from "./acp/paths.js";
 import { loadConfig, type Config } from "./config/index.js";
 import type { FeishuBridgeClient } from "./acp/feishu-bridge-client.js";
 import { ClaudeAcpRuntime } from "./acp/claude-runtime.js";
@@ -31,6 +38,9 @@ type CursorCliBridgeConstructor = new (
 ) => TestCursorCliBridge;
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const repoPackageVersion = JSON.parse(
+  readFileSync(path.join(repoRoot, "package.json"), "utf8"),
+)["version"] as string;
 const { CursorCliBridge } = require(
   path.join(repoRoot, "vendor", "cursor-agent-acp", "dist", "cursor", "cli-bridge.js"),
 ) as {
@@ -797,6 +807,38 @@ test("loadConfig legacy 在 tsx src/index.ts 入口下默认使用适配器源�
   } finally {
     process.argv[1] = savedArgv1;
   }
+});
+
+test("legacy adapter CLI 在 source/dist 入口都能解析仓库根版本号", () => {
+  const distVersion = spawnSync(
+    process.execPath,
+    [resolveLegacyAdapterDistEntry(), "--version"],
+    {
+      cwd: repoRoot,
+      encoding: "utf8",
+    },
+  );
+  assert.equal(distVersion.status, 0, distVersion.stderr || distVersion.stdout);
+  assert.equal(distVersion.stdout.trim(), repoPackageVersion);
+
+  const sourceVersion = spawnSync(
+    process.execPath,
+    [
+      resolveBundledTsxCliEntry(),
+      resolveLegacyAdapterSourceEntry(),
+      "--version",
+    ],
+    {
+      cwd: repoRoot,
+      encoding: "utf8",
+    },
+  );
+  assert.equal(
+    sourceVersion.status,
+    0,
+    sourceVersion.stderr || sourceVersion.stdout,
+  );
+  assert.equal(sourceVersion.stdout.trim(), repoPackageVersion);
 });
 
 test("loadConfig 会解析 tmux ACP 后端与内置 server 配置", async () => {
