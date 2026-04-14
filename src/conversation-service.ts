@@ -146,9 +146,17 @@ export class ConversationService {
 
     let lastFlush = 0;
     let cardPatchChain: Promise<void> = Promise.resolve();
+    let toolRefreshTimer: ReturnType<typeof setTimeout> | undefined;
 
     const awaitPatchChain = async (): Promise<void> => {
       await cardPatchChain;
+    };
+
+    const clearToolRefreshTimer = (): void => {
+      if (toolRefreshTimer) {
+        clearTimeout(toolRefreshTimer);
+        toolRefreshTimer = undefined;
+      }
     };
 
     const syncRenderedCards = (force: boolean, label: string): void => {
@@ -220,6 +228,18 @@ export class ConversationService {
       });
     };
 
+    const scheduleToolRefresh = (): void => {
+      clearToolRefreshTimer();
+      const delayMs = state.nextToolRefreshDelayMs();
+      if (delayMs == null) return;
+      toolRefreshTimer = setTimeout(() => {
+        toolRefreshTimer = undefined;
+        syncStatusSummary();
+        syncRenderedCards(false, "[conversation] tool elapsed syncRenderedCards failed");
+        scheduleToolRefresh();
+      }, delayMs);
+    };
+
     const processAcpEvent = async (ev: BridgeAcpEvent): Promise<void> => {
       if (ev.type === "agent_message_chunk") {
         aggregatedMain += ev.text;
@@ -231,6 +251,7 @@ export class ConversationService {
 
       sawRenderableEvent = true;
       state.apply(ev);
+      scheduleToolRefresh();
       syncRenderedCards(false, "[conversation] syncRenderedCards failed");
     };
 
@@ -357,6 +378,7 @@ export class ConversationService {
 
       return state.toMarkdown();
     } finally {
+      clearToolRefreshTimer();
       this.acp.bridgeClient.setFeishuPromptContext(session.sessionId, undefined);
       this.acp.bridgeClient.off("acp", onAcp);
     }

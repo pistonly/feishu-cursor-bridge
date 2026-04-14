@@ -49,6 +49,16 @@ type CardChunkOptions = {
   maxTools: number;
 };
 
+type ToolElapsedHintOptions = {
+  activeToolElapsedHintDelayMs: number;
+  activeToolElapsedHintIntervalMs: number;
+};
+
+const DEFAULT_TOOL_ELAPSED_HINT_OPTIONS: ToolElapsedHintOptions = {
+  activeToolElapsedHintDelayMs: 10_000,
+  activeToolElapsedHintIntervalMs: 10_000,
+};
+
 type RenderSection = {
   kind: "status" | "mode" | "plan" | "tool" | "thought" | "main" | "commands";
   markdown: string;
@@ -63,6 +73,7 @@ type TimelineEntry =
       toolCallId: string;
       title: string;
       status: string;
+      startedAtMs: number;
       toolKind?: ToolKind;
     }
   | { k: "mode"; markdown: string }
@@ -72,8 +83,13 @@ type TimelineEntry =
 export class FeishuCardState {
   private timeline: TimelineEntry[] = [];
   private statusSummary = "";
+  private toolTimelineIndexById = new Map<string, number>();
 
-  constructor(private readonly showAcpAvailableCommands = false) {}
+  constructor(
+    private readonly showAcpAvailableCommands = false,
+    private readonly toolElapsedHintOptions: ToolElapsedHintOptions =
+      DEFAULT_TOOL_ELAPSED_HINT_OPTIONS,
+  ) {}
 
   setStatusSummary(summary: string): void {
     this.statusSummary = summary.trim();
@@ -111,11 +127,12 @@ export class FeishuCardState {
         }
         break;
       case "tool_call":
-        this.timeline.push({
+        this.upsertToolEntry({
           k: "tool",
           toolCallId: ev.toolCallId,
           title: ev.title,
-          status: ev.status,
+          status: this.normalizeIncomingToolStatus(ev.status),
+          startedAtMs: Date.now(),
           ...(ev.kind !== undefined ? { toolKind: ev.kind } : {}),
         });
         break;
@@ -123,11 +140,21 @@ export class FeishuCardState {
         const prev = this.lastToolState(ev.toolCallId);
         const title = ev.title ?? prev?.title ?? ev.toolCallId;
         const toolKind = ev.kind ?? prev?.toolKind;
-        this.timeline.push({
+        const status = this.normalizeIncomingToolStatus(ev.status, prev?.status);
+        if (
+          prev &&
+          prev.title === title &&
+          prev.status === status &&
+          prev.toolKind === toolKind
+        ) {
+          break;
+        }
+        this.upsertToolEntry({
           k: "tool",
           toolCallId: ev.toolCallId,
           title,
-          status: ev.status,
+          status,
+          startedAtMs: prev?.startedAtMs ?? Date.now(),
           ...(toolKind !== undefined ? { toolKind } : {}),
         });
         break;
@@ -139,18 +166,32 @@ export class FeishuCardState {
 
   private lastToolState(
     toolCallId: string,
-  ): { title: string; status: string; toolKind?: ToolKind } | undefined {
-    for (let i = this.timeline.length - 1; i >= 0; i--) {
-      const e = this.timeline[i]!;
-      if (e.k === "tool" && e.toolCallId === toolCallId) {
-        return {
-          title: e.title,
-          status: e.status,
-          ...(e.toolKind !== undefined ? { toolKind: e.toolKind } : {}),
-        };
-      }
+  ): {
+    title: string;
+    status: string;
+    startedAtMs: number;
+    toolKind?: ToolKind;
+  } | undefined {
+    const index = this.toolTimelineIndexById.get(toolCallId);
+    if (index == null) return undefined;
+    const e = this.timeline[index];
+    if (!e || e.k !== "tool") return undefined;
+    return {
+      title: e.title,
+      status: e.status,
+      startedAtMs: e.startedAtMs,
+      ...(e.toolKind !== undefined ? { toolKind: e.toolKind } : {}),
+    };
+  }
+
+  private upsertToolEntry(entry: Extract<TimelineEntry, { k: "tool" }>): void {
+    const index = this.toolTimelineIndexById.get(entry.toolCallId);
+    if (index == null) {
+      this.timeline.push(entry);
+      this.toolTimelineIndexById.set(entry.toolCallId, this.timeline.length - 1);
+      return;
     }
-    return undefined;
+    this.timeline[index] = entry;
   }
 
   private appendMain(text: string): void {
@@ -173,12 +214,17 @@ export class FeishuCardState {
 
   reset(): void {
     this.timeline = [];
+    this.toolTimelineIndexById.clear();
   }
 
   clone(): FeishuCardState {
-    const next = new FeishuCardState(this.showAcpAvailableCommands);
+    const next = new FeishuCardState(
+      this.showAcpAvailableCommands,
+      this.toolElapsedHintOptions,
+    );
     next.timeline = this.timeline.map((e) => ({ ...e }));
     next.statusSummary = this.statusSummary;
+    next.toolTimelineIndexById = new Map(this.toolTimelineIndexById);
     return next;
   }
 
@@ -227,10 +273,29 @@ export class FeishuCardState {
     return this.toMarkdown().length;
   }
 
-  toCardMarkdownChunks(opts: CardChunkOptions): string[] {
+  hasActiveTool(): boolean {
+    return this.timeline.some(
+      (entry) => entry.k === "tool" && this.isToolActiveStatus(entry.status),
+    );
+  }
+
+  nextToolRefreshDelayMs(nowMs = Date.now()): number | undefined {
+    let nextRefreshAtMs: number | undefined;
+    for (const entry of this.timeline) {
+      if (entry.k !== "tool" || !this.isToolActiveStatus(entry.status)) continue;
+      const refreshAtMs = this.nextToolRefreshAtMs(entry.startedAtMs, nowMs);
+      if (refreshAtMs == null) continue;
+      nextRefreshAtMs =
+        nextRefreshAtMs == null ? refreshAtMs : Math.min(nextRefreshAtMs, refreshAtMs);
+    }
+    if (nextRefreshAtMs == null) return undefined;
+    return Math.max(0, nextRefreshAtMs - nowMs);
+  }
+
+  toCardMarkdownChunks(opts: CardChunkOptions, nowMs = Date.now()): string[] {
     if (!this.hasContent()) return ["_（暂无输出）_"];
 
-    const sections = this.buildSections(opts);
+    const sections = this.buildSections(opts, nowMs);
     const chunks: string[] = [];
     let current = "";
 
@@ -253,15 +318,15 @@ export class FeishuCardState {
     return chunks.length > 0 ? chunks : ["_（暂无输出）_"];
   }
 
-  toMarkdown(): string {
+  toMarkdown(nowMs = Date.now()): string {
     return this.toCardMarkdownChunks({
       maxMarkdownLength: Number.MAX_SAFE_INTEGER,
       maxTools: Number.MAX_SAFE_INTEGER,
-    })[0]!;
+    }, nowMs)[0]!;
   }
 
   /** 按时间线顺序展开为区块（思考为行内 🤔/💡；同类型连续条目先合并再切分长度）。 */
-  private buildSections(opts: CardChunkOptions): RenderSection[] {
+  private buildSections(opts: CardChunkOptions, nowMs: number): RenderSection[] {
     const parts: RenderSection[] = [];
     if (this.statusSummary) {
       parts.push(
@@ -345,7 +410,7 @@ export class FeishuCardState {
         while (i < tl.length && tl[i]!.k === "tool") {
           const t = tl[i] as Extract<TimelineEntry, { k: "tool" }>;
           const emoji = emojiForToolKind(t.toolKind);
-          lines.push(`${emoji} ${t.title} — ${t.status}`);
+          lines.push(`${emoji} ${t.title} — ${this.formatToolStatus(t, nowMs)}`);
           i++;
         }
         parts.push(
@@ -505,5 +570,90 @@ export class FeishuCardState {
 
     pushCurrent();
     return sections;
+  }
+
+  private normalizeIncomingToolStatus(status: string, fallback?: string): string {
+    const trimmed = status.trim();
+    if (trimmed === "?") {
+      return fallback ?? "in_progress";
+    }
+    if (trimmed) {
+      return trimmed;
+    }
+    return fallback ?? "in_progress";
+  }
+
+  private isToolActiveStatus(status: string): boolean {
+    return (
+      status === "pending" ||
+      status === "in_progress" ||
+      status === "running"
+    );
+  }
+
+  private nextToolRefreshAtMs(
+    startedAtMs: number,
+    nowMs: number,
+  ): number | undefined {
+    const { activeToolElapsedHintDelayMs, activeToolElapsedHintIntervalMs } =
+      this.toolElapsedHintOptions;
+    if (activeToolElapsedHintDelayMs <= 0 || activeToolElapsedHintIntervalMs <= 0) {
+      return undefined;
+    }
+    const elapsedMs = Math.max(0, nowMs - startedAtMs);
+    if (elapsedMs < activeToolElapsedHintDelayMs) {
+      return startedAtMs + activeToolElapsedHintDelayMs;
+    }
+    const elapsedSinceHintMs = elapsedMs - activeToolElapsedHintDelayMs;
+    const nextBucket =
+      Math.floor(elapsedSinceHintMs / activeToolElapsedHintIntervalMs) + 1;
+    return (
+      startedAtMs +
+      activeToolElapsedHintDelayMs +
+      nextBucket * activeToolElapsedHintIntervalMs
+    );
+  }
+
+  private formatToolStatus(
+    entry: Extract<TimelineEntry, { k: "tool" }>,
+    nowMs: number,
+  ): string {
+    const baseStatus = entry.status;
+    if (!this.isToolActiveStatus(baseStatus)) {
+      return baseStatus;
+    }
+
+    const { activeToolElapsedHintDelayMs, activeToolElapsedHintIntervalMs } =
+      this.toolElapsedHintOptions;
+    if (activeToolElapsedHintDelayMs <= 0 || activeToolElapsedHintIntervalMs <= 0) {
+      return baseStatus;
+    }
+
+    const elapsedMs = Math.max(0, nowMs - entry.startedAtMs);
+    if (elapsedMs < activeToolElapsedHintDelayMs) {
+      return baseStatus;
+    }
+
+    const elapsedHintMs =
+      activeToolElapsedHintDelayMs +
+      Math.floor(
+        (elapsedMs - activeToolElapsedHintDelayMs) / activeToolElapsedHintIntervalMs,
+      ) *
+        activeToolElapsedHintIntervalMs;
+
+    return `${baseStatus} (${this.formatElapsed(elapsedHintMs)})`;
+  }
+
+  private formatElapsed(elapsedMs: number): string {
+    const totalSeconds = Math.max(1, Math.floor(elapsedMs / 1000));
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    if (minutes <= 0) {
+      return `${totalSeconds}s`;
+    }
+    if (seconds === 0) {
+      return `${minutes}m`;
+    }
+    return `${minutes}m ${seconds}s`;
   }
 }
