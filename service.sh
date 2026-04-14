@@ -12,7 +12,9 @@ UNIT_NAME="feishu-cursor-bridge.service"
 UNIT_DIR="$HOME/.config/systemd/user"
 UNIT_FILE="$UNIT_DIR/$UNIT_NAME"
 BOT_DIR="$(cd "$(dirname "$0")" && pwd)"
+DOTENV_FILE="$BOT_DIR/.env"
 LOG_FILE_MACOS="/tmp/feishu-cursor-bridge.log"
+ENTRY_JS="$BOT_DIR/dist/index.js"
 
 NODE_BIN="$(command -v node 2>/dev/null || true)"
 if [[ -z "$NODE_BIN" ]]; then
@@ -50,6 +52,192 @@ service_path_macos() {
     echo "$(dirname "$NODE_BIN"):$HOME/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 }
 
+trim_whitespace() {
+    local value="$1"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    printf '%s\n' "$value"
+}
+
+strip_matching_quotes() {
+    local value="$1"
+    if [[ ${#value} -ge 2 ]]; then
+        if [[ "$value" == \"*\" && "$value" == *\" ]]; then
+            value="${value:1:${#value}-2}"
+        elif [[ "$value" == \'*\' && "$value" == *\' ]]; then
+            value="${value:1:${#value}-2}"
+        fi
+    fi
+    printf '%s\n' "$value"
+}
+
+dotenv_get_value_fallback() {
+    local key="$1"
+    [[ -f "$DOTENV_FILE" ]] || return 1
+
+    local value
+    value="$(awk -v key="$key" '
+        BEGIN {
+            pattern = "^[[:space:]]*(export[[:space:]]+)?" key "[[:space:]]*="
+        }
+        $0 ~ pattern {
+            raw = $0
+            sub(pattern, "", raw)
+            value = raw
+            found = 1
+        }
+        END {
+            if (!found) exit 1
+            print value
+        }
+    ' "$DOTENV_FILE")" || return 1
+
+    value="$(trim_whitespace "$value")"
+    value="$(strip_matching_quotes "$value")"
+    printf '%s\n' "$value"
+}
+
+dotenv_get_value() {
+    local key="$1"
+    [[ -f "$DOTENV_FILE" ]] || return 1
+
+    local value
+    if value="$("$NODE_BIN" --input-type=module -e '
+        import fs from "node:fs";
+
+        const [key, envFile] = process.argv.slice(1);
+
+        try {
+          const dotenv = await import("dotenv");
+          const parsed = dotenv.parse(fs.readFileSync(envFile));
+          if (!(key in parsed)) process.exit(1);
+          process.stdout.write(parsed[key]);
+        } catch (error) {
+          process.exit(2);
+        }
+    ' "$key" "$DOTENV_FILE" 2>/dev/null)"; then
+        printf '%s\n' "$value"
+        return 0
+    fi
+
+    dotenv_get_value_fallback "$key"
+}
+
+expand_home_path() {
+    local p="$1"
+    if [[ "$p" == "~/"* ]]; then
+        printf '%s\n' "$HOME/${p#\~/}"
+    else
+        printf '%s\n' "$p"
+    fi
+}
+
+resolve_path_like_app() {
+    local raw_path="$1"
+    local expanded
+    expanded="$(expand_home_path "$raw_path")"
+
+    "$NODE_BIN" --input-type=module -e '
+        import path from "node:path";
+
+        const [baseDir, targetPath] = process.argv.slice(1);
+        process.stdout.write(path.resolve(baseDir, targetPath));
+    ' "$BOT_DIR" "$expanded"
+}
+
+print_app_log_config() {
+    local default_app_log="$HOME/.feishu-cursor-bridge/logs/bridge.log"
+    local enabled_raw enabled_lower app_log_raw app_log_path
+
+    enabled_raw="$(dotenv_get_value "EXPERIMENT_LOG_TO_FILE" 2>/dev/null || true)"
+    app_log_raw="$(dotenv_get_value "EXPERIMENT_LOG_FILE" 2>/dev/null || true)"
+    if [[ -n "$app_log_raw" ]]; then
+        app_log_path="$(resolve_path_like_app "$app_log_raw")"
+    else
+        app_log_path="$default_app_log"
+    fi
+
+    if [[ ! -f "$DOTENV_FILE" ]]; then
+        echo "  🧪 应用日志(.env): 未检测到 $DOTENV_FILE（默认关闭；启用后路径: $app_log_path）"
+        return
+    fi
+
+    enabled_lower="$(printf '%s' "${enabled_raw:-false}" | tr '[:upper:]' '[:lower:]')"
+    if [[ "$enabled_lower" == "true" ]]; then
+        echo "  🧪 应用日志(.env): 已启用 -> $app_log_path"
+    else
+        echo "  🧪 应用日志(.env): 未启用（EXPERIMENT_LOG_TO_FILE=${enabled_raw:-false}；启用后路径: $app_log_path）"
+    fi
+}
+
+plist_extract_raw() {
+    local key="$1"
+    [[ -f "$PLIST" ]] || return 1
+    plutil -extract "$key" raw -o - "$PLIST" 2>/dev/null
+}
+
+plist_needs_refresh() {
+    [[ -f "$PLIST" ]] || return 0
+
+    local plist_node plist_entry plist_workdir
+    plist_node="$(plist_extract_raw "ProgramArguments.0" || true)"
+    plist_entry="$(plist_extract_raw "ProgramArguments.1" || true)"
+    plist_workdir="$(plist_extract_raw "WorkingDirectory" || true)"
+
+    [[ "$plist_node" != "$NODE_BIN" || "$plist_entry" != "$ENTRY_JS" || "$plist_workdir" != "$BOT_DIR" ]]
+}
+
+print_plist_drift() {
+    local plist_node plist_entry plist_workdir
+    plist_node="$(plist_extract_raw "ProgramArguments.0" || true)"
+    plist_entry="$(plist_extract_raw "ProgramArguments.1" || true)"
+    plist_workdir="$(plist_extract_raw "WorkingDirectory" || true)"
+
+    [[ "$plist_node" != "$NODE_BIN" ]] && echo "  ⚠️  plist 中的 Node 路径已过期: $plist_node"
+    [[ "$plist_entry" != "$ENTRY_JS" ]] && echo "  ⚠️  plist 中的入口路径已过期: $plist_entry"
+    [[ "$plist_workdir" != "$BOT_DIR" ]] && echo "  ⚠️  plist 中的工作目录已过期: $plist_workdir"
+}
+
+refresh_plist_if_needed() {
+    if plist_needs_refresh; then
+        echo "  ℹ️  检测到 plist 配置与当前仓库路径或 Node 路径不一致，正在刷新..."
+        generate_plist
+        return 0
+    fi
+    return 1
+}
+
+launchd_target() {
+    echo "gui/$(id -u)/$LABEL_LAUNCHD"
+}
+
+launchd_is_loaded() {
+    launchctl print "$(launchd_target)" &>/dev/null
+}
+
+launchd_print() {
+    launchctl print "$(launchd_target)" 2>/dev/null
+}
+
+verify_darwin_service_running() {
+    local status pid state last_exit
+    status="$(launchd_print || true)"
+    pid="$(printf '%s\n' "$status" | awk '/pid =/ {print $3; exit}')"
+
+    if [[ -n "$pid" && "$pid" != "0" ]]; then
+        echo "  ✅ 服务已启动 (PID: $pid)"
+        return 0
+    fi
+
+    state="$(printf '%s\n' "$status" | awk -F'= ' '/state =/ {print $2; exit}')"
+    last_exit="$(printf '%s\n' "$status" | awk -F'= ' '/last exit code =/ {print $2; exit}')"
+    echo "  ❌ 服务未正常运行"
+    [[ -n "$state" ]] && echo "  ℹ️  launchd state: $state"
+    [[ -n "$last_exit" ]] && echo "  ℹ️  last exit code: $last_exit"
+    echo "  📝 查看服务日志: tail -n 100 $LOG_FILE_MACOS"
+    return 1
+}
+
 generate_plist() {
     cat > "$PLIST" <<PEOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -62,7 +250,7 @@ generate_plist() {
 	<key>ProgramArguments</key>
 	<array>
 		<string>$NODE_BIN</string>
-		<string>$BOT_DIR/dist/index.js</string>
+		<string>$ENTRY_JS</string>
 	</array>
 
 	<key>WorkingDirectory</key>
@@ -130,9 +318,15 @@ require_systemctl() {
 cmd_install_darwin() {
     echo "📦 安装 launchd 自启动（macOS）..."
     generate_plist
-    launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null || true
-    echo "  ✅ 服务已安装并启动"
-    echo "  📝 日志: tail -f $LOG_FILE_MACOS"
+    launchctl enable "$(launchd_target)" 2>/dev/null || true
+    if launchd_is_loaded; then
+        launchctl bootout "$(launchd_target)" 2>/dev/null || true
+    fi
+    launchctl bootstrap "gui/$(id -u)" "$PLIST"
+    sleep 1
+    verify_darwin_service_running
+    echo "  📝 服务日志: tail -f $LOG_FILE_MACOS"
+    print_app_log_config
     echo "  💡 Node 路径: $NODE_BIN（切换版本后请重新 install）"
 }
 
@@ -144,15 +338,16 @@ cmd_install_linux() {
     systemctl --user enable "$UNIT_NAME"
     systemctl --user restart "$UNIT_NAME" 2>/dev/null || systemctl --user start "$UNIT_NAME"
     echo "  ✅ 服务已启用并启动（systemctl --user）"
-    echo "  📝 日志: bash service.sh logs   （journalctl --user -u $UNIT_NAME -f）"
+    echo "  📝 服务日志: bash service.sh logs   （journalctl --user -u $UNIT_NAME -f）"
+    print_app_log_config
     echo "  💡 Node 路径: $NODE_BIN（切换版本后请重新 install）"
     echo "  💡 开机无登录也要启动本用户服务时，需执行一次: sudo loginctl enable-linger \"\$USER\""
 }
 
 cmd_uninstall_darwin() {
     echo "🗑  卸载 launchd..."
-    launchctl bootout "gui/$(id -u)/$LABEL_LAUNCHD" 2>/dev/null || true
-    launchctl disable "gui/$(id -u)/$LABEL_LAUNCHD" 2>/dev/null || true
+    launchctl bootout "$(launchd_target)" 2>/dev/null || true
+    launchctl disable "$(launchd_target)" 2>/dev/null || true
     rm -f "$PLIST"
     echo "  ✅ 已卸载"
 }
@@ -171,12 +366,30 @@ cmd_start_darwin() {
         echo "  ⚠️  尚未 install（无 plist），先运行: bash service.sh install"
         return
     fi
-    if launchctl print "gui/$(id -u)/$LABEL_LAUNCHD" &>/dev/null; then
-        launchctl kickstart -k "gui/$(id -u)/$LABEL_LAUNCHD"
+
+    if [[ ! -f "$ENTRY_JS" ]]; then
+        echo "  ⚠️  未找到 $ENTRY_JS，先运行: bash service.sh update"
+        return 1
+    fi
+
+    local refreshed=0
+    if refresh_plist_if_needed; then
+        refreshed=1
+    fi
+
+    launchctl enable "$(launchd_target)" 2>/dev/null || true
+    if launchd_is_loaded; then
+        if [[ "$refreshed" -eq 1 ]]; then
+            launchctl bootout "$(launchd_target)" 2>/dev/null || true
+            launchctl bootstrap "gui/$(id -u)" "$PLIST"
+        else
+            launchctl kickstart -k "$(launchd_target)"
+        fi
     else
         launchctl bootstrap "gui/$(id -u)" "$PLIST"
     fi
-    echo "  ✅ 服务已启动"
+    sleep 1
+    verify_darwin_service_running
 }
 
 cmd_start_linux() {
@@ -192,11 +405,11 @@ cmd_start_linux() {
 cmd_stop_darwin() {
     # 勿用 launchctl kill：plist 里 KeepAlive=true 时进程一结束就会被 launchd 立刻拉起。
     # bootout 会卸载该 Job（plist 仍保留），等价于「真正停掉」直到再次 start/bootstrap。
-    if ! launchctl print "gui/$(id -u)/$LABEL_LAUNCHD" &>/dev/null; then
+    if ! launchd_is_loaded; then
         echo "  ⚠️  Launch Agent 未载入（可能已 stop，或从未 install）"
         return
     fi
-    if launchctl bootout "gui/$(id -u)/$LABEL_LAUNCHD" 2>/dev/null; then
+    if launchctl bootout "$(launchd_target)" 2>/dev/null; then
         echo "  ✅ 已停止（已从 launchd 卸载；plist 仍在，可 bash service.sh start 再载入）"
     else
         echo "  ⚠️  bootout 失败（可尝试 bash service.sh status）"
@@ -217,13 +430,21 @@ cmd_status_darwin() {
     fi
     echo "  📋 标签: $LABEL_LAUNCHD"
     echo "  📁 工作目录: $BOT_DIR"
-    echo "  📝 日志文件: $LOG_FILE_MACOS"
-    if launchctl print "gui/$(id -u)/$LABEL_LAUNCHD" &>/dev/null; then
-        PID=$(launchctl print "gui/$(id -u)/$LABEL_LAUNCHD" 2>/dev/null | grep 'pid =' | awk '{print $3}')
+    echo "  📝 服务日志: $LOG_FILE_MACOS"
+    print_app_log_config
+    if plist_needs_refresh; then
+        print_plist_drift
+        echo "  💡 运行 'bash service.sh start' 或 'bash service.sh install' 可自动刷新 plist"
+    fi
+    if launchd_is_loaded; then
+        PID=$(launchd_print | grep 'pid =' | awk '{print $3}')
         if [[ -n "$PID" && "$PID" != "0" ]]; then
             echo "  🟢 运行中 (PID: $PID)"
         else
             echo "  🔴 已载入 launchd，当前进程未运行（异常）"
+            local last_exit
+            last_exit="$(launchd_print | awk -F'= ' '/last exit code =/ {print $2; exit}')"
+            [[ -n "$last_exit" ]] && echo "  ℹ️  last exit code: $last_exit"
         fi
     else
         echo "  🟡 已停止：plist 在，但未载入 launchd（stop 后属正常）"
@@ -241,14 +462,15 @@ cmd_status_linux() {
     fi
     systemctl --user --no-pager -l status "$UNIT_NAME" || true
     echo "  📁 工作目录: $BOT_DIR"
-    echo "  📝 日志: journalctl --user -u $UNIT_NAME -n 50 --no-pager"
+    echo "  📝 服务日志: journalctl --user -u $UNIT_NAME -n 50 --no-pager"
+    print_app_log_config
 }
 
 cmd_logs_darwin() {
     if [[ -f "$LOG_FILE_MACOS" ]]; then
         tail -f "$LOG_FILE_MACOS"
     else
-        echo "  ⚠️  日志文件不存在: $LOG_FILE_MACOS"
+        echo "  ⚠️  服务日志文件不存在: $LOG_FILE_MACOS"
     fi
 }
 
