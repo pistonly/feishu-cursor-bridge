@@ -1422,6 +1422,15 @@ export class Bridge {
         const modelState = runtime.getSessionModelState(activeSessionForModel.sessionId);
         const resolved = resolveModelSelectorInput(modelId, modelState);
         await runtime.setSessionModel(activeSessionForModel.sessionId, resolved.modelId);
+        if (activeSessionForModel.backend === "codex") {
+          this.sessionManager.setActiveSessionPreferredModel(
+            msg.chatId,
+            msg.senderId,
+            msg.chatType,
+            resolved.modelId,
+            this.threadScope(msg),
+          );
+        }
         const okText =
           resolved.pickedByIndex != null
             ? `✅ 已按序号 ${resolved.pickedByIndex} 切换为 \`${resolved.modelId}\`（后续对话将使用该模型）。`

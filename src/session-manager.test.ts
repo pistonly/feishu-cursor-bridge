@@ -44,6 +44,28 @@ function createPersistedGroup(cursorCliChatId = "cli-old"): PersistedSessionGrou
   };
 }
 
+function createPersistedCodexGroup(
+  preferredModelId = "gpt-5.3-codex/low",
+): PersistedSessionGroup {
+  return {
+    chatId: CHAT_ID,
+    userId: USER_ID,
+    chatType: "p2p",
+    activeSlotIndex: 1,
+    nextSlotIndex: 2,
+    slots: [
+      {
+        slotIndex: 1,
+        backend: "codex",
+        sessionId: "codex-old",
+        preferredModelId,
+        workspaceRoot: WORKSPACE_ROOT,
+        lastActiveAt: Date.now(),
+      },
+    ],
+  };
+}
+
 async function createStoreFile(group: PersistedSessionGroup): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "bridge-session-manager-"));
   const filePath = path.join(dir, "sessions.json");
@@ -414,5 +436,113 @@ test("getSessionSnapshotLoaded 会在内存为空时从 store 恢复当前快照
   assert.equal(snapshot.activeSlot.session.workspaceRoot, WORKSPACE_ROOT);
   assert.deepEqual(loadSessionCalls, ["acp-old"]);
   assert.deepEqual(manager.getStats(), { active: 1, total: 1 });
+  await waitForFlushes();
+});
+
+test("setActiveSessionPreferredModel 会把 codex 模型选择持久化到 store", async () => {
+  const storeFile = await createEmptyStoreFile();
+
+  const acp: FakeAcpRuntime = {
+    supportsLoadSession: false,
+    supportsSetSessionMode: false,
+    supportsSetSessionModel: true,
+    async newSession(): Promise<{ sessionId: string }> {
+      return { sessionId: "codex-live" };
+    },
+    async loadSession(): Promise<void> {},
+    async cancelSession(): Promise<void> {},
+    async closeSession(): Promise<void> {},
+  };
+
+  const store = new SessionStore(storeFile);
+  const waitForFlushes = trackPendingFlushes(store);
+  const manager = new SessionManager(
+    acp as BridgeAcpRuntime,
+    store,
+    60_000,
+    { defaultWorkspaceRoot: WORKSPACE_ROOT, defaultBackend: "codex" },
+  );
+
+  await manager.init();
+  await manager.createNewSlot(CHAT_ID, USER_ID, "p2p", WORKSPACE_ROOT, "codex");
+  manager.setActiveSessionPreferredModel(
+    CHAT_ID,
+    USER_ID,
+    "p2p",
+    "gpt-5.3-codex/low",
+  );
+  await waitForFlushes();
+
+  const persisted = JSON.parse(await fs.readFile(storeFile, "utf8")) as {
+    sessions: Record<string, PersistedSessionGroup>;
+  };
+  assert.equal(
+    persisted.sessions[SESSION_KEY]?.slots[0]?.preferredModelId,
+    "gpt-5.3-codex/low",
+  );
+});
+
+test("restoreGroupFromStore 会在 codex loadSession 后自动恢复已持久化的模型选择", async () => {
+  const storeFile = await createStoreFile(
+    createPersistedCodexGroup("gpt-5.3-codex/low"),
+  );
+
+  const loadSessionCalls: string[] = [];
+  const setModelCalls: Array<{ sessionId: string; modelId: string }> = [];
+  let currentModelId = "gpt-5.4/medium";
+  const acp = {
+    supportsLoadSession: true,
+    supportsSetSessionMode: false,
+    supportsSetSessionModel: true,
+    async newSession(): Promise<{ sessionId: string }> {
+      throw new Error("should not create new session");
+    },
+    async loadSession(sessionId: string): Promise<void> {
+      loadSessionCalls.push(sessionId);
+    },
+    getSessionModelState(): { currentModelId: string; availableModels: Array<{ modelId: string }> } {
+      return {
+        currentModelId,
+        availableModels: [
+          { modelId: "gpt-5.4/medium" },
+          { modelId: "gpt-5.3-codex/low" },
+        ],
+      };
+    },
+    async setSessionModel(sessionId: string, modelId: string): Promise<void> {
+      setModelCalls.push({ sessionId, modelId });
+      currentModelId = modelId;
+    },
+    async cancelSession(): Promise<void> {},
+    async closeSession(): Promise<void> {},
+  } as FakeAcpRuntime &
+    Pick<BridgeAcpRuntime, "getSessionModelState" | "setSessionModel">;
+
+  const store = new SessionStore(storeFile);
+  const waitForFlushes = trackPendingFlushes(store);
+  const manager = new SessionManager(
+    acp as BridgeAcpRuntime,
+    store,
+    60_000,
+    { defaultWorkspaceRoot: WORKSPACE_ROOT, defaultBackend: "codex" },
+  );
+
+  await manager.init();
+  const snapshot = await manager.getSessionSnapshotLoaded(
+    CHAT_ID,
+    USER_ID,
+    "p2p",
+  );
+
+  assert.ok(snapshot);
+  assert.equal(snapshot.activeSlot.session.sessionId, "codex-old");
+  assert.equal(
+    snapshot.activeSlot.session.preferredModelId,
+    "gpt-5.3-codex/low",
+  );
+  assert.deepEqual(loadSessionCalls, ["codex-old"]);
+  assert.deepEqual(setModelCalls, [
+    { sessionId: "codex-old", modelId: "gpt-5.3-codex/low" },
+  ]);
   await waitForFlushes();
 });

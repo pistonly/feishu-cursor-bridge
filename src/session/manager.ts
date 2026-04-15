@@ -14,6 +14,7 @@ import type {
 export interface UserSession {
   backend: AcpBackend;
   sessionId: string;
+  preferredModelId?: string;
   recovery?: SessionRecovery;
   workspaceRoot: string;
   chatId: string;
@@ -620,6 +621,28 @@ export class SessionManager {
     slot.lastReply = reply;
   }
 
+  setActiveSessionPreferredModel(
+    chatId: string,
+    userId: string,
+    chatTypeRaw: string,
+    modelId: string | undefined,
+    threadId?: string,
+  ): void {
+    const chatType = this.chatType(chatTypeRaw);
+    const key = this.makeKey(chatId, userId, chatType, threadId);
+    const group = this.groups.get(key);
+    if (!group) return;
+    const activeSlot = this.findSlot(group, group.activeSlotIndex);
+    if (!activeSlot) return;
+    const normalized = modelId?.trim();
+    if (normalized) {
+      activeSlot.session.preferredModelId = normalized;
+    } else {
+      delete activeSlot.session.preferredModelId;
+    }
+    this.persistGroup(key, group);
+  }
+
   consumePendingNotices(
     chatId: string,
     userId: string,
@@ -853,6 +876,39 @@ export class SessionManager {
     };
   }
 
+  private async restorePreferredModelIfNeeded(
+    slot: SessionSlot,
+    noticeKey?: string,
+  ): Promise<void> {
+    const preferredModelId = slot.session.preferredModelId?.trim();
+    if (!preferredModelId || slot.session.backend !== "codex") {
+      return;
+    }
+    const runtime = this.runtimeForSlot(slot);
+    if (!runtime.supportsSetSessionModel) {
+      return;
+    }
+    const currentModelId =
+      runtime.getSessionModelState(slot.session.sessionId)?.currentModelId;
+    if (currentModelId === preferredModelId) {
+      return;
+    }
+    try {
+      await runtime.setSessionModel(slot.session.sessionId, preferredModelId);
+    } catch (error) {
+      console.warn(
+        `[session] failed to restore preferred model backend=${slot.session.backend} sessionId=${slot.session.sessionId} preferred=${preferredModelId}:`,
+        error instanceof Error ? error.message : error,
+      );
+      if (noticeKey) {
+        this.pushPendingNotice(
+          noticeKey,
+          `⚠️ 已恢复 session #${slot.slotIndex}，但自动恢复模型 \`${preferredModelId}\` 失败。请手动发送 \`/model ${preferredModelId}\` 重试。`,
+        );
+      }
+    }
+  }
+
   private async renewSlotSession(
     slot: SessionSlot,
     cwd: string,
@@ -867,6 +923,7 @@ export class SessionManager {
     if (runtime.supportsLoadSession && !options?.skipLoadSessionProbe) {
       try {
         await runtime.loadSession(oldId, cwd);
+        await this.restorePreferredModelIfNeeded(slot, noticeKey);
         slot.session.lastActiveAt = now;
         return;
       } catch {
@@ -891,6 +948,7 @@ export class SessionManager {
     if (!recovery) {
       delete slot.session.recovery;
     }
+    await this.restorePreferredModelIfNeeded(slot, noticeKey);
   }
 
   private async ensureSlotSessionAvailable(
@@ -985,7 +1043,16 @@ export class SessionManager {
         recovery,
         tid,
       );
-      restoredSlots.push({ slotIndex: ps.slotIndex, name: ps.name, session });
+      if (ps.preferredModelId?.trim()) {
+        session.preferredModelId = ps.preferredModelId.trim();
+      }
+      const restoredSlot: SessionSlot = {
+        slotIndex: ps.slotIndex,
+        name: ps.name,
+        session,
+      };
+      await this.restorePreferredModelIfNeeded(restoredSlot, key);
+      restoredSlots.push(restoredSlot);
     }
 
     let activeSlotIndex = persisted.activeSlotIndex;
@@ -1014,6 +1081,9 @@ export class SessionManager {
       name: s.name,
       backend: s.session.backend,
       sessionId: s.session.sessionId,
+      ...(s.session.preferredModelId
+        ? { preferredModelId: s.session.preferredModelId }
+        : {}),
       ...(s.session.recovery ? { recovery: s.session.recovery } : {}),
       workspaceRoot: s.session.workspaceRoot,
       lastActiveAt: s.session.lastActiveAt,

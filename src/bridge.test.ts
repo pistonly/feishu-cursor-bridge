@@ -273,3 +273,69 @@ test("/restart 会拒绝非管理员", async () => {
   assert.equal(sentTexts.length, 1);
   assert.match(sentTexts[0] ?? "", /仅允许管理员执行/);
 });
+
+test("/model 在 codex backend 切换成功后会持久化首选模型", async () => {
+  const bridge = new Bridge(createTestConfig());
+  const sentTexts: string[] = [];
+  const preferredModels: string[] = [];
+  const setModelCalls: Array<{ sessionId: string; modelId: string }> = [];
+
+  (bridge as any).ensureMaintenanceStateLoaded = async () => {};
+  (bridge as any).runtimeRegistry = {
+    getRuntime() {
+      return {
+        getSessionModelState() {
+          return {
+            currentModelId: "gpt-5.4/medium",
+            availableModels: [
+              { modelId: "gpt-5.4/medium", name: "GPT-5.4 (medium)" },
+              { modelId: "gpt-5.3-codex/low", name: "GPT-5.3 Codex (low)" },
+            ],
+          };
+        },
+        async setSessionModel(sessionId: string, modelId: string): Promise<void> {
+          setModelCalls.push({ sessionId, modelId });
+        },
+      };
+    },
+  };
+  (bridge as any).sessionManager = {
+    async getActiveSession() {
+      return {
+        backend: "codex",
+        sessionId: "session-1",
+        workspaceRoot: "/tmp/project",
+        chatId: "chat-1",
+        userId: "user-1",
+        chatType: "p2p",
+        createdAt: 0,
+        lastActiveAt: 0,
+      };
+    },
+    setActiveSessionPreferredModel(
+      _chatId: string,
+      _userId: string,
+      _chatType: string,
+      modelId: string,
+    ) {
+      preferredModels.push(modelId);
+    },
+  };
+  (bridge as any).feishuBot = {
+    stripBotMentionKeepLines(content: string) {
+      return content;
+    },
+    async sendText(_chatId: string, body: string): Promise<void> {
+      sentTexts.push(body);
+    },
+  };
+  (bridge as any).flushPendingSessionNotices = async () => {};
+
+  await (bridge as any).handleFeishuMessage(createMessage("/model 2"));
+
+  assert.deepEqual(setModelCalls, [
+    { sessionId: "session-1", modelId: "gpt-5.3-codex/low" },
+  ]);
+  assert.deepEqual(preferredModels, ["gpt-5.3-codex/low"]);
+  assert.match(sentTexts[0] ?? "", /已按序号 2 切换为 `gpt-5\.3-codex\/low`/);
+});

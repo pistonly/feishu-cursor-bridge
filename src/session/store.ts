@@ -7,6 +7,7 @@ export interface PersistedSlotRecord {
   name?: string;
   backend: AcpBackend;
   sessionId: string;
+  preferredModelId?: string;
   recovery?: SessionRecovery;
   /** 兼容旧版 legacy store */
   cursorCliChatId?: string;
@@ -218,6 +219,10 @@ function migrateV3ToLatest(v3: StoreFileV3, defaultBackend: AcpBackend): StoreFi
         return {
           ...slot,
           backend,
+          preferredModelId:
+            typeof slot.preferredModelId === "string" && slot.preferredModelId.trim()
+              ? slot.preferredModelId.trim()
+              : undefined,
           recovery: normalizeRecovery(backend, slot.recovery, slot.cursorCliChatId, slot.sessionId),
         };
       }),
