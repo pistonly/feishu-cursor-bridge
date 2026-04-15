@@ -14,7 +14,10 @@ import {
 } from "@agentclientprotocol/sdk";
 import * as path from "node:path";
 import type { Config } from "../config/index.js";
-import { mapSessionNotificationToBridgeEvents } from "./events.js";
+import {
+  mapClaudeSdkMessageToBridgeEvents,
+  mapSessionNotificationToBridgeEvents,
+} from "./events.js";
 import {
   assertPathInWorkspace,
   readTextFileSafe,
@@ -75,6 +78,25 @@ function summarizeSessionUpdateForTrace(update: SessionUpdate): string {
     default:
       return k;
   }
+}
+
+function summarizeExtNotificationForTrace(
+  method: string,
+  params: Record<string, unknown>,
+): string {
+  if (method !== "_claude/sdkMessage") {
+    return method;
+  }
+  const sessionId =
+    typeof params.sessionId === "string" ? params.sessionId : "<unknown>";
+  const message =
+    params.message && typeof params.message === "object"
+      ? (params.message as { type?: unknown; subtype?: unknown })
+      : undefined;
+  const type = typeof message?.type === "string" ? message.type : "<unknown>";
+  const subtype =
+    typeof message?.subtype === "string" ? ` subtype=${message.subtype}` : "";
+  return `${method} sessionId=${sessionId} type=${type}${subtype}`;
 }
 
 function pickAllowOption(
@@ -282,6 +304,34 @@ export class FeishuBridgeClient
         ok: false,
         error: e instanceof Error ? e.message : String(e),
       };
+    }
+  }
+
+  async extNotification(
+    method: string,
+    params: Record<string, unknown>,
+  ): Promise<void> {
+    if (this.config.acpReloadTraceLog) {
+      console.log(
+        `[acp reload-trace] extNotification inbound ${summarizeExtNotificationForTrace(method, params)}`,
+      );
+    }
+    if (method !== "_claude/sdkMessage") {
+      return;
+    }
+
+    const sessionId =
+      typeof params.sessionId === "string" ? params.sessionId.trim() : "";
+    if (!sessionId) return;
+
+    const events = mapClaudeSdkMessageToBridgeEvents(sessionId, params.message);
+    if (this.config.acpReloadTraceLog && events.length > 0) {
+      console.log(
+        `[acp reload-trace] extNotification mapped bridgeEvents=${events.map((e) => e.type).join(",")}`,
+      );
+    }
+    for (const ev of events) {
+      this.emit("acp", ev);
     }
   }
 

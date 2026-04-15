@@ -59,3 +59,7 @@
 - 给 `claude` 增加真实集成测试：`newSession`、`loadSession`、`set_mode`、`set_model`
 - 在 README 中补充 Claude backend 的真实 mode/model 示例值，避免用户误用 Cursor 风格参数
 - 对上游返回中的 `decription` / `description` 差异做兼容兜底，避免展示信息丢失
+
+## 另见
+
+- 直接使用 `@anthropic-ai/claude-agent-sdk` 获取 `usage` / `modelUsage` / `getContextUsage()` 的实测记录见 [docs/claude-agent-sdk-context-notes.md](/home/liuyang/Documents/feishu-bridge/feishu-cursor-bridge/docs/claude-agent-sdk-context-notes.md)

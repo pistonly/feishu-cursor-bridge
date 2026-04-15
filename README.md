@@ -181,7 +181,7 @@ Notes:
 | `CURSOR_AGENT_PATH` | Official ACP command path | `agent` |
 | `CURSOR_API_KEY` | Official ACP API key (optional) | empty |
 | `CURSOR_AUTH_TOKEN` | Official ACP auth token (optional) | empty |
-| `CLAUDE_AGENT_ACP_COMMAND` | Claude ACP child command | bundled dist or `npx -y @agentclientprotocol/claude-agent-acp` |
+| `CLAUDE_AGENT_ACP_COMMAND` | Claude ACP child command | in-repo patched wrapper or `npx -y @agentclientprotocol/claude-agent-acp` |
 | `CLAUDE_AGENT_ACP_EXTRA_ARGS` | Extra args appended to Claude ACP child command | empty |
 | `CODEX_AGENT_ACP_COMMAND` | Codex ACP child command | `npx -y @zed-industries/codex-acp` |
 | `CODEX_AGENT_ACP_EXTRA_ARGS` | Extra args appended to Codex ACP child command | empty |
@@ -425,7 +425,7 @@ docker-compose -f docker/compose.yaml run --rm claude-acp-smoke
 | `CURSOR_AGENT_PATH` | 官方 ACP 命令路径 | `agent` |
 | `CURSOR_API_KEY` | 官方 ACP API key（可选） | 空 |
 | `CURSOR_AUTH_TOKEN` | 官方 ACP auth token（可选） | 空 |
-| `CLAUDE_AGENT_ACP_COMMAND` | Claude ACP 子进程命令 | bundled dist 或 `npx -y @agentclientprotocol/claude-agent-acp` |
+| `CLAUDE_AGENT_ACP_COMMAND` | Claude ACP 子进程命令 | 仓库内置 patched wrapper 或 `npx -y @agentclientprotocol/claude-agent-acp` |
 | `CLAUDE_AGENT_ACP_EXTRA_ARGS` | 追加到 Claude ACP 子进程命令后的额外参数 | 空 |
 | `CODEX_AGENT_ACP_COMMAND` | Codex ACP 子进程命令 | `npx -y @zed-industries/codex-acp` |
 | `CODEX_AGENT_ACP_EXTRA_ARGS` | 追加到 Codex ACP 子进程命令后的额外参数 | 空 |

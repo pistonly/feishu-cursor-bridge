@@ -3,6 +3,7 @@ import { FeishuBridgeClient } from "./feishu-bridge-client.js";
 import type {
   AcpNewSessionOptions,
   AcpNewSessionResult,
+  AcpSessionUsageState,
   SessionRecovery,
 } from "./runtime-contract.js";
 import { SdkAcpRuntimeBase } from "./sdk-runtime-base.js";
@@ -17,6 +18,31 @@ type SessionPromptParams = Parameters<
     stream?: boolean;
   };
 };
+
+type SessionLoadParams = Parameters<
+  import("@agentclientprotocol/sdk").ClientSideConnection["loadSession"]
+>[0] & {
+  _meta?: Parameters<
+    import("@agentclientprotocol/sdk").ClientSideConnection["loadSession"]
+  >[0]["_meta"] & {
+    claudeCode?: {
+      emitRawSDKMessages?: Array<{ type: string; subtype?: string }>;
+    };
+  };
+};
+
+const CLAUDE_RAW_SDK_MESSAGE_FILTERS = [
+  { type: "result" },
+  { type: "system", subtype: "compact_boundary" },
+] as const;
+
+function buildClaudeRawSdkMeta() {
+  return {
+    claudeCode: {
+      emitRawSDKMessages: [...CLAUDE_RAW_SDK_MESSAGE_FILTERS],
+    },
+  };
+}
 
 function getClaudeRecovery(
   options?: AcpNewSessionOptions,
@@ -46,6 +72,42 @@ export class ClaudeAcpRuntime extends SdkAcpRuntimeBase {
     };
   }
 
+  protected override shouldUsePromptUsageFallback(
+    _sessionId: string,
+    _state: AcpSessionUsageState,
+    _fallbackUsedTokens: number,
+  ): boolean {
+    return false;
+  }
+
+  protected override shouldHideReportedZeroUsage(
+    _sessionId: string,
+    state: AcpSessionUsageState,
+    _fallbackUsedTokens: number | undefined,
+  ): boolean {
+    return state.usedTokens <= 0 && state.maxTokens > 0;
+  }
+
+  protected override shouldStorePromptUsageFallback(): boolean {
+    return false;
+  }
+
+  protected override mergeSessionUsageState(
+    _sessionId: string,
+    current: AcpSessionUsageState | undefined,
+    next: AcpSessionUsageState,
+  ): AcpSessionUsageState {
+    if (
+      next.usedTokens <= 0 &&
+      current != null &&
+      current.usedTokens > 0 &&
+      current.maxTokens === next.maxTokens
+    ) {
+      return { ...current };
+    }
+    return { ...next };
+  }
+
   protected override buildPromptParams(
     sessionId: string,
     text: string,
@@ -68,6 +130,7 @@ export class ClaudeAcpRuntime extends SdkAcpRuntimeBase {
     const base = {
       cwd,
       mcpServers: [],
+      _meta: buildClaudeRawSdkMeta(),
     };
     if (!recovery?.resumeSessionId.trim()) {
       return base;
@@ -75,12 +138,26 @@ export class ClaudeAcpRuntime extends SdkAcpRuntimeBase {
     return {
       ...base,
       _meta: {
+        ...buildClaudeRawSdkMeta(),
         claudeCode: {
+          ...buildClaudeRawSdkMeta().claudeCode,
           options: {
             resume: recovery.resumeSessionId.trim(),
           },
         },
       },
+    };
+  }
+
+  protected override buildLoadSessionParams(
+    sessionId: string,
+    cwd: string,
+  ): SessionLoadParams {
+    return {
+      sessionId,
+      cwd,
+      mcpServers: [],
+      _meta: buildClaudeRawSdkMeta(),
     };
   }
 

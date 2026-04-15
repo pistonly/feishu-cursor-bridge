@@ -34,6 +34,26 @@ export function resolveLegacyAdapterDistEntry(): string {
   );
 }
 
+/** Claude ACP wrapper 源码入口（桥接以 `tsx src/index.ts` 启动时由桥接侧注入 tsx） */
+export function resolveClaudeAgentAcpSourceEntry(): string {
+  return path.join(
+    resolveBridgeRepoRoot(),
+    "src",
+    "acp",
+    "patched-claude-agent-acp.ts",
+  );
+}
+
+/** Claude ACP wrapper 构建产物（桥接以 `node dist/index.js` 启动时） */
+export function resolveClaudeAgentAcpDistEntry(): string {
+  return path.join(
+    resolveBridgeRepoRoot(),
+    "dist",
+    "acp",
+    "patched-claude-agent-acp.js",
+  );
+}
+
 /** 解析已安装的 tsx CLI 入口，用于直接以 `node <tsx-cli> <script.ts>` 方式启动 TypeScript 脚本 */
 export function resolveBundledTsxCliEntry(): string {
   const pkgJson = require.resolve("tsx/package.json");

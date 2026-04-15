@@ -2,6 +2,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+  resolveClaudeAgentAcpDistEntry,
+  resolveClaudeAgentAcpSourceEntry,
   resolveLegacyAdapterDistEntry,
   resolveLegacyAdapterSourceEntry,
   resolveBundledTsxCliEntry,
@@ -245,13 +247,9 @@ function parseEnabledAcpBackends(
 }
 
 function resolveBundledClaudeAgentAcpEntry(): string | undefined {
-  const candidate = path.resolve(
-    process.cwd(),
-    "packages",
-    "claude-agent-acp",
-    "dist",
-    "index.js",
-  );
+  const candidate = isBridgeMainScriptSourceIndex()
+    ? resolveClaudeAgentAcpSourceEntry()
+    : resolveClaudeAgentAcpDistEntry();
   return fs.existsSync(candidate) ? candidate : undefined;
 }
 
@@ -270,6 +268,12 @@ function resolveClaudeAgentAcpSpawn(): { command: string; args: string[] } {
   }
   const bundled = resolveBundledClaudeAgentAcpEntry();
   if (bundled) {
+    if (bundled.endsWith(".ts")) {
+      return {
+        command: process.execPath,
+        args: [resolveBundledTsxCliEntry(), bundled, ...extra],
+      };
+    }
     return { command: process.execPath, args: [bundled, ...extra] };
   }
   return {

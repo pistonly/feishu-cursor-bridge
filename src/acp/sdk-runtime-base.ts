@@ -96,7 +96,11 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
           return;
         }
         if (ev.type === "usage_update" && ev.usage) {
-          this.sessionUsageStates.set(ev.sessionId, { ...ev.usage });
+          const current = this.sessionUsageStates.get(ev.sessionId);
+          this.sessionUsageStates.set(
+            ev.sessionId,
+            this.mergeSessionUsageState(ev.sessionId, current, ev.usage),
+          );
         }
       });
     }
@@ -134,7 +138,12 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
       state.usedTokens <= 0 &&
       state.maxTokens > 0 &&
       fallbackUsedTokens != null &&
-      fallbackUsedTokens > 0
+      fallbackUsedTokens > 0 &&
+      this.shouldUsePromptUsageFallback(
+        sessionId,
+        state,
+        fallbackUsedTokens,
+      )
     ) {
       return {
         usedTokens: fallbackUsedTokens,
@@ -142,7 +151,46 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
         percent: (fallbackUsedTokens / state.maxTokens) * 100,
       };
     }
+    if (
+      state.usedTokens <= 0 &&
+      state.maxTokens > 0 &&
+      this.shouldHideReportedZeroUsage(
+        sessionId,
+        state,
+        fallbackUsedTokens,
+      )
+    ) {
+      return undefined;
+    }
     return { ...state };
+  }
+
+  protected shouldUsePromptUsageFallback(
+    _sessionId: string,
+    _state: AcpSessionUsageState,
+    _fallbackUsedTokens: number,
+  ): boolean {
+    return true;
+  }
+
+  protected shouldHideReportedZeroUsage(
+    _sessionId: string,
+    _state: AcpSessionUsageState,
+    _fallbackUsedTokens: number | undefined,
+  ): boolean {
+    return false;
+  }
+
+  protected shouldStorePromptUsageFallback(): boolean {
+    return true;
+  }
+
+  protected mergeSessionUsageState(
+    _sessionId: string,
+    _current: AcpSessionUsageState | undefined,
+    next: AcpSessionUsageState,
+  ): AcpSessionUsageState {
+    return { ...next };
   }
 
   get supportsLoadSession(): boolean {
@@ -578,7 +626,7 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
       return { stopReason: "unknown" };
     }
     const totalTokens = extractPromptResponseTotalTokens(res);
-    if (totalTokens != null) {
+    if (totalTokens != null && this.shouldStorePromptUsageFallback()) {
       this.sessionPromptUsageFallbacks.set(sessionId, totalTokens);
     }
     return { stopReason: String((res as PromptResponse).stopReason) };

@@ -102,6 +102,45 @@ test("FeishuBridgeClient 会把 session/update 映射为桥接事件", async () 
   ]);
 });
 
+test("FeishuBridgeClient 会把 _claude/sdkMessage result 映射为 usage_update", async () => {
+  const client = new FeishuBridgeClient(createTestConfig());
+  const events: unknown[] = [];
+  client.on("acp", (event) => {
+    events.push(event);
+  });
+
+  await client.extNotification("_claude/sdkMessage", {
+    sessionId: "session-1",
+    message: {
+      type: "result",
+      usage: {
+        input_tokens: 20_322,
+        output_tokens: 17,
+        cache_read_input_tokens: 20_224,
+        cache_creation_input_tokens: 0,
+      },
+      modelUsage: {
+        "claude-sonnet-4-6": {
+          contextWindow: 200_000,
+        },
+      },
+    },
+  });
+
+  assert.deepEqual(events, [
+    {
+      type: "usage_update",
+      sessionId: "session-1",
+      summary: "Claude raw SDK 用量已更新（20.3%）",
+      usage: {
+        usedTokens: 40_563,
+        maxTokens: 200_000,
+        percent: (40_563 / 200_000) * 100,
+      },
+    },
+  ]);
+});
+
 test("FeishuBridgeClient 会发出 permission_required 并选择允许选项", async () => {
   const client = new FeishuBridgeClient(createTestConfig());
   const events: unknown[] = [];
