@@ -68,6 +68,15 @@ test("parseNewConversationCommand 支持维护命令与 --force", () => {
   });
 });
 
+test("parseNewConversationCommand 支持 /whoami", () => {
+  assert.deepEqual(parseNewConversationCommand("/whoami"), {
+    kind: "whoami",
+  });
+  assert.deepEqual(parseNewConversationCommand("/WHOAMI"), {
+    kind: "whoami",
+  });
+});
+
 test("matchesInterruptUserCommand 识别纯文本 /stop、/cancel", () => {
   assert.equal(matchesInterruptUserCommand("/stop"), true);
   assert.equal(matchesInterruptUserCommand("/cancel"), true);

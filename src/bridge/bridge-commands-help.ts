@@ -36,6 +36,7 @@ export function formatBridgeCommandsHelp(backend: AcpBackend): string {
     "• `/restart` / `/restart --force` — 重启 bridge 服务（仅管理员私聊）",
     "• `/update` / `/update --force` — `npm install` + `npm run build` 后重启（仅管理员私聊）",
     "• `/resume` — 对当前活跃 session 执行 ACP `session/load`（需当前 backend 支持）",
+    "• `/whoami` — 返回当前消息识别到的飞书用户 ID（可用于 `BRIDGE_ADMIN_USER_IDS`）",
     "• `/status` / `/状态` — 桥接与当前 session 统计",
     "• `/commands` / `/help` / `/帮助` / 单独 `/`（或全角 `／`）— 显示本列表（无需 session）",
     "• `/topic …` — 仅用于飞书话题标题等，整段不交给 Agent",

@@ -301,7 +301,21 @@ backend 差异：
 
 ---
 
-### 10. 状态（`/status`）
+### 10. 查询当前用户 ID（`/whoami`）
+
+```text
+/whoami
+```
+
+**作用**：返回当前这条消息被桥接识别到的发送者 ID。桥接管理员校验会直接把这个值与环境变量 `BRIDGE_ADMIN_USER_IDS` 逐项比较，因此配置管理员时可直接复制这里返回的值。
+
+**ID 来源**：优先取飞书消息事件里的 `sender.sender_id.open_id`；若缺失，才回退到 `user_id` / `union_id`。因此返回值通常会是类似 `ou_xxx` 的 `open_id`。
+
+**无需 session**：和 `/status`、`/help` 一样，即使当前没有活跃 session 也可直接使用。
+
+---
+
+### 11. 状态（`/status`）
 
 **等价命令**：`/status`、`/状态`
 
@@ -328,7 +342,7 @@ backend 差异：
 
 ---
 
-### 11. 切换模型（`/model`）
+### 12. 切换模型（`/model`）
 
 **格式**：
 

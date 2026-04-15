@@ -186,6 +186,30 @@ test("/status 会显示当前模型与 context 用量", async () => {
   assert.match(sentTexts[0] ?? "", /Context 用量：1\.1% \(10,633 \/ 950,000\)/);
 });
 
+test("/whoami 会返回当前消息识别到的飞书用户 ID", async () => {
+  const bridge = new Bridge(createTestConfig());
+  const sentTexts: string[] = [];
+
+  (bridge as any).ensureMaintenanceStateLoaded = async () => {};
+  (bridge as any).feishuBot = {
+    stripBotMentionKeepLines(content: string) {
+      return content;
+    },
+    async sendText(_chatId: string, body: string): Promise<void> {
+      sentTexts.push(body);
+    },
+  };
+
+  await (bridge as any).handleFeishuMessage(
+    createMessage("/whoami", { senderId: "ou_admin_123" }),
+  );
+
+  assert.equal(sentTexts.length, 1);
+  assert.match(sentTexts[0] ?? "", /ou_admin_123/);
+  assert.match(sentTexts[0] ?? "", /BRIDGE_ADMIN_USER_IDS/);
+  assert.match(sentTexts[0] ?? "", /open_id/);
+});
+
 test("/update --force 会执行构建并登记待重启状态", async () => {
   const bridge = new Bridge(createTestConfig());
   const sentTexts: string[] = [];

@@ -66,6 +66,18 @@ type RunningMaintenanceTask = {
   forced: boolean;
 };
 
+function formatWhoAmIMessage(senderId: string): string {
+  if (!senderId.trim()) {
+    return "❌ 当前消息未解析到发送者 ID，请检查飞书事件负载中的 `sender.sender_id`。";
+  }
+  return [
+    `👤 当前消息识别到的飞书用户 ID：\`${senderId}\``,
+    "",
+    "桥接管理员校验会直接比对这个值；如需配置 `BRIDGE_ADMIN_USER_IDS`，请原样填入。",
+    "说明：桥接优先使用 `open_id`，缺失时才回退到 `user_id` / `union_id`。",
+  ].join("\n");
+}
+
 function formatIncomingAttachmentPrompt(
   relativePath: string,
   res: FeishuIncomingResource,
@@ -749,6 +761,19 @@ export class Bridge {
         // ----------------------------------------------------------------
         if (bridgeManagedCommand.kind === "sessions") {
           await this.handleSessionsList(msg);
+          return;
+        }
+
+        // ----------------------------------------------------------------
+        // /whoami — show current sender ID for BRIDGE_ADMIN_USER_IDS
+        // ----------------------------------------------------------------
+        if (bridgeManagedCommand.kind === "whoami") {
+          await this.feishuBot.sendText(
+            msg.chatId,
+            formatWhoAmIMessage(msg.senderId),
+            msg.messageId,
+            this.threadReplyOpts(msg),
+          );
           return;
         }
 

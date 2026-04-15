@@ -65,6 +65,7 @@ export type NewConversationCommand =
   | { kind: "reply"; target: number | string | null }
   | { kind: "rename"; target: number | string | null; name: string }
   | { kind: "close"; target: number | string }
+  | { kind: "whoami" }
   | { kind: "sessions" }
   | { kind: "resume" }
   | { kind: "restart"; force: boolean; invalidUsage?: boolean }
@@ -87,6 +88,7 @@ export function parseNewConversationCommand(
     cmd !== "reply" &&
     cmd !== "rename" &&
     cmd !== "close" &&
+    cmd !== "whoami" &&
     cmd !== "mode" &&
     cmd !== "sessions" &&
     cmd !== "session" &&
@@ -97,6 +99,7 @@ export function parseNewConversationCommand(
     return null;
   }
 
+  if (cmd === "whoami") return { kind: "whoami" };
   if (cmd === "sessions" || cmd === "session") return { kind: "sessions" };
   if (cmd === "resume") return { kind: "resume" };
   if (cmd === "restart" || cmd === "update") {
