@@ -46,11 +46,6 @@ async function main() {
       "[main] BRIDGE_ALLOW_MULTIPLE_INSTANCES=true — 未启用单实例锁，可能重复连接飞书",
     );
   }
-  if (config.acp.enabledBackends.includes("cursor-tmux")) {
-    console.log(
-      `[main] Single-instance lock: ${config.bridge.singleInstanceLockPath} (pid ${process.pid})`,
-    );
-  }
 
   console.log(`[main] Feishu domain: ${config.feishu.domain}`);
   console.log(
@@ -78,14 +73,6 @@ async function main() {
   if (config.acp.enabledBackends.includes("codex")) {
     console.log(
       `[main] Codex ACP command: ${config.acp.codexSpawnCommand} ${config.acp.codexSpawnArgs.join(" ")}`.trim(),
-    );
-  }
-  if (config.acp.enabledBackends.includes("cursor-tmux")) {
-    console.log(`[main] tmux ACP server entry: ${config.acp.tmuxServerEntry}`);
-    console.log(`[main] tmux ACP tsx cli: ${config.acp.tmuxTsxCliEntry}`);
-    console.log(`[main] tmux ACP session store: ${config.acp.tmuxSessionStorePath}`);
-    console.log(
-      `[main] tmux ACP start command: ${config.acp.tmuxStartCommand ?? "cursor agent"}`,
     );
   }
   console.log(

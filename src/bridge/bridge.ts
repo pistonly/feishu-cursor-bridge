@@ -1282,15 +1282,15 @@ export class Bridge {
       const runtime = activeSession ? this.runtimeForSession(activeSession) : undefined;
       const recovery = activeSession?.recovery;
       const currentModeId =
-        activeSession && activeSession.backend !== "cursor-tmux"
+        activeSession
           ? runtime?.getSessionModeState(activeSession.sessionId)?.currentModeId
           : undefined;
       const currentModelLabel =
-        activeSession && activeSession.backend !== "cursor-tmux"
+        activeSession
           ? formatSessionModel(runtime?.getSessionModelState(activeSession.sessionId))
           : undefined;
       const usageState =
-        activeSession && activeSession.backend !== "cursor-tmux"
+        activeSession
           ? runtime?.getSessionUsageState(activeSession.sessionId)
           : undefined;
       const usageLabel = formatSessionUsage(usageState);
@@ -1353,7 +1353,7 @@ export class Bridge {
         );
         const slot = snap?.activeSlot;
         const availableModeIds =
-          slot && slot.session.backend !== "cursor-tmux"
+          slot
             ? (runtime?.getSessionModeState(slot.session.sessionId)?.availableModes ?? [])
                 .map((mode) => mode.modeId)
                 .join(", ")
@@ -1392,8 +1392,7 @@ export class Bridge {
       return;
     }
 
-    // bridge 接管非 tmux backend 的 /model，避免整句继续发给 CLI 后被大模型「解释命令」。
-    // tmux backend 仍保持原样转发给 pane，由真实 Cursor CLI 自己处理。
+    // bridge 接管 /model 命令处理
     const modelMatch = content.trim().match(/^\/model(?:\s+(\S+))?$/i);
     const activeSessionForModel = await this.sessionManager.getActiveSession(
       msg.chatId,
@@ -1401,7 +1400,7 @@ export class Bridge {
       msg.chatType,
       this.threadScope(msg),
     );
-    if (modelMatch && activeSessionForModel && activeSessionForModel.backend !== "cursor-tmux") {
+    if (modelMatch && activeSessionForModel) {
       const runtime = this.runtimeForSession(activeSessionForModel);
       const modelId = modelMatch[1]?.trim();
       if (!modelId) {
@@ -1665,9 +1664,7 @@ export class Bridge {
       const name = s.name ? ` (${s.name})` : "";
       const runtime = this.runtimeForBackend(s.backend);
       const modeId =
-        s.backend === "cursor-tmux"
-          ? ""
-          : (runtime.getSessionModeState(s.sessionId)?.currentModeId ?? "");
+        runtime.getSessionModeState(s.sessionId)?.currentModeId ?? "";
       const modeLine = modeId ? `
   模式：\`${modeId}\`` : "";
       return `#${s.slotIndex}${name}${active}

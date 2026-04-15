@@ -39,9 +39,3 @@ export function resolveBundledTsxCliEntry(): string {
   const pkgJson = require.resolve("tsx/package.json");
   return path.join(path.dirname(pkgJson), "dist", "cli.mjs");
 }
-
-/** 解析仓库内置的 tmux ACP server 原型入口 */
-export function resolveBundledTmuxAcpServerEntry(): string {
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  return path.resolve(here, "..", "..", "poc", "tmux-runtime", "tmux-acp-server.ts");
-}

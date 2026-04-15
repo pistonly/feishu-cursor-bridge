@@ -3,7 +3,6 @@ import { FeishuBridgeClient } from "./feishu-bridge-client.js";
 import { ClaudeAcpRuntime } from "./claude-runtime.js";
 import { CodexAcpRuntime } from "./codex-runtime.js";
 import { OfficialAcpRuntime } from "./official-runtime.js";
-import { TmuxAcpRuntime } from "./tmux-runtime.js";
 import type {
   AcpBackend,
   AcpNewSessionOptions,
@@ -171,9 +170,6 @@ export function createAcpRuntime(
   if (config.acp.backend === "cursor-official") {
     return new OfficialAcpRuntime(config, handler);
   }
-  if (config.acp.backend === "cursor-tmux") {
-    return new TmuxAcpRuntime(config, handler);
-  }
   if (config.acp.backend === "claude") {
     return new ClaudeAcpRuntime(config, handler);
   }
@@ -222,7 +218,6 @@ export class AcpRuntimeRegistry {
 
 export function formatAcpBackendLabel(backend: AcpBackend): string {
   if (backend === "cursor-official") return "Cursor 官方 ACP";
-  if (backend === "cursor-tmux") return "tmux ACP server 原型";
   if (backend === "claude") return "Claude Code（claude-agent-acp）";
   if (backend === "codex") return "Codex（@zed-industries/codex-acp）";
   return "第三方 Cursor ACP 适配器";

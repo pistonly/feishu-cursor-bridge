@@ -4,7 +4,6 @@ import * as path from "node:path";
 import {
   resolveLegacyAdapterDistEntry,
   resolveLegacyAdapterSourceEntry,
-  resolveBundledTmuxAcpServerEntry,
   resolveBundledTsxCliEntry,
 } from "../acp/paths.js";
 import type { AcpBackend } from "../acp/runtime-contract.js";
@@ -48,14 +47,6 @@ export interface Config {
     /** Codex ACP 子进程命令 */
     codexSpawnCommand: string;
     codexSpawnArgs: string[];
-    /** 启动 tmux ACP server 时使用的 tsx CLI 入口 */
-    tmuxTsxCliEntry: string;
-    /** 仓库内置的 tmux ACP server TypeScript 入口 */
-    tmuxServerEntry: string;
-    /** tmux ACP server 的 session 持久化文件 */
-    tmuxSessionStorePath: string;
-    /** tmux backend 启动交互式 Cursor Agent 的命令 */
-    tmuxStartCommand?: string;
     /**
      * ACP 子进程 spawn 使用的 `cwd`（取 `CURSOR_WORK_ALLOWLIST` 中第一项）；
      * `session/new` 仍传入各 session 自己的工作区路径。
@@ -119,7 +110,6 @@ const LOG_LEVELS = new Set(["debug", "info", "warn", "error"]);
 const ACP_BACKENDS = new Set<AcpBackend>([
   "cursor-official",
   "cursor-legacy",
-  "cursor-tmux",
   "claude",
   "codex",
 ]);
@@ -127,7 +117,6 @@ const ACP_BACKENDS = new Set<AcpBackend>([
 const LEGACY_BACKEND_ALIASES: Record<string, AcpBackend> = {
   official: "cursor-official",
   legacy: "cursor-legacy",
-  tmux: "cursor-tmux",
   claude: "claude",
   codex: "codex",
 };
@@ -480,16 +469,6 @@ export function loadConfig(): Config {
     ),
   );
 
-  const defaultTmuxSessionStore = path.join(
-    os.homedir(),
-    ".feishu-cursor-bridge",
-    "tmux-acp-sessions.json",
-  );
-  const tmuxSessionStorePath = path.resolve(
-    expandHome(
-      process.env["TMUX_ACP_SESSION_STORE"]?.trim() || defaultTmuxSessionStore,
-    ),
-  );
 
   const defaultSingleInstanceLock = path.join(
     os.homedir(),
@@ -588,12 +567,6 @@ export function loadConfig(): Config {
       adapterEntry = resolveLegacyAdapterDistEntry();
     }
   }
-  const tmuxTsxCliEntry =
-    process.env["TMUX_ACP_TSX_CLI"]?.trim() || resolveBundledTsxCliEntry();
-  const tmuxServerEntry =
-    process.env["TMUX_ACP_SERVER_ENTRY"]?.trim() || resolveBundledTmuxAcpServerEntry();
-  const tmuxStartCommand =
-    process.env["TMUX_ACP_START_COMMAND"]?.trim() || undefined;
 
   const nodePath = resolveNodeExecutablePath();
 
@@ -629,10 +602,6 @@ export function loadConfig(): Config {
       claudeSpawnArgs: claudeSpawn.args,
       codexSpawnCommand: codexSpawn.command,
       codexSpawnArgs: codexSpawn.args,
-      tmuxTsxCliEntry,
-      tmuxServerEntry,
-      tmuxSessionStorePath,
-      tmuxStartCommand,
       workspaceRoot,
       allowedWorkspaceRoots,
       adapterSessionDir,
