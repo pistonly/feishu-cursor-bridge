@@ -9,22 +9,6 @@ import type {
 } from "./types.js";
 import type { AcpSessionUsageState } from "./runtime-contract.js";
 
-type ClaudeSdkResultMessage = {
-  type?: unknown;
-  usage?: {
-    input_tokens?: unknown;
-    output_tokens?: unknown;
-    cache_read_input_tokens?: unknown;
-    cache_creation_input_tokens?: unknown;
-  } | null;
-  modelUsage?: Record<
-    string,
-    {
-      contextWindow?: unknown;
-    }
-  > | null;
-};
-
 function summarizePlan(entries: Array<PlanEntry>): string {
   return entries
     .map((e, i) => {
@@ -82,56 +66,6 @@ function normalizeUsageUpdate(
     usedTokens: used,
     maxTokens: size,
     percent: (used / size) * 100,
-  };
-}
-
-function normalizeClaudeSdkUsageProxy(
-  raw: unknown,
-): AcpSessionUsageState | undefined {
-  if (!raw || typeof raw !== "object") return undefined;
-  const message = raw as ClaudeSdkResultMessage;
-  if (message.type !== "result") return undefined;
-
-  const usage = message.usage;
-  if (!usage || typeof usage !== "object") return undefined;
-
-  const inputTokens = usage.input_tokens;
-  const outputTokens = usage.output_tokens;
-  if (
-    typeof inputTokens !== "number" ||
-    !Number.isFinite(inputTokens) ||
-    inputTokens < 0 ||
-    typeof outputTokens !== "number" ||
-    !Number.isFinite(outputTokens) ||
-    outputTokens < 0
-  ) {
-    return undefined;
-  }
-
-  const usedTokens = inputTokens + outputTokens;
-  if (usedTokens <= 0) return undefined;
-
-  const rawModelUsage = message.modelUsage;
-  if (!rawModelUsage || typeof rawModelUsage !== "object") return undefined;
-
-  let maxTokens = 0;
-  for (const usageEntry of Object.values(rawModelUsage)) {
-    if (!usageEntry || typeof usageEntry !== "object") continue;
-    const contextWindow = usageEntry.contextWindow;
-    if (
-      typeof contextWindow === "number" &&
-      Number.isFinite(contextWindow) &&
-      contextWindow > maxTokens
-    ) {
-      maxTokens = contextWindow;
-    }
-  }
-  if (maxTokens <= 0) return undefined;
-
-  return {
-    usedTokens,
-    maxTokens,
-    percent: (usedTokens / maxTokens) * 100,
   };
 }
 
@@ -261,20 +195,4 @@ export function mapSessionUpdateToBridgeEvents(
       break;
   }
   return out;
-}
-
-export function mapClaudeSdkMessageToBridgeEvents(
-  sessionId: string,
-  message: unknown,
-): BridgeAcpEvent[] {
-  const usage = normalizeClaudeSdkUsageProxy(message);
-  if (!usage) return [];
-  return [
-    {
-      type: "usage_update",
-      sessionId,
-      summary: `Claude raw SDK 用量已更新（${usage.percent.toFixed(1).replace(/\.0$/, "")}%）`,
-      usage,
-    },
-  ];
 }

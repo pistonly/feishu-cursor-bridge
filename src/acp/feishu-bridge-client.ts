@@ -14,10 +14,7 @@ import {
 } from "@agentclientprotocol/sdk";
 import * as path from "node:path";
 import type { Config } from "../config/index.js";
-import {
-  mapClaudeSdkMessageToBridgeEvents,
-  mapSessionNotificationToBridgeEvents,
-} from "./events.js";
+import { mapSessionNotificationToBridgeEvents } from "./events.js";
 import {
   assertPathInWorkspace,
   readTextFileSafe,
@@ -318,20 +315,6 @@ export class FeishuBridgeClient
     }
     if (method !== "_claude/sdkMessage") {
       return;
-    }
-
-    const sessionId =
-      typeof params.sessionId === "string" ? params.sessionId.trim() : "";
-    if (!sessionId) return;
-
-    const events = mapClaudeSdkMessageToBridgeEvents(sessionId, params.message);
-    if (this.config.acpReloadTraceLog && events.length > 0) {
-      console.log(
-        `[acp reload-trace] extNotification mapped bridgeEvents=${events.map((e) => e.type).join(",")}`,
-      );
-    }
-    for (const ev of events) {
-      this.emit("acp", ev);
     }
   }
 

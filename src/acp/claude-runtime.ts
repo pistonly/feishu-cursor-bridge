@@ -80,32 +80,8 @@ export class ClaudeAcpRuntime extends SdkAcpRuntimeBase {
     return false;
   }
 
-  protected override shouldHideReportedZeroUsage(
-    _sessionId: string,
-    state: AcpSessionUsageState,
-    _fallbackUsedTokens: number | undefined,
-  ): boolean {
-    return state.usedTokens <= 0 && state.maxTokens > 0;
-  }
-
   protected override shouldStorePromptUsageFallback(): boolean {
     return false;
-  }
-
-  protected override mergeSessionUsageState(
-    _sessionId: string,
-    current: AcpSessionUsageState | undefined,
-    next: AcpSessionUsageState,
-  ): AcpSessionUsageState {
-    if (
-      next.usedTokens <= 0 &&
-      current != null &&
-      current.usedTokens > 0 &&
-      current.maxTokens === next.maxTokens
-    ) {
-      return { ...current };
-    }
-    return { ...next };
   }
 
   protected override buildPromptParams(

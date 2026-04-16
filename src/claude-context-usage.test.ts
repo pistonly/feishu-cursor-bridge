@@ -56,7 +56,7 @@ function createTestConfig(
   };
 }
 
-test("Claude runtime does not masquerade prompt totalTokens as context usage", () => {
+test("Claude runtime does not fall back to prompt totalTokens when usage_update reports zero", () => {
   const handler = new EventEmitter() as any;
   const runtime = new ClaudeAcpRuntime(createTestConfig("claude"), handler);
 
@@ -73,7 +73,11 @@ test("Claude runtime does not masquerade prompt totalTokens as context usage", (
 
   (runtime as any).sessionPromptUsageFallbacks.set("session-1", 20_325);
 
-  assert.equal(runtime.getSessionUsageState("session-1"), undefined);
+  assert.deepEqual(runtime.getSessionUsageState("session-1"), {
+    usedTokens: 0,
+    maxTokens: 1_000_000,
+    percent: 0,
+  });
 });
 
 test("Non-Claude runtimes still use prompt totalTokens as a fallback when usage_update reports zero", () => {
@@ -100,7 +104,7 @@ test("Non-Claude runtimes still use prompt totalTokens as a fallback when usage_
   });
 });
 
-test("Claude runtime keeps the latest non-zero usage when a later zero usage_update arrives", () => {
+test("Claude runtime accepts later zero usage_update values for Claude sessions", () => {
   const handler = new EventEmitter() as any;
   const runtime = new ClaudeAcpRuntime(createTestConfig("claude"), handler);
 
@@ -127,8 +131,8 @@ test("Claude runtime keeps the latest non-zero usage when a later zero usage_upd
   });
 
   assert.deepEqual(runtime.getSessionUsageState("session-1"), {
-    usedTokens: 20_965,
+    usedTokens: 0,
     maxTokens: 1_000_000,
-    percent: (20_965 / 1_000_000) * 100,
+    percent: 0,
   });
 });

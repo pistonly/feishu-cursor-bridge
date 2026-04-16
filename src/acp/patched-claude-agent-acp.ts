@@ -11,29 +11,27 @@ import {
   loadManagedSettings,
 } from "@agentclientprotocol/claude-agent-acp/dist/utils.js";
 
-type ClaudeSdkResultMessage = {
+type ClaudeSdkMessage = {
   type?: unknown;
+  subtype?: unknown;
   usage?: {
     input_tokens?: unknown;
     output_tokens?: unknown;
   } | null;
-  modelUsage?: Record<
-    string,
-    {
-      contextWindow?: unknown;
-    }
-  > | null;
+};
+
+type ClaudeUsageUpdateNotification = {
+  sessionId: string;
+  update: {
+    sessionUpdate: string;
+    used?: number;
+    size?: number;
+    cost?: unknown;
+  };
 };
 
 type ClaudeUsageUpdateClient = {
-  sessionUpdate(params: {
-    sessionId: string;
-    update: {
-      sessionUpdate: "usage_update";
-      used: number;
-      size: number;
-    };
-  }): Promise<void>;
+  sessionUpdate(params: ClaudeUsageUpdateNotification): Promise<void>;
   extNotification: (
     method: string,
     params: Record<string, unknown>,
@@ -44,18 +42,28 @@ type ClaudeUsageUpdateLogger = {
   error: (...args: unknown[]) => void;
 };
 
-type ClaudeUsageUpdateAgentLike = {
-  client: ClaudeUsageUpdateClient;
-  logger: ClaudeUsageUpdateLogger;
+type ClaudeUsagePatchedClient = ClaudeUsageUpdateClient & {
+  [CLIENT_PATCH_MARKER]?: boolean;
+  [SESSION_USAGE_PROXY_STATE]?: Map<string, SessionUsageProxyState>;
 };
 
-const PROMPT_PATCH_MARKER = Symbol.for(
+type SessionUsageProxyState = {
+  latestUsedTokens?: number;
+  compactedSinceLatestUsage?: boolean;
+  lastKnownMaxTokens?: number;
+  suppressCostUsageAfterCompact?: boolean;
+};
+
+const CLIENT_PATCH_MARKER = Symbol.for(
   "feishu-cursor-bridge/claude-agent-acp-context-patch",
+);
+const SESSION_USAGE_PROXY_STATE = Symbol.for(
+  "feishu-cursor-bridge/claude-agent-acp-context-proxy-state",
 );
 
 function extractUsedTokensFromResultMessage(raw: unknown): number | undefined {
   if (!raw || typeof raw !== "object") return undefined;
-  const message = raw as ClaudeSdkResultMessage;
+  const message = raw as ClaudeSdkMessage;
   if (message.type !== "result") return undefined;
   const usage = message.usage;
   if (!usage || typeof usage !== "object") return undefined;
@@ -74,147 +82,177 @@ function extractUsedTokensFromResultMessage(raw: unknown): number | undefined {
   return Math.floor(inputTokens + outputTokens);
 }
 
-function extractMaxTokensFromResultMessage(raw: unknown): number | undefined {
-  if (!raw || typeof raw !== "object") return undefined;
-  const message = raw as ClaudeSdkResultMessage;
-  if (message.type !== "result") return undefined;
-  const rawModelUsage = message.modelUsage;
-  if (!rawModelUsage || typeof rawModelUsage !== "object") return undefined;
-
-  let maxTokens = 0;
-  for (const usageEntry of Object.values(rawModelUsage)) {
-    if (!usageEntry || typeof usageEntry !== "object") continue;
-    const contextWindow = usageEntry.contextWindow;
-    if (
-      typeof contextWindow === "number" &&
-      Number.isFinite(contextWindow) &&
-      contextWindow > maxTokens
-    ) {
-      maxTokens = contextWindow;
-    }
-  }
-  return maxTokens > 0 ? Math.floor(maxTokens) : undefined;
+function isCompactBoundaryMessage(raw: unknown): boolean {
+  if (!raw || typeof raw !== "object") return false;
+  const message = raw as ClaudeSdkMessage;
+  return message.type === "system" && message.subtype === "compact_boundary";
 }
 
-export async function emitAccurateClaudeContextUsageUpdate(
-  agent: ClaudeUsageUpdateAgentLike,
+export function buildAccurateClaudeContextUsageUpdate(
   sessionId: string,
   usedTokens: number,
   maxTokens: number,
-  sendSessionUpdate:
-    | ((params: {
-        sessionId: string;
-        update: {
-          sessionUpdate: "usage_update";
-          used: number;
-          size: number;
-        };
-      }) => Promise<void>)
-    | undefined = undefined,
-): Promise<boolean> {
+): ClaudeUsageUpdateNotification | undefined {
   if (
     !Number.isFinite(usedTokens) ||
     usedTokens <= 0 ||
     !Number.isFinite(maxTokens) ||
     maxTokens <= 0
   ) {
-    return false;
+    return undefined;
   }
-
-  try {
-    const update = {
-      sessionId,
-      update: {
-        sessionUpdate: "usage_update",
-        used: Math.floor(usedTokens),
-        size: Math.floor(maxTokens),
-      },
-    } as const;
-    await (sendSessionUpdate ?? agent.client.sessionUpdate.bind(agent.client))(update);
-    return true;
-  } catch (error) {
-    agent.logger.error(
-      `[patched-claude-agent-acp] failed to refresh context usage sessionId=${sessionId}`,
-      error instanceof Error ? error.message : error,
-    );
-    return false;
-  }
+  return {
+    sessionId,
+    update: {
+      sessionUpdate: "usage_update",
+      used: Math.floor(usedTokens),
+      size: Math.floor(maxTokens),
+    },
+  };
 }
 
-export function patchClaudeAcpAgentContextUsage(): void {
-  const proto = ClaudeAcpAgent.prototype as ClaudeAcpAgent & {
-    [PROMPT_PATCH_MARKER]?: boolean;
-    prompt: (
-      params: Parameters<ClaudeAcpAgent["prompt"]>[0],
-    ) => ReturnType<ClaudeAcpAgent["prompt"]>;
-  };
-  if (proto[PROMPT_PATCH_MARKER]) {
+export function patchClaudeAcpAgentContextUsage(
+  agent: {
+    client: ClaudeUsagePatchedClient;
+    logger: ClaudeUsageUpdateLogger;
+  },
+): void {
+  const client = agent.client;
+  if (client[CLIENT_PATCH_MARKER]) {
     return;
   }
 
-  const originalPrompt = proto.prompt;
-  proto.prompt = async function patchedPrompt(
-    this: ClaudeAcpAgent,
-    params: Parameters<ClaudeAcpAgent["prompt"]>[0],
-  ): ReturnType<ClaudeAcpAgent["prompt"]> {
-    const originalSessionUpdate = this.client.sessionUpdate.bind(this.client);
-    const originalExtNotification = this.client.extNotification.bind(this.client);
-    let correctedUsageSent = false;
-    let latestUsedTokens: number | undefined;
-    let latestMaxTokens: number | undefined;
+  const originalSessionUpdate = client.sessionUpdate.bind(client);
+  const originalExtNotification = client.extNotification.bind(client);
+  const stateBySession = new Map<string, SessionUsageProxyState>();
+  client[SESSION_USAGE_PROXY_STATE] = stateBySession;
 
-    this.client.extNotification = async (method, notificationParams) => {
-      if (
-        method === "_claude/sdkMessage" &&
-        notificationParams.sessionId === params.sessionId
-      ) {
+  client.extNotification = async (method, notificationParams) => {
+    if (method === "_claude/sdkMessage") {
+      const sessionId =
+        typeof notificationParams.sessionId === "string"
+          ? notificationParams.sessionId
+          : undefined;
+      if (sessionId) {
+        const current = stateBySession.get(sessionId) ?? {};
         const usedTokens = extractUsedTokensFromResultMessage(
           notificationParams.message,
         );
         if (usedTokens != null) {
-          latestUsedTokens = usedTokens;
+          if (!current.suppressCostUsageAfterCompact) {
+            current.latestUsedTokens = usedTokens;
+            current.compactedSinceLatestUsage = false;
+          }
+        } else if (isCompactBoundaryMessage(notificationParams.message)) {
+          current.latestUsedTokens = undefined;
+          current.compactedSinceLatestUsage = true;
+          current.suppressCostUsageAfterCompact = true;
         }
-        const maxTokens = extractMaxTokensFromResultMessage(
-          notificationParams.message,
+        stateBySession.set(sessionId, current);
+      }
+    }
+
+    await originalExtNotification(method, notificationParams);
+  };
+
+  client.sessionUpdate = async (notification) => {
+    const update = notification.update;
+    if (
+      update?.sessionUpdate === "usage_update" &&
+      update.cost == null &&
+      typeof notification.sessionId === "string"
+    ) {
+      const current = stateBySession.get(notification.sessionId);
+      if (
+        current?.compactedSinceLatestUsage &&
+        typeof current.lastKnownMaxTokens === "number" &&
+        Number.isFinite(current.lastKnownMaxTokens) &&
+        current.lastKnownMaxTokens > 0
+      ) {
+        current.compactedSinceLatestUsage = false;
+        stateBySession.set(notification.sessionId, current);
+        await originalSessionUpdate({
+          ...notification,
+          update: {
+            ...update,
+            size: current.lastKnownMaxTokens,
+          },
+        });
+        return;
+      }
+    }
+    if (
+      update?.sessionUpdate === "usage_update" &&
+      update.cost != null &&
+      typeof notification.sessionId === "string"
+    ) {
+      const current = stateBySession.get(notification.sessionId);
+      if (current?.compactedSinceLatestUsage) {
+        current.compactedSinceLatestUsage = false;
+        stateBySession.set(notification.sessionId, current);
+        await originalSessionUpdate(notification);
+        return;
+      }
+      if (
+        current?.suppressCostUsageAfterCompact &&
+        typeof current.lastKnownMaxTokens === "number" &&
+        Number.isFinite(current.lastKnownMaxTokens) &&
+        current.lastKnownMaxTokens > 0
+      ) {
+        current.suppressCostUsageAfterCompact = false;
+        current.latestUsedTokens = undefined;
+        stateBySession.set(notification.sessionId, current);
+        await originalSessionUpdate({
+          ...notification,
+          update: {
+            ...update,
+            used: 0,
+            size: current.lastKnownMaxTokens,
+          },
+        });
+        return;
+      }
+      if (
+        current?.latestUsedTokens != null &&
+        typeof update.size === "number" &&
+        Number.isFinite(update.size) &&
+        update.size > 0
+      ) {
+        const corrected = buildAccurateClaudeContextUsageUpdate(
+          notification.sessionId,
+          current.latestUsedTokens,
+          update.size,
         );
-        if (maxTokens != null) {
-          latestMaxTokens = maxTokens;
+        if (corrected) {
+          current.lastKnownMaxTokens = corrected.update.size;
+          current.latestUsedTokens = undefined;
+          stateBySession.set(notification.sessionId, current);
+          await originalSessionUpdate(corrected);
+          return;
         }
       }
-      await originalExtNotification(method, notificationParams);
-    };
-
-    this.client.sessionUpdate = async (notification) => {
-      await originalSessionUpdate(notification);
-      const update = notification.update;
-      if (correctedUsageSent) return;
-      if (notification.sessionId !== params.sessionId) return;
-      if (update?.sessionUpdate !== "usage_update") return;
-      if (update.cost == null) return;
-      if (latestUsedTokens == null) return;
-      correctedUsageSent = await emitAccurateClaudeContextUsageUpdate(
-        this as unknown as ClaudeUsageUpdateAgentLike,
-        params.sessionId,
-        latestUsedTokens,
-        latestMaxTokens ?? notification.update.size,
-        originalSessionUpdate,
-      );
-    };
-
-    try {
-      return await originalPrompt.call(this, params);
-    } finally {
-      this.client.sessionUpdate = originalSessionUpdate;
-      this.client.extNotification = originalExtNotification;
+      if (
+        current &&
+        typeof update.size === "number" &&
+        Number.isFinite(update.size) &&
+        update.size > 0
+      ) {
+        current.lastKnownMaxTokens = update.size;
+        stateBySession.set(notification.sessionId, current);
+      }
     }
+
+    await originalSessionUpdate(notification);
   };
-  proto[PROMPT_PATCH_MARKER] = true;
+
+  client[CLIENT_PATCH_MARKER] = true;
 }
 
-patchClaudeAcpAgentContextUsage();
-
 function isEntrypoint(): boolean {
-  return process.argv[1] != null && pathToFileURL(process.argv[1]).href === import.meta.url;
+  return (
+    process.argv[1] != null &&
+    pathToFileURL(process.argv[1]).href === import.meta.url
+  );
 }
 
 if (isEntrypoint()) {
@@ -222,33 +260,34 @@ if (isEntrypoint()) {
     process.argv = process.argv.filter((arg) => arg !== "--cli");
     await import(await claudeCliPath());
   } else {
-  const managedSettings = loadManagedSettings();
-  if (managedSettings) {
-    applyEnvironmentSettings(managedSettings);
-  }
+    const managedSettings = loadManagedSettings();
+    if (managedSettings) {
+      applyEnvironmentSettings(managedSettings);
+    }
 
-  // stdout is used by ACP transport; route any incidental logging to stderr.
-  console.log = console.error;
-  console.info = console.error;
-  console.warn = console.error;
-  console.debug = console.error;
+    // stdout is used by ACP transport; route incidental logging to stderr.
+    console.log = console.error;
+    console.info = console.error;
+    console.warn = console.error;
+    console.debug = console.error;
 
-  process.on("unhandledRejection", (reason, promise) => {
-    console.error("Unhandled Rejection at:", promise, "reason:", reason);
-  });
-
-  const { connection, agent } = runAcp();
-
-  async function shutdown() {
-    await agent.dispose().catch((err) => {
-      console.error("Error during cleanup:", err);
+    process.on("unhandledRejection", (reason, promise) => {
+      console.error("Unhandled Rejection at:", promise, "reason:", reason);
     });
-    process.exit(0);
-  }
 
-  connection.closed.then(shutdown);
-  process.on("SIGTERM", shutdown);
-  process.on("SIGINT", shutdown);
-  process.stdin.resume();
+    const { connection, agent } = runAcp();
+    patchClaudeAcpAgentContextUsage(agent);
+
+    async function shutdown() {
+      await agent.dispose().catch((err) => {
+        console.error("Error during cleanup:", err);
+      });
+      process.exit(0);
+    }
+
+    connection.closed.then(shutdown);
+    process.on("SIGTERM", shutdown);
+    process.on("SIGINT", shutdown);
+    process.stdin.resume();
   }
 }
