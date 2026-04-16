@@ -64,6 +64,18 @@ function redactEnvForLog(env: NodeJS.ProcessEnv): Record<string, string | undefi
   return out;
 }
 
+function formatTraceValue(value: unknown, maxLen = 6000): string {
+  try {
+    const text = JSON.stringify(value);
+    if (typeof text !== "string") {
+      return String(value);
+    }
+    return text.length > maxLen ? `${text.slice(0, maxLen)}...<truncated>` : text;
+  } catch (error) {
+    return `[unserializable:${error instanceof Error ? error.message : String(error)}]`;
+  }
+}
+
 export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
   readonly bridgeClient: FeishuBridgeClient;
   protected readonly config: Config;
@@ -107,6 +119,31 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
   }
 
   abstract readonly backend: AcpBackend;
+
+  private shouldTraceOfficialModelFlow(): boolean {
+    return this.config.acpReloadTraceLog && this.backend === "cursor-official";
+  }
+
+  private summarizeModelStateForTrace(
+    state: AcpSessionModelState | undefined,
+  ): Record<string, unknown> | null {
+    if (!state) return null;
+    return {
+      currentModelId: state.currentModelId ?? null,
+      availableModelIds: state.availableModels.map((model) => model.modelId),
+    };
+  }
+
+  private logOfficialModelTrace(
+    stage: string,
+    sessionId: string,
+    details: Record<string, unknown>,
+  ): void {
+    if (!this.shouldTraceOfficialModelFlow()) return;
+    console.log(
+      `[acp reload-trace] official-model ${stage} sessionId=${sessionId} details=${formatTraceValue(details)}`,
+    );
+  }
 
   get initializeResult(): InitializeResponse | null {
     return this.initResult;
@@ -268,10 +305,17 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
   protected updateSessionModelState(
     sessionId: string,
     rawModels: unknown,
+    traceSource?: string,
   ): void {
     const next = this.normalizeSessionModelState(rawModels);
     if (next) {
       this.sessionModelStates.set(sessionId, next);
+    }
+    if (traceSource) {
+      this.logOfficialModelTrace(traceSource, sessionId, {
+        rawModels,
+        normalized: this.summarizeModelStateForTrace(next),
+      });
     }
   }
 
@@ -329,10 +373,29 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
       modelBase,
       reasoningEffort,
     );
-    if (!nextModelId) return;
+    if (!nextModelId) {
+      if (modelBase || reasoningEffort) {
+        this.logOfficialModelTrace("config_option_update", sessionId, {
+          options,
+          modelBase: modelBase ?? null,
+          reasoningEffort: reasoningEffort ?? null,
+          previous: this.summarizeModelStateForTrace(current),
+          resolvedModelId: null,
+        });
+      }
+      return;
+    }
     this.sessionModelStates.set(sessionId, {
       currentModelId: nextModelId,
       availableModels: current?.availableModels.map((model) => ({ ...model })) ?? [],
+    });
+    this.logOfficialModelTrace("config_option_update", sessionId, {
+      options,
+      modelBase: modelBase ?? null,
+      reasoningEffort: reasoningEffort ?? null,
+      previous: this.summarizeModelStateForTrace(current),
+      resolvedModelId: nextModelId,
+      next: this.summarizeModelStateForTrace(this.sessionModelStates.get(sessionId)),
     });
   }
 
@@ -580,7 +643,11 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
     const dir = path.resolve(cwd ?? this.config.acp.workspaceRoot);
     const res = await conn.newSession(this.buildNewSessionParams(dir, options));
     this.updateSessionModeState(res.sessionId, (res as { modes?: unknown }).modes);
-    this.updateSessionModelState(res.sessionId, (res as { models?: unknown }).models);
+    this.updateSessionModelState(
+      res.sessionId,
+      (res as { models?: unknown }).models,
+      "session/new",
+    );
     return this.extractNewSessionResult(res, options);
   }
 
@@ -600,7 +667,11 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
     try {
       const res = await conn.loadSession(this.buildLoadSessionParams(sessionId, dir));
       this.updateSessionModeState(sessionId, (res as { modes?: unknown }).modes);
-      this.updateSessionModelState(sessionId, (res as { models?: unknown }).models);
+      this.updateSessionModelState(
+        sessionId,
+        (res as { models?: unknown }).models,
+        "session/load",
+      );
       if (this.config.acpReloadTraceLog) {
         console.log(
           `[acp reload-trace] session/load ok backend=${this.backend} sessionId=${sessionId} elapsedMs=${Date.now() - t0}`,
@@ -620,7 +691,19 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
   async prompt(sessionId: string, text: string): Promise<AcpPromptResult> {
     const conn = this.connection;
     if (!conn) throw new Error("ACP not started");
-    const res = await conn.prompt(this.buildPromptParams(sessionId, text));
+    this.logOfficialModelTrace("prompt_begin", sessionId, {
+      cached: this.summarizeModelStateForTrace(this.sessionModelStates.get(sessionId)),
+    });
+    let res: PromptResponse | null;
+    try {
+      res = await conn.prompt(this.buildPromptParams(sessionId, text));
+    } catch (error) {
+      this.logOfficialModelTrace("prompt_error", sessionId, {
+        cached: this.summarizeModelStateForTrace(this.sessionModelStates.get(sessionId)),
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
     if (res == null) {
       await this.logPromptNullDiagnostics(sessionId, conn);
       return { stopReason: "unknown" };
@@ -629,6 +712,10 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
     if (totalTokens != null && this.shouldStorePromptUsageFallback()) {
       this.sessionPromptUsageFallbacks.set(sessionId, totalTokens);
     }
+    this.logOfficialModelTrace("prompt_ok", sessionId, {
+      cached: this.summarizeModelStateForTrace(this.sessionModelStates.get(sessionId)),
+      stopReason: String(res.stopReason),
+    });
     return { stopReason: String((res as PromptResponse).stopReason) };
   }
 
@@ -646,15 +733,44 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
   async setSessionModel(sessionId: string, modelId: string): Promise<void> {
     const conn = this.connection;
     if (!conn) throw new Error("ACP not started");
-    await conn.unstable_setSessionModel({ sessionId, modelId });
+    this.logOfficialModelTrace("set_model_begin", sessionId, {
+      requestedModelId: modelId,
+      cached: this.summarizeModelStateForTrace(this.sessionModelStates.get(sessionId)),
+    });
+    try {
+      await conn.unstable_setSessionModel({ sessionId, modelId });
+    } catch (error) {
+      this.logOfficialModelTrace("set_model_error", sessionId, {
+        requestedModelId: modelId,
+        cached: this.summarizeModelStateForTrace(this.sessionModelStates.get(sessionId)),
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
     const current = this.sessionModelStates.get(sessionId);
-    if (!current) return;
+    if (!current) {
+      this.logOfficialModelTrace("set_model_ok", sessionId, {
+        requestedModelId: modelId,
+        cached: null,
+      });
+      return;
+    }
     if (!current.availableModels.some((model) => model.modelId === modelId)) {
+      this.logOfficialModelTrace("set_model_ok", sessionId, {
+        requestedModelId: modelId,
+        cached: this.summarizeModelStateForTrace(current),
+        localCacheUpdated: false,
+      });
       return;
     }
     this.sessionModelStates.set(sessionId, {
       currentModelId: modelId,
       availableModels: current.availableModels.map((model) => ({ ...model })),
+    });
+    this.logOfficialModelTrace("set_model_ok", sessionId, {
+      requestedModelId: modelId,
+      cached: this.summarizeModelStateForTrace(this.sessionModelStates.get(sessionId)),
+      localCacheUpdated: true,
     });
   }
 
