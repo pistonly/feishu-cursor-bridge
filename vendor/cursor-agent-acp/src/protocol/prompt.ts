@@ -24,6 +24,7 @@ import {
   type StreamProgress,
   type Logger,
   type AdapterConfig,
+  type CursorUsage,
 } from '../types';
 import { toRequestId, createSuccessResponse } from '../utils/json-rpc';
 import type { SessionManager } from '../session/manager';
@@ -39,6 +40,26 @@ const STOP_REASON = {
   REFUSAL: 'refusal' as const,
   CANCELLED: 'cancelled' as const,
 } satisfies Record<string, PromptResponse['stopReason']>;
+
+// Legacy Cursor usage does not match Claude SDK semantics.
+//
+// Cursor CLI splits prompt usage into uncached `inputTokens` and cached
+// `cacheReadTokens` / `cacheWriteTokens`. Once caching is active,
+// `inputTokens` is not expected to grow monotonically with the full resumed
+// conversation. For legacy mode we therefore treat all four usage buckets as
+// contributing to the bridge's visible context meter.
+function getUsedTokensFromUsage(usage: CursorUsage | undefined): number | undefined {
+  if (!usage) {
+    return undefined;
+  }
+  const inputTokens = usage.inputTokens ?? 0;
+  const outputTokens = usage.outputTokens ?? 0;
+  const cacheReadTokens = usage.cacheReadTokens ?? 0;
+  const cacheWriteTokens = usage.cacheWriteTokens ?? 0;
+  const total =
+    inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens;
+  return Number.isFinite(total) && total >= 0 ? total : undefined;
+}
 
 export interface PromptHandlerOptions {
   sessionManager: SessionManager;
@@ -153,6 +174,28 @@ export class PromptHandler {
     this.contentProcessor = new ContentProcessor({
       config: this.config,
       logger: this.logger,
+    });
+  }
+
+  private sendUsageUpdate(sessionId: string, usage: CursorUsage | undefined): void {
+    const used = getUsedTokensFromUsage(usage);
+    if (used == null) {
+      return;
+    }
+    const size = this.sessionManager.getSessionModelContextWindow(sessionId);
+    // Cursor CLI does not expose a single "current context occupancy" field,
+    // so legacy mode projects the raw usage buckets onto ACP's `used` meter.
+    this.sendNotification({
+      jsonrpc: '2.0',
+      method: 'session/update',
+      params: {
+        sessionId,
+        update: {
+          sessionUpdate: 'usage_update',
+          used,
+          size,
+        },
+      },
     });
   }
 
@@ -1287,6 +1330,8 @@ export class PromptHandler {
         });
       }
 
+      this.sendUsageUpdate(sessionId, cursorResponse.usage);
+
       // Collect detailed metrics if enabled
       const detailedMetrics = this.processingConfig.collectDetailedMetrics
         ? {
@@ -1566,6 +1611,8 @@ export class PromptHandler {
       };
 
       await this.sessionManager.addMessage(sessionId, assistantMessage);
+
+      this.sendUsageUpdate(sessionId, streamResponse.usage);
 
       // Collect detailed metrics if enabled
       const detailedMetrics = this.processingConfig.collectDetailedMetrics

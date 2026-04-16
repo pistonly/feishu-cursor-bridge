@@ -15,6 +15,7 @@ import {
   type CursorResponse,
   type CursorSession,
   type CursorAuthStatus,
+  type CursorUsage,
   type StreamChunk,
   type StreamProgress,
 } from '../types';
@@ -52,6 +53,7 @@ interface CursorStreamJsonEvent {
   text?: string;
   result?: string;
   error?: string;
+  usage?: unknown;
   message?: {
     role: string;
     content: Array<{ type: string; text?: string }>;
@@ -88,6 +90,7 @@ interface CursorStreamAccumState {
   cursorStreamSessionId?: string;
   lastThinkingRaw?: string;
   lastThinkingNormalized?: string;
+  finalUsage?: CursorUsage;
 }
 
 /** English label from stream-json tool key (`semanticSearch` → `Semantic search`). */
@@ -130,6 +133,44 @@ function previewPromptForTrace(text: string, limit = 400): string {
     return '';
   }
   return text.length <= limit ? text : `${text.slice(0, limit)}...(truncated)`;
+}
+
+function normalizeTokenCount(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? Math.floor(value)
+    : undefined;
+}
+
+function extractCursorUsage(raw: unknown): CursorUsage | undefined {
+  if (!raw || typeof raw !== 'object') {
+    return undefined;
+  }
+  // Preserve Cursor's native usage buckets as-is. The legacy adapter decides
+  // separately how to project them onto ACP `usage_update`.
+  const usageRaw = raw as {
+    inputTokens?: unknown;
+    outputTokens?: unknown;
+    cacheReadTokens?: unknown;
+    cacheWriteTokens?: unknown;
+  };
+  const inputTokens = normalizeTokenCount(usageRaw.inputTokens);
+  const outputTokens = normalizeTokenCount(usageRaw.outputTokens);
+  const cacheReadTokens = normalizeTokenCount(usageRaw.cacheReadTokens);
+  const cacheWriteTokens = normalizeTokenCount(usageRaw.cacheWriteTokens);
+  const usage: CursorUsage = {};
+  if (inputTokens !== undefined) {
+    usage.inputTokens = inputTokens;
+  }
+  if (outputTokens !== undefined) {
+    usage.outputTokens = outputTokens;
+  }
+  if (cacheReadTokens !== undefined) {
+    usage.cacheReadTokens = cacheReadTokens;
+  }
+  if (cacheWriteTokens !== undefined) {
+    usage.cacheWriteTokens = cacheWriteTokens;
+  }
+  return Object.keys(usage).length > 0 ? usage : undefined;
 }
 
 export class CursorCliBridge {
@@ -883,7 +924,11 @@ export class CursorCliBridge {
         }
         break;
 
-      case 'result':
+      case 'result': {
+        const usage = extractCursorUsage(ev.usage);
+        if (usage) {
+          streamState.finalUsage = usage;
+        }
         if (onChunk) {
           if (
             !streamState.sawAssistantContent &&
@@ -909,6 +954,7 @@ export class CursorCliBridge {
           }
         }
         break;
+      }
 
       default:
         this.logger.debug('Unrecognized stream-json event type', {
@@ -1117,9 +1163,16 @@ export class CursorCliBridge {
           actualResponseText = response.stdout || '';
         }
 
+        const extractedUsage = extractCursorUsage(
+          parsedResponse && typeof parsedResponse === 'object'
+            ? (parsedResponse as { usage?: unknown }).usage
+            : undefined
+        );
+
         return {
           ...response,
           stdout: actualResponseText, // Override stdout with the extracted text
+          ...(extractedUsage !== undefined && { usage: extractedUsage }),
           metadata: {
             ...metadata,
             processedAt: new Date().toISOString(),
@@ -1301,6 +1354,9 @@ export class CursorCliBridge {
         stdout: responseContent,
         stderr: response.stderr || '',
         exitCode: response.exitCode || 0,
+        ...(streamState.finalUsage !== undefined && {
+          usage: streamState.finalUsage,
+        }),
         metadata: {
           ...metadata,
           processedAt: new Date().toISOString(),

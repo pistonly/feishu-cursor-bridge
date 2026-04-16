@@ -31,6 +31,7 @@ const mockSessionManager = {
   markSessionProcessing: jest.fn(),
   unmarkSessionProcessing: jest.fn(),
   getSessionModel: jest.fn().mockReturnValue('auto'),
+  getSessionModelContextWindow: jest.fn().mockReturnValue(272000),
   getCursorChatId: jest.fn().mockReturnValue(undefined),
   setSessionModel: jest.fn(),
   getAvailableModels: jest
@@ -88,6 +89,7 @@ describe('PromptHandler', () => {
 
     // Reset all mock return values
     mockSessionManager.getSessionModel.mockReturnValue('auto');
+    mockSessionManager.getSessionModelContextWindow.mockReturnValue(272000);
     mockSessionManager.getCursorChatId.mockReturnValue(undefined);
     mockSessionManager.getAvailableModels.mockReturnValue([
       { id: 'auto', name: 'Auto', provider: 'cursor' },
@@ -281,6 +283,39 @@ describe('PromptHandler', () => {
           }),
         });
       });
+
+      it('should send usage_update with cache buckets included', async () => {
+        mockCursorBridge.sendPrompt.mockResolvedValue({
+          success: true,
+          stdout: 'Cached response',
+          stderr: '',
+          exitCode: 0,
+          usage: {
+            inputTokens: 100,
+            outputTokens: 25,
+            cacheReadTokens: 50,
+            cacheWriteTokens: 10,
+          },
+          metadata: { responseTime: 1500 },
+        });
+
+        await promptHandler.processPrompt(validRequest);
+
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        expect(mockSendNotification).toHaveBeenCalledWith({
+          jsonrpc: '2.0',
+          method: 'session/update',
+          params: {
+            sessionId: 'test-session-1',
+            update: {
+              sessionUpdate: 'usage_update',
+              used: 185,
+              size: 272000,
+            },
+          },
+        });
+      });
     });
 
     describe('streaming prompts', () => {
@@ -381,6 +416,39 @@ describe('PromptHandler', () => {
 
         // After completion, stream count should be back to 0
         expect(promptHandler.getActiveStreamCount()).toBe(0);
+      });
+
+      it('should send streaming usage_update with cache buckets included', async () => {
+        mockCursorBridge.sendStreamingPrompt.mockResolvedValue({
+          success: true,
+          stdout: 'streamed response',
+          stderr: '',
+          exitCode: 0,
+          usage: {
+            inputTokens: 120,
+            outputTokens: 30,
+            cacheReadTokens: 40,
+            cacheWriteTokens: 5,
+          },
+          metadata: { streaming: true },
+        });
+
+        await promptHandler.processPrompt(streamingRequest);
+
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        expect(mockSendNotification).toHaveBeenCalledWith({
+          jsonrpc: '2.0',
+          method: 'session/update',
+          params: {
+            sessionId: 'test-session-1',
+            update: {
+              sessionUpdate: 'usage_update',
+              used: 195,
+              size: 272000,
+            },
+          },
+        });
       });
     });
 

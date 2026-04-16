@@ -24,6 +24,7 @@ import type {
   SessionModeState,
 } from '@agentclientprotocol/sdk';
 import * as fs from 'node:fs/promises';
+import * as fsSync from 'node:fs';
 import * as path from 'node:path';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -59,12 +60,31 @@ interface PersistedSessionRecord {
   updatedAt: string;
 }
 
+interface ModelContextWindowsConfig {
+  default?: unknown;
+  models?: Record<string, unknown>;
+}
+
+const DEFAULT_MODEL_CONTEXT_WINDOW = 272000;
+const MODEL_CONTEXT_WINDOWS_CONFIG_CANDIDATES = [
+  path.resolve(__dirname, '..', '..', 'model-context-windows.json'),
+  path.resolve(__dirname, '..', '..', '..', 'model-context-windows.json'),
+];
+
+function normalizeContextWindow(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
+}
+
 export class SessionManager {
   private config: AdapterConfig;
   private logger: Logger;
   private sessions = new Map<string, SessionData>();
   private sessionCleanupInterval: ReturnType<typeof setInterval> | null = null;
   private processingSessions = new Set<string>(); // Track sessions actively processing prompts
+  private modelContextWindows = new Map<string, number>();
+  private defaultModelContextWindow = DEFAULT_MODEL_CONTEXT_WINDOW;
 
   // Session modes per ACP spec
   // Using SDK SessionMode type for ACP compliance
@@ -117,12 +137,15 @@ export class SessionManager {
   constructor(config: AdapterConfig, logger: Logger) {
     this.config = config;
     this.logger = logger;
+    this.loadModelContextWindows();
 
     this.logger.debug('SessionManager initialized', {
       maxSessions: config.maxSessions,
       sessionTimeout: config.sessionTimeout,
       availableModes: this.availableModes.length,
       availableModels: this.availableModels.length,
+      defaultModelContextWindow: this.defaultModelContextWindow,
+      configuredModelContextWindows: this.modelContextWindows.size,
     });
 
     // Start session cleanup interval
@@ -558,10 +581,13 @@ export class SessionManager {
         // Infer provider from model ID
         const provider = this.inferProvider(id);
 
+        const contextWindow = this.resolveContextWindowForModel(id);
+
         models.push({
           id,
           name,
           provider,
+          ...(contextWindow !== undefined && { contextWindow }),
         });
       }
     }
@@ -575,10 +601,12 @@ export class SessionManager {
       }
     } else if (autoIndex === -1) {
       // Add auto if not found
+      const autoContextWindow = this.resolveContextWindowForModel('auto');
       models.unshift({
         id: 'auto',
         name: 'Auto',
         provider: 'cursor',
+        ...(autoContextWindow !== undefined && { contextWindow: autoContextWindow }),
       });
     }
 
@@ -609,6 +637,58 @@ export class SessionManager {
 
     // Default to unknown if we can't infer
     return 'unknown';
+  }
+
+  getSessionModelContextWindow(sessionId: string): number {
+    const currentModel = this.getSessionModel(sessionId);
+    return this.resolveContextWindowForModel(currentModel);
+  }
+
+  private loadModelContextWindows(): void {
+    this.modelContextWindows.clear();
+    this.defaultModelContextWindow = DEFAULT_MODEL_CONTEXT_WINDOW;
+
+    const configPath = MODEL_CONTEXT_WINDOWS_CONFIG_CANDIDATES.find((candidate) =>
+      fsSync.existsSync(candidate)
+    );
+    if (!configPath) {
+      this.logger.warn('Model context windows config not found, using defaults', {
+        candidates: MODEL_CONTEXT_WINDOWS_CONFIG_CANDIDATES,
+      });
+      return;
+    }
+
+    try {
+      const raw = fsSync.readFileSync(configPath, 'utf8');
+      const parsed = JSON.parse(raw) as ModelContextWindowsConfig;
+      const fallback = normalizeContextWindow(parsed.default);
+      if (fallback != null) {
+        this.defaultModelContextWindow = fallback;
+      }
+
+      const configured = parsed.models;
+      if (configured && typeof configured === 'object') {
+        for (const [modelId, size] of Object.entries(configured)) {
+          const normalized = normalizeContextWindow(size);
+          if (normalized != null) {
+            this.modelContextWindows.set(modelId, normalized);
+          }
+        }
+      }
+    } catch (error) {
+      this.logger.warn('Failed to load model context windows config, using defaults', {
+        path: configPath,
+        error,
+      });
+      this.modelContextWindows.clear();
+      this.defaultModelContextWindow = DEFAULT_MODEL_CONTEXT_WINDOW;
+    }
+  }
+
+  private resolveContextWindowForModel(modelId: string): number {
+    return (
+      this.modelContextWindows.get(modelId) ?? this.defaultModelContextWindow
+    );
   }
 
   /**

@@ -274,6 +274,16 @@ export interface CursorCommandOptions {
   session?: string;
 }
 
+export interface CursorUsage {
+  // Cursor CLI reports uncached prompt tokens separately from cache hits.
+  // Unlike the Claude SDK, `inputTokens` here is not a monotonic "entire
+  // conversation so far" counter once prompt caching starts kicking in.
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+}
+
 export interface CursorResponse {
   success: boolean;
   stdout?: string | undefined;
@@ -281,6 +291,7 @@ export interface CursorResponse {
   exitCode?: number | undefined;
   error?: string | undefined;
   metadata?: Record<string, any> | undefined;
+  usage?: CursorUsage | undefined;
 }
 
 export interface CursorSession {
