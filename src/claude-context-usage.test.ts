@@ -104,35 +104,49 @@ test("Non-Claude runtimes still use prompt totalTokens as a fallback when usage_
   });
 });
 
-test("Claude runtime accepts later zero usage_update values for Claude sessions", () => {
+
+test("Non-Claude runtimes do not overwrite model state with an unknown selector after setSessionModel", async () => {
   const handler = new EventEmitter() as any;
-  const runtime = new ClaudeAcpRuntime(createTestConfig("claude"), handler);
+  const runtime = new CodexAcpRuntime(createTestConfig("codex"), handler);
 
-  handler.emit("acp", {
-    type: "usage_update",
-    sessionId: "session-1",
-    summary: "raw sdk usage",
-    usage: {
-      usedTokens: 20_965,
-      maxTokens: 1_000_000,
-      percent: (20_965 / 1_000_000) * 100,
-    },
+  (runtime as any).connection = {
+    async unstable_setSessionModel(): Promise<void> {},
+  };
+  (runtime as any).sessionModelStates.set("session-1", {
+    currentModelId: "claude-opus-4-6",
+    availableModels: [{ modelId: "claude-opus-4-6", name: "Claude Opus 4.6" }],
   });
 
-  handler.emit("acp", {
-    type: "usage_update",
-    sessionId: "session-1",
-    summary: "standard acp zero usage",
-    usage: {
-      usedTokens: 0,
-      maxTokens: 1_000_000,
-      percent: 0,
-    },
+  await runtime.setSessionModel("session-1", "asbc");
+
+  assert.deepEqual(runtime.getSessionModelState("session-1"), {
+    currentModelId: "claude-opus-4-6",
+    availableModels: [{ modelId: "claude-opus-4-6", name: "Claude Opus 4.6" }],
+  });
+});
+
+test("Non-Claude runtimes keep updating model state when setSessionModel uses a known model", async () => {
+  const handler = new EventEmitter() as any;
+  const runtime = new CodexAcpRuntime(createTestConfig("codex"), handler);
+
+  (runtime as any).connection = {
+    async unstable_setSessionModel(): Promise<void> {},
+  };
+  (runtime as any).sessionModelStates.set("session-1", {
+    currentModelId: "claude-opus-4-6",
+    availableModels: [
+      { modelId: "claude-opus-4-6", name: "Claude Opus 4.6" },
+      { modelId: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+    ],
   });
 
-  assert.deepEqual(runtime.getSessionUsageState("session-1"), {
-    usedTokens: 0,
-    maxTokens: 1_000_000,
-    percent: 0,
+  await runtime.setSessionModel("session-1", "claude-sonnet-4-6");
+
+  assert.deepEqual(runtime.getSessionModelState("session-1"), {
+    currentModelId: "claude-sonnet-4-6",
+    availableModels: [
+      { modelId: "claude-opus-4-6", name: "Claude Opus 4.6" },
+      { modelId: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+    ],
   });
 });

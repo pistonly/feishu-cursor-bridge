@@ -648,9 +648,13 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
     if (!conn) throw new Error("ACP not started");
     await conn.unstable_setSessionModel({ sessionId, modelId });
     const current = this.sessionModelStates.get(sessionId);
+    if (!current) return;
+    if (!current.availableModels.some((model) => model.modelId === modelId)) {
+      return;
+    }
     this.sessionModelStates.set(sessionId, {
       currentModelId: modelId,
-      availableModels: current?.availableModels.map((model) => ({ ...model })) ?? [],
+      availableModels: current.availableModels.map((model) => ({ ...model })),
     });
   }
 

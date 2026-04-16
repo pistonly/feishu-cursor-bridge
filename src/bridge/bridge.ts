@@ -1422,6 +1422,9 @@ export class Bridge {
         const modelState = runtime.getSessionModelState(activeSessionForModel.sessionId);
         const resolved = resolveModelSelectorInput(modelId, modelState);
         await runtime.setSessionModel(activeSessionForModel.sessionId, resolved.modelId);
+        const confirmedModelId =
+          runtime.getSessionModelState(activeSessionForModel.sessionId)?.currentModelId ??
+          resolved.modelId;
         if (activeSessionForModel.backend === "codex") {
           this.sessionManager.setActiveSessionPreferredModel(
             msg.chatId,
@@ -1433,8 +1436,8 @@ export class Bridge {
         }
         const okText =
           resolved.pickedByIndex != null
-            ? `✅ 已按序号 ${resolved.pickedByIndex} 切换为 \`${resolved.modelId}\`（后续对话将使用该模型）。`
-            : `✅ 已切换模型为 \`${resolved.modelId}\`（后续对话将使用该模型）。`;
+            ? `✅ 已按序号 ${resolved.pickedByIndex} 切换为 \`${confirmedModelId}\`（后续对话将使用该模型）。`
+            : `✅ 已切换模型为 \`${confirmedModelId}\`（后续对话将使用该模型）。`;
         await this.feishuBot.sendText(
           msg.chatId,
           okText,

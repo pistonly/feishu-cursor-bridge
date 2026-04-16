@@ -279,6 +279,7 @@ test("/model 在 codex backend 切换成功后会持久化首选模型", async (
   const sentTexts: string[] = [];
   const preferredModels: string[] = [];
   const setModelCalls: Array<{ sessionId: string; modelId: string }> = [];
+  let currentModelId = "gpt-5.4/medium";
 
   (bridge as any).ensureMaintenanceStateLoaded = async () => {};
   (bridge as any).runtimeRegistry = {
@@ -286,7 +287,7 @@ test("/model 在 codex backend 切换成功后会持久化首选模型", async (
       return {
         getSessionModelState() {
           return {
-            currentModelId: "gpt-5.4/medium",
+            currentModelId,
             availableModels: [
               { modelId: "gpt-5.4/medium", name: "GPT-5.4 (medium)" },
               { modelId: "gpt-5.3-codex/low", name: "GPT-5.3 Codex (low)" },
@@ -295,6 +296,7 @@ test("/model 在 codex backend 切换成功后会持久化首选模型", async (
         },
         async setSessionModel(sessionId: string, modelId: string): Promise<void> {
           setModelCalls.push({ sessionId, modelId });
+          currentModelId = modelId;
         },
       };
     },
@@ -338,4 +340,55 @@ test("/model 在 codex backend 切换成功后会持久化首选模型", async (
   ]);
   assert.deepEqual(preferredModels, ["gpt-5.3-codex/low"]);
   assert.match(sentTexts[0] ?? "", /已按序号 2 切换为 `gpt-5\.3-codex\/low`/);
+});
+
+test("/model 成功后提示会回显运行时确认的当前模型", async () => {
+  const bridge = new Bridge(createTestConfig());
+  const sentTexts: string[] = [];
+  let currentModelId = "claude-opus-4-6";
+
+  (bridge as any).ensureMaintenanceStateLoaded = async () => {};
+  (bridge as any).runtimeRegistry = {
+    getRuntime() {
+      return {
+        getSessionModelState() {
+          return {
+            currentModelId,
+            availableModels: [{ modelId: "claude-opus-4-6", name: "Claude Opus 4.6" }],
+          };
+        },
+        async setSessionModel(_sessionId: string, _modelId: string): Promise<void> {
+          currentModelId = "claude-opus-4-6";
+        },
+      };
+    },
+  };
+  (bridge as any).sessionManager = {
+    async getActiveSession() {
+      return {
+        backend: "cursor-official",
+        sessionId: "session-1",
+        workspaceRoot: "/tmp/project",
+        chatId: "chat-1",
+        userId: "user-1",
+        chatType: "p2p",
+        createdAt: 0,
+        lastActiveAt: 0,
+      };
+    },
+  };
+  (bridge as any).feishuBot = {
+    stripBotMentionKeepLines(content: string) {
+      return content;
+    },
+    async sendText(_chatId: string, body: string): Promise<void> {
+      sentTexts.push(body);
+    },
+  };
+  (bridge as any).flushPendingSessionNotices = async () => {};
+
+  await (bridge as any).handleFeishuMessage(createMessage("/model asbc"));
+
+  assert.equal(sentTexts.length, 1);
+  assert.match(sentTexts[0] ?? "", /已切换模型为 `claude-opus-4-6`/);
 });
