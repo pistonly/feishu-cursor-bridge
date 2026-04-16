@@ -508,11 +508,14 @@ export class FeishuBot extends EventEmitter {
     const chunks = splitTextChunks(text);
     let lastMessageId = "";
     const replyInThread = opts?.replyInThread === true;
+    // topic/thread 内长消息会被分片；若后续分片走 create 会掉到群主会话。
+    // 因此 thread 回复时，所有分片都强制走 reply + reply_in_thread。
+    const forceReplyAllChunks = !!replyToMessageId && replyInThread;
 
     for (const chunk of chunks) {
       const content = JSON.stringify({ text: chunk });
 
-      if (replyToMessageId && lastMessageId === "") {
+      if (replyToMessageId && (lastMessageId === "" || forceReplyAllChunks)) {
         const res = await this.client.im.message.reply({
           path: { message_id: replyToMessageId },
           data: {
