@@ -1,6 +1,19 @@
 import { parseShellLikeArgs } from "../config/index.js";
 import type { AcpBackend } from "../acp/runtime-contract.js";
 
+const NEW_COMMAND_BACKEND_ALIASES: Record<string, AcpBackend> = {
+  official: "cursor-official",
+  "cursor-official": "cursor-official",
+  legacy: "cursor-legacy",
+  "cursor-legacy": "cursor-legacy",
+  tmux: "cursor-tmux",
+  "cursor-tmux": "cursor-tmux",
+  claude: "claude",
+  cc: "claude",
+  codex: "codex",
+  cx: "codex",
+};
+
 export function matchesInterruptUserCommand(content: string): boolean {
   const normalized = content
     .replace(/^\uFEFF/, "")
@@ -171,22 +184,7 @@ export function parseNewConversationCommand(
 function normalizeBackend(raw: string | undefined): AcpBackend | undefined {
   const normalized = raw?.trim().toLowerCase();
   if (!normalized) return undefined;
-  if (normalized === "official" || normalized === "cursor-official") {
-    return "cursor-official";
-  }
-  if (normalized === "legacy" || normalized === "cursor-legacy") {
-    return "cursor-legacy";
-  }
-  if (normalized === "tmux" || normalized === "cursor-tmux") {
-    return "cursor-tmux";
-  }
-  if (normalized === "claude") {
-    return "claude";
-  }
-  if (normalized === "codex") {
-    return "codex";
-  }
-  return undefined;
+  return NEW_COMMAND_BACKEND_ALIASES[normalized];
 }
 
 function extractNewFlags(tokens: string[]): {
@@ -208,13 +206,12 @@ function extractNewFlags(tokens: string[]): {
       const eq = tok.indexOf("=");
       name = eq >= 0 ? tok.slice(eq + 1) : "";
       i += 1;
-    } else if (tokLc === "--backend" && i + 1 < tokens.length) {
+    } else if ((tokLc === "--backend" || tokLc === "-b") && i + 1 < tokens.length) {
       backend = normalizeBackend(tokens[i + 1]);
       if (!backend) remaining.push(tok, tokens[i + 1]);
       i += 2;
-    } else if (tokLc.startsWith("--backend=")) {
-      const eq = tok.indexOf("=");
-      const value = eq >= 0 ? tok.slice(eq + 1) : "";
+    } else if (tokLc.startsWith("--backend=") || tokLc.startsWith("-b=")) {
+      const value = tokLc.startsWith("-b=") ? tok.slice(3) : tok.slice("--backend=".length);
       backend = normalizeBackend(value);
       if (!backend) remaining.push(tok);
       i += 1;

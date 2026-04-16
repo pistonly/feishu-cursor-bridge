@@ -1,5 +1,10 @@
 import type { AcpBackend } from "../acp/runtime-contract.js";
 
+const BACKEND_SHORTCUTS: Partial<Record<AcpBackend, string>> = {
+  claude: "cc",
+  codex: "cx",
+};
+
 /**
  * 交互式卡片数据结构
  */
@@ -70,11 +75,13 @@ export function buildWorkspaceWithBackendSelectCardMarkdown(
     for (const backend of opts.enabledBackends) {
       const isDefault = backend === opts.defaultBackend;
       const defaultMarker = isDefault ? " (默认)" : "";
-      lines.push(`• \`--backend ${backend}\`${defaultMarker}`);
+      const shortcut = BACKEND_SHORTCUTS[backend];
+      const shortcutNote = shortcut ? ` / \`-b ${shortcut}\`` : "";
+      lines.push(`• \`--backend ${backend}\`${shortcutNote}${defaultMarker}`);
     }
 
     lines.push("");
-    lines.push("示例: `/new 1 --backend codex --name my-project`");
+    lines.push("示例: `/new 1 -b cc --name my-project`");
   }
 
   return lines.join("\n");
@@ -108,8 +115,8 @@ export function buildWelcomeCardMarkdown(): string {
     "   • `codex` - Codex ACP 后端",
     "",
     "**3. 命令示例:**",
-    "   • `/new 1 --backend claude` - 使用第 1 个工作区和 Claude 后端",
-    "   • `/new 1 --backend codex` - 使用第 1 个工作区和 Codex 后端",
+    "   • `/new 1 -b cc` - 使用第 1 个工作区和 Claude 后端",
+    "   • `/new 1 -b cx` - 使用第 1 个工作区和 Codex 后端",
     "   • `/new /path/to/project --name my-project` - 自定义路径并命名",
     "",
     "---",

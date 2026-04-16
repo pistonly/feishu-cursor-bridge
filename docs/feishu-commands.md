@@ -86,8 +86,8 @@
 /new ~/projects/my-app
 /new "/path/with spaces/in name"
 /new /home/you/project --backend cursor-official
-/new ~/projects/my-app --backend cursor-legacy
-/new "/path/with spaces/in name" --backend cursor-tmux
+/new ~/projects/my-app -b legacy
+/new "/path/with spaces/in name" -b tmux
 ```
 
 使用快捷列表中第 N 项作为工作区：
@@ -96,7 +96,7 @@
 /new 1
 /new 2
 /new 1 --backend cursor-official
-/new 2 --backend cursor-tmux
+/new 2 -b cc
 ```
 
 新建时附加一个名称（便于后续用名称切换）：
@@ -106,8 +106,8 @@
 /new ~/projects/api --name api
 /new 1 --name frontend
 /new 1 --backend cursor-official --name frontend
-/new ~/projects/api --backend cursor-legacy --name api
-/new 2 --backend codex --name review
+/new ~/projects/api -b legacy --name api
+/new 2 -b cx --name review
 ```
 
 指定 backend 的格式：
@@ -115,10 +115,14 @@
 ```text
 /new <路径> --backend <cursor-official|cursor-legacy|cursor-tmux|claude|codex>
 /new <序号> --backend <cursor-official|cursor-legacy|cursor-tmux|claude|codex>
+/new <路径> -b <official|legacy|tmux|claude|codex|cc|cx>
+/new <序号> -b <official|legacy|tmux|claude|codex|cc|cx>
 ```
 
 说明：
 
+- `-b` 是 `--backend` 的简写。
+- backend 值支持完整名称，也支持常用简写：`cc` = `claude`、`cx` = `codex`。
 - `--backend` 仅对**真正创建 session** 的 `/new <路径>`、`/new <序号>` 生效。
 - `/new`、`/new list`、`/new add-list`、`/new remove-list` 不创建 session，因此不使用 `--backend`。
 - 当前服务只允许选择启动时启用的 backend；若某 backend 未启用，机器人会直接报错。

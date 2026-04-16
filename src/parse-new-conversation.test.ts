@@ -52,6 +52,23 @@ test("parseNewConversationCommand 支持 /new --backend codex", () => {
   });
 });
 
+test("parseNewConversationCommand 支持 /new -b 简写与 backend 别名", () => {
+  assert.deepEqual(parseNewConversationCommand("/new 1 -b cc"), {
+    kind: "new",
+    variant: "preset",
+    index: 1,
+    backend: "claude",
+    name: undefined,
+  });
+  assert.deepEqual(parseNewConversationCommand("/new /tmp/demo -b=cx"), {
+    kind: "new",
+    variant: "workspace",
+    path: "/tmp/demo",
+    backend: "codex",
+    name: undefined,
+  });
+});
+
 test("parseNewConversationCommand 支持维护命令与 --force", () => {
   assert.deepEqual(parseNewConversationCommand("/restart"), {
     kind: "restart",
