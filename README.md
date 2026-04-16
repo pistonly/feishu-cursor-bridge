@@ -109,7 +109,7 @@ bash service.sh logs       # macOS: follow log file; Linux: journalctl -f
 | `bash service.sh status` | Status |
 | `bash service.sh logs` | Live logs |
 
-After code changes: prefer **`bash service.sh update`** so dependency + compile + restart happen in one step. Alternatively run `npm run build` then **`bash service.sh restart`**. Re-run **`bash service.sh install`** if you need to refresh the plist / systemd unit or your **Node binary path** changed.
+After code changes: prefer **`bash service.sh update`** so dependency + compile + restart happen in one step. It now also refreshes the plist / systemd unit first, so PATH-related changes in `.env` (for example `CONDA_ENV_NAME` / `CONDA_ROOT`) take effect immediately. Alternatively run `npm run build` then **`bash service.sh restart`**. Re-run **`bash service.sh install`** if you need to refresh the plist / systemd unit or your **Node binary path** changed.
 
 ### Docker dev setup
 
@@ -181,6 +181,8 @@ Notes:
 | `CURSOR_AGENT_PATH` | Official ACP command path | `agent` |
 | `CURSOR_API_KEY` | Official ACP API key (optional) | empty |
 | `CURSOR_AUTH_TOKEN` | Official ACP auth token (optional) | empty |
+| `CONDA_ROOT` | Conda root path used by `service.sh` PATH injection (`~/miniconda3` / `~/anaconda3` auto-detected when unset) | auto-detect |
+| `CONDA_ENV_NAME` | Conda env name whose `bin` is prepended to service PATH during `bash service.sh install` / `update`; skipped if Conda/env is missing | `base` |
 | `CLAUDE_AGENT_ACP_COMMAND` | Claude ACP child command | in-repo patched wrapper or `npx -y @agentclientprotocol/claude-agent-acp` |
 | `CLAUDE_AGENT_ACP_EXTRA_ARGS` | Extra args appended to Claude ACP child command | empty |
 | `CODEX_AGENT_ACP_COMMAND` | Codex ACP child command | `npx -y @zed-industries/codex-acp` |
@@ -349,7 +351,7 @@ bash service.sh logs       # macOS：跟日志文件；Linux：journalctl -f
 | `bash service.sh status` | 状态 |
 | `bash service.sh logs` | 实时日志 |
 
-代码更新后优先 **`bash service.sh update`**（依赖 + 编译 + 重启一步完成）。也可手动 `npm run build` 再 **`bash service.sh restart`**。需要**重写 plist / systemd unit** 或更换 **Node 路径**时再执行 **`bash service.sh install`**。
+代码更新后优先 **`bash service.sh update`**（依赖 + 编译 + 重启一步完成）。它现在也会先刷新 plist / systemd unit，因此 `.env` 里的 PATH 相关变更（例如 `CONDA_ENV_NAME` / `CONDA_ROOT`）会立即生效。也可手动 `npm run build` 再 **`bash service.sh restart`**。需要**重写 plist / systemd unit** 或更换 **Node 路径**时再执行 **`bash service.sh install`**。
 
 ### Docker 开发联调
 

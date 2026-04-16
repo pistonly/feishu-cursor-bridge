@@ -2,6 +2,12 @@
 
 本文说明由 **飞书-Cursor 桥接服务**（`src/bridge/bridge.ts`）直接识别并处理的命令。其它以 `/` 开头的文本若未命中下表，会作为普通对话交给 Cursor Agent（`vendor/cursor-agent-acp`），行为与 Cursor 客户端内类似。**例外**：首条非空行以 `/topic` 开头的消息会被桥接直接忽略，不交给 Agent（见下文）。
 
+补充说明：在 `codex` session 中，`/compact`、`/clear` 都**不是 bridge 内置命令**，而是未命中后按普通 prompt 透传给 Codex backend。根据 2026-04-15 的真实探针，`/compact` 是 `codex-acp` 明确宣告的命令；`/clear` 当前环境下会表现出“清空上下文”的效果，但不是 `codex-acp` 已宣告的稳定命令。详见 `docs/codex-backend-notes.md`。
+
+补充说明：在 `cursor-official` session 中，`/compact`、`/clear`、`/summary`、`/summarize` 也都**不是 bridge 内置命令**。根据 2026-04-15 与 2026-04-16 的真实探针，它们也不是 official backend 已宣告的稳定命令；透传后通常只会被 Agent 当作普通 prompt 或本地 skill 入口来理解，不应当当成真实“压缩上下文 / 清空上下文 / 固定摘要命令”依赖。详见 `docs/official-backend-notes.md`。
+
+补充说明：在 `cursor-legacy` session 中，`/compact`、`/clear`、`/summary`、`/summarize` 同样**不是 bridge 内置命令**。根据 2026-04-16 的真实探针，legacy backend 当前只宣告 `plan`、`model` 两个命令；上述四个 slash 透传后都会被底层 `cursor-agent` 当作普通 prompt 理解，不应当当成真实“压缩上下文 / 清空上下文 / 固定摘要命令”依赖。详见 `docs/legacy-backend-notes.md`。
+
 ## 私聊与群聊
 
 | 场景 | 要求 |

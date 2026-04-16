@@ -14,5 +14,5 @@ test("formatBridgeCommandsHelp 含核心命令且随后端区分说明", () => {
   assert.match(official, /桥接调用 ACP/);
 
   const tmux = formatBridgeCommandsHelp("cursor-tmux");
-  assert.match(tmux, /Cursor CLI/);
+  assert.equal(tmux, official);
 });

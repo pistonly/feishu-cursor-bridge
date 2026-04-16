@@ -1,6 +1,6 @@
 # Codex Backend Notes
 
-记录时间：2026-04-13
+记录时间：2026-04-13，补充更新：2026-04-15
 
 ## 已验证现状
 
@@ -37,6 +37,45 @@
   - 当前本机环境下，Codex backend 真实支持桥接 `/stop` 对应的 ACP `session/cancel`
   - 这不是 bridge 侧假成功，而是后端真实生效
 
+## 2026-04-15 真实 `/compact` / `/clear` Probe
+
+- bridge 层没有内置 `/compact` / `/clear`
+- 当前实现只直接接管 `/model`、`/stop` 等少量命令；其它未命中的 slash 文本会按普通 prompt 透传给当前 backend session
+- 直接探测 `codex-acp` session 的 `available_commands_update`，返回命令为：
+  - `review`
+  - `review-branch`
+  - `review-commit`
+  - `init`
+  - `compact`
+  - `undo`
+  - `logout`
+- 本机 `@zed-industries/codex-acp@0.11.1` 自带 README 也只明确列出 `/compact`，没有 `/clear`
+
+### `/compact`
+
+- 输入 `/compact` 后，agent 返回 `Context compacted`
+- `usage_update.used` 从 `13158` 降到 `7535`
+- 压缩后继续追问，仍可正确回忆压缩前要求记住的 marker
+
+结论：
+
+- `/compact` 可以视为当前 `codex-acp@0.11.1` 的明确支持能力
+- bridge 侧若收到 `/compact`，当前可以安全理解为“透传给 Codex backend 的正式 slash command”
+
+### `/clear`
+
+- 输入 `/clear` 后，agent 会返回“已清空上下文，接下来做什么”一类回复
+- 清空后再次追问之前保存的 marker，返回 `UNKNOWN`
+- 但 `available_commands_update` 没有宣告 `clear`
+- README 没有记录 `/clear`
+- 原始 ACP `sessionUpdate` 中也没有观察到专门的 clear 事件；只看到了普通 `agent_message_chunk` / `usage_update`
+
+结论：
+
+- `/clear` 在当前环境下“会产生清空上下文效果”
+- 但它不是当前 `codex-acp` 明确宣告的 slash command，不应当在 bridge 文档、兼容判断或自动化能力矩阵中当作稳定 ACP 能力依赖
+- 若未来要在桥接层正式支持 `/clear`，更稳妥的做法是实现 bridge 自己的 clear 语义，而不是假设 Codex backend 一定支持
+
 ## 额外注意事项
 
 - 先前 bridge 的通用 `cancelSession()` 会吞掉后端异常，导致 `/stop` 可能误报成功
@@ -61,3 +100,6 @@
   - `session/cancel` 是否仍返回 `stopReason=cancelled`
   - `loadSession` 对新建 session 与历史 session 的行为是否一致
   - `initialize.agentCapabilities` 是否补齐 `supportsSetMode` / `supportsSetModel`
+  - `available_commands_update` 是否仍显式包含 `compact`
+  - `/compact` 后 usage 是否明显下降且历史信息仍可回忆
+  - `/clear` 是否仍只是未宣告行为，还是已升级为正式宣告命令

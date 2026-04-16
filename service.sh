@@ -43,13 +43,20 @@ if [[ -z "$NPM_BIN" || ! -x "$NPM_BIN" ]]; then
     exit 1
 fi
 
-service_path_linux() {
-    # Linux：供子进程找到 cursor agent 等
+service_base_path_linux() {
     echo "$(dirname "$NODE_BIN"):$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
 }
 
-service_path_macos() {
+service_base_path_macos() {
     echo "$(dirname "$NODE_BIN"):$HOME/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+}
+
+service_path_linux() {
+    build_service_path "$(service_base_path_linux)"
+}
+
+service_path_macos() {
+    build_service_path "$(service_base_path_macos)"
 }
 
 trim_whitespace() {
@@ -129,6 +136,59 @@ expand_home_path() {
         printf '%s\n' "$HOME/${p#\~/}"
     else
         printf '%s\n' "$p"
+    fi
+}
+
+resolve_conda_root() {
+    local root_raw root_path
+    root_raw="$(dotenv_get_value "CONDA_ROOT" 2>/dev/null || true)"
+    if [[ -n "$root_raw" ]]; then
+        root_path="$(expand_home_path "$root_raw")"
+        printf '%s\n' "$root_path"
+        return 0
+    fi
+
+    if [[ -d "$HOME/miniconda3" ]]; then
+        printf '%s\n' "$HOME/miniconda3"
+        return 0
+    fi
+
+    if [[ -d "$HOME/anaconda3" ]]; then
+        printf '%s\n' "$HOME/anaconda3"
+        return 0
+    fi
+
+    return 1
+}
+
+resolve_conda_bin() {
+    local env_name conda_root conda_bin
+    env_name="$(dotenv_get_value "CONDA_ENV_NAME" 2>/dev/null || true)"
+    env_name="$(trim_whitespace "$env_name")"
+    if [[ -z "$env_name" ]]; then
+        env_name="base"
+    fi
+
+    conda_root="$(resolve_conda_root)" || return 1
+    if [[ "$env_name" == "base" ]]; then
+        conda_bin="$conda_root/bin"
+    else
+        conda_bin="$conda_root/envs/$env_name/bin"
+    fi
+
+    [[ -d "$conda_bin" ]] || return 1
+    printf '%s\n' "$conda_bin"
+}
+
+build_service_path() {
+    local base_path="$1"
+    local conda_bin
+
+    conda_bin="$(resolve_conda_bin 2>/dev/null || true)"
+    if [[ -n "$conda_bin" ]]; then
+        printf '%s\n' "$conda_bin:$base_path"
+    else
+        printf '%s\n' "$base_path"
     fi
 }
 
@@ -503,11 +563,26 @@ cmd_install() {
     esac
 }
 
-# 拉代码或改源码后：重装依赖、编译 dist、再重启，使新代码生效（无需改 plist / systemd 单元时可代替全量 install）
+# 拉代码或改源码后：重装依赖、编译 dist、并刷新服务定义后重启，使新代码与最新 PATH 变更生效（如 conda 环境名或 Node 路径）
 cmd_update() {
-    echo "🔄 更新服务（npm install + build + restart）..."
+    echo "🔄 更新服务（npm install + build + refresh service + restart）..."
     run_npm_install_and_build
-    cmd_restart
+    case "$UNAME_S" in
+        Darwin)
+            generate_plist
+            cmd_restart
+            ;;
+        Linux)
+            require_systemctl
+            generate_systemd_unit
+            systemctl --user daemon-reload
+            cmd_restart
+            ;;
+        *)
+            echo "❌ 不支持的操作系统: $UNAME_S"
+            exit 1
+            ;;
+    esac
 }
 
 cmd_uninstall() {

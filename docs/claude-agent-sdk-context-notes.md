@@ -8,6 +8,14 @@
 - TypeScript SDK 可以直接拿按模型拆分的使用量：`result.modelUsage`
 - TypeScript SDK 可以直接拿当前 session 的 context 占用：`await query.getContextUsage()`
 
+## 本项目的显示口径
+
+- 对用户展示的 `context`，定义为 `input_tokens + output_tokens`
+- 不把 `cache_read_input_tokens` 算进显示的 context
+- 不把 `cache_creation_input_tokens` 算进显示的 context
+
+这里的 `cache_*` 字段用于说明 token 来源/归因，不是要再额外叠加到显示 context 上的一层。
+
 ## 推荐依赖的字段
 
 ### 1. 最终总 usage
@@ -18,6 +26,12 @@
 - `output_tokens`
 - `cache_read_input_tokens`
 - `cache_creation_input_tokens`
+
+注意：
+
+- 这些字段适合做 usage / 成本 /调试拆解
+- 但本项目显示给用户的 `context` 不直接等于“所有 usage 字段求和”
+- 当前项目口径是：`context = input_tokens + output_tokens`
 
 ### 2. 按模型拆分 usage
 
@@ -56,6 +70,8 @@
 - `result.usage`
 - `result.modelUsage`
 - `query.getContextUsage()`
+
+另外，对本项目的 context 展示，不建议把 `cache_read_input_tokens` / `cache_creation_input_tokens` 叠加进显示值。
 
 ## 调用时机
 

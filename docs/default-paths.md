@@ -11,6 +11,8 @@
 | ACP 后端选择 | `ACP_BACKEND` | `cursor-official` |
 | 启动时启用的 backend 列表 | `ACP_ENABLED_BACKENDS` | 默认仅包含 `ACP_BACKEND` 当前值 |
 | 官方 ACP 命令 | `CURSOR_AGENT_PATH` | `agent` |
+| service PATH 注入的 Conda 根目录 | `CONDA_ROOT` | 自动探测 `~/miniconda3`，否则 `~/anaconda3` |
+| service PATH 注入的 Conda 环境名 | `CONDA_ENV_NAME` | `base`；若 Conda 或对应 env 不存在则跳过 |
 | `cursor-agent-acp` 适配器会话目录（仅 `legacy`） | `CURSOR_LEGACY_SESSION_DIR`（兼容 `CURSOR_ACP_SESSION_DIR`） | `~/.feishu-cursor-bridge/cursor-acp-sessions` |
 | 飞书 ↔ ACP 会话映射持久化 JSON | `BRIDGE_SESSION_STORE` | `~/.feishu-cursor-bridge/.feishu-bridge-sessions.json` |
 | `/new list`、`/new <序号>` 使用的快捷工作区列表 JSON | `BRIDGE_WORK_PRESETS_FILE`（兼容 `CURSOR_WORK_PRESETS_FILE`） | `~/.feishu-cursor-bridge/workspace-presets.json` |
@@ -34,6 +36,14 @@
 - **`CURSOR_AGENT_PATH` 默认**：`agent`
 - **含义**：`ACP_BACKEND` 决定默认 backend；`ACP_ENABLED_BACKENDS` 决定启动时实际拉起哪些 backend，以及 `/new --backend <...>` 允许选择哪些值
 - **常见场景**：若默认仍想用 `cursor-official`，但又希望在飞书里临时切到 `cursor-legacy` / `cursor-tmux` / `claude`，应显式配置 `ACP_ENABLED_BACKENDS=cursor-official,cursor-legacy,cursor-tmux,claude`
+
+### service PATH 的 Conda 注入 `CONDA_ROOT` / `CONDA_ENV_NAME`
+
+- **作用范围**：仅影响 `bash service.sh install` / `bash service.sh update` 生成的 launchd / systemd 服务 PATH；不会改写你当前交互式 shell 的环境。
+- **`CONDA_ENV_NAME` 默认**：`base`
+- **`CONDA_ROOT` 默认**：未设置时按顺序探测 `~/miniconda3`、`~/anaconda3`
+- **注入规则**：若检测到 Conda 且目标环境存在，则将对应 `bin` 目录追加到服务 PATH 最前面；`base` 使用 `<conda-root>/bin`，其他环境使用 `<conda-root>/envs/<env-name>/bin`。
+- **缺失处理**：若未安装 Conda、根目录不存在、或目标环境不存在，则自动跳过，不会阻止服务安装 / 更新。
 
 ### 适配器会话目录 `CURSOR_LEGACY_SESSION_DIR`（兼容 `CURSOR_ACP_SESSION_DIR`）
 
