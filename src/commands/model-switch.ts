@@ -1,6 +1,9 @@
 import type { AcpSessionModelState } from "../acp/runtime-contract.js";
 import { formatJsonRpcLikeError } from "../utils/format-json-rpc-error.js";
 
+const CLAUDE_MODEL_SELECTOR_HINT =
+  "Claude backend 也支持类似 `claude-opus-4-6/high` 的 selector。";
+
 export interface ModelSwitchFormatOptions {
   /** 列表带【序号】并提示可用 `/model <n>` */
   numbered?: boolean;
@@ -78,7 +81,11 @@ export function formatModelUsage(
 ): string {
   const body = [options?.numbered ? "用法：`/model <模型ID或序号>`" : "用法：`/model <模型ID>`"];
   if (!modelState || modelState.availableModels.length === 0) {
-    body.push("", "可先在当前会话完成一轮对话，或在本机查看对应 ACP 后端支持的模型列表。");
+    body.push(
+      "",
+      "可先在当前会话完成一轮对话，或在本机查看对应 ACP 后端支持的模型列表。",
+      CLAUDE_MODEL_SELECTOR_HINT,
+    );
     return body.join("\n");
   }
   body.push("", formatAvailableModels(modelState, options));
@@ -86,6 +93,7 @@ export function formatModelUsage(
   if (current) {
     body.push(current);
   }
+  body.push(CLAUDE_MODEL_SELECTOR_HINT);
   return body.join("\n");
 }
 

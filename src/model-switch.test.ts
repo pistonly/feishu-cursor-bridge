@@ -9,14 +9,24 @@ import {
 test("formatModelUsage 在缺少模型状态时回退到基础用法提示", () => {
   assert.equal(
     formatModelUsage(),
-    "用法：`/model <模型ID>`\n\n可先在当前会话完成一轮对话，或在本机查看对应 ACP 后端支持的模型列表。",
+    [
+      "用法：`/model <模型ID>`",
+      "",
+      "可先在当前会话完成一轮对话，或在本机查看对应 ACP 后端支持的模型列表。",
+      "Claude backend 也支持类似 `claude-opus-4-6/high` 的 selector。",
+    ].join("\n"),
   );
 });
 
 test("formatModelUsage 在 numbered 下会显示可用序号用法", () => {
   assert.equal(
     formatModelUsage(undefined, { numbered: true }),
-    "用法：`/model <模型ID或序号>`\n\n可先在当前会话完成一轮对话，或在本机查看对应 ACP 后端支持的模型列表。",
+    [
+      "用法：`/model <模型ID或序号>`",
+      "",
+      "可先在当前会话完成一轮对话，或在本机查看对应 ACP 后端支持的模型列表。",
+      "Claude backend 也支持类似 `claude-opus-4-6/high` 的 selector。",
+    ].join("\n"),
   );
 });
 
@@ -36,6 +46,7 @@ test("formatModelUsage 会列出可用模型与当前模型", () => {
       "• Auto -> `auto`",
       "• GPT-5 -> `gpt-5`",
       "当前模型：Auto（精确值：`auto`）",
+      "Claude backend 也支持类似 `claude-opus-4-6/high` 的 selector。",
     ].join("\n"),
   );
 });
@@ -59,6 +70,7 @@ test("formatModelUsage 在 numbered 下列出带【序号】的模型", () => {
       "• 【1】A -> `a`",
       "• 【2】B -> `b`",
       "当前模型：B（精确值：`b`）",
+      "Claude backend 也支持类似 `claude-opus-4-6/high` 的 selector。",
     ].join("\n"),
   );
 });
@@ -167,3 +179,4 @@ test("formatModelSwitchFailure 在 numbered 下列出带序号", () => {
   assert.ok(message.includes("【1】"));
   assert.ok(message.includes("可直接 `/model n`"));
 });
+
