@@ -95,19 +95,20 @@ function normalizeClaudeSdkUsageProxy(
   const usage = message.usage;
   if (!usage || typeof usage !== "object") return undefined;
 
-  const parts = [
-    usage.input_tokens,
-    usage.output_tokens,
-    usage.cache_read_input_tokens,
-    usage.cache_creation_input_tokens,
-  ];
-  let usedTokens = 0;
-  for (const part of parts) {
-    if (typeof part !== "number" || !Number.isFinite(part) || part < 0) {
-      return undefined;
-    }
-    usedTokens += part;
+  const inputTokens = usage.input_tokens;
+  const outputTokens = usage.output_tokens;
+  if (
+    typeof inputTokens !== "number" ||
+    !Number.isFinite(inputTokens) ||
+    inputTokens < 0 ||
+    typeof outputTokens !== "number" ||
+    !Number.isFinite(outputTokens) ||
+    outputTokens < 0
+  ) {
+    return undefined;
   }
+
+  const usedTokens = inputTokens + outputTokens;
   if (usedTokens <= 0) return undefined;
 
   const rawModelUsage = message.modelUsage;

@@ -131,11 +131,11 @@ test("FeishuBridgeClient 会把 _claude/sdkMessage result 映射为 usage_update
     {
       type: "usage_update",
       sessionId: "session-1",
-      summary: "Claude raw SDK 用量已更新（20.3%）",
+      summary: "Claude raw SDK 用量已更新（10.2%）",
       usage: {
-        usedTokens: 40_563,
+        usedTokens: 20_339,
         maxTokens: 200_000,
-        percent: (40_563 / 200_000) * 100,
+        percent: (20_339 / 200_000) * 100,
       },
     },
   ]);

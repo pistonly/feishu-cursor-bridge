@@ -4,32 +4,23 @@ import {
   emitAccurateClaudeContextUsageUpdate,
 } from "./acp/patched-claude-agent-acp.js";
 
-test("emitAccurateClaudeContextUsageUpdate emits corrected usage_update from getContextUsage", async () => {
+test("emitAccurateClaudeContextUsageUpdate emits corrected usage_update from result usage", async () => {
   const calls: Array<unknown> = [];
   const ok = await emitAccurateClaudeContextUsageUpdate(
     {
-      sessions: {
-        "session-1": {
-          query: {
-            async getContextUsage() {
-              return {
-                totalTokens: 19_783,
-                maxTokens: 200_000,
-              };
-            },
-          },
-        },
-      },
       client: {
         async sessionUpdate(params: unknown) {
           calls.push(params);
         },
+        async extNotification() {},
       },
       logger: {
         error() {},
       },
     },
     "session-1",
+    19_783,
+    200_000,
   );
 
   assert.equal(ok, true);
@@ -45,32 +36,23 @@ test("emitAccurateClaudeContextUsageUpdate emits corrected usage_update from get
   ]);
 });
 
-test("emitAccurateClaudeContextUsageUpdate skips invalid context snapshots", async () => {
+test("emitAccurateClaudeContextUsageUpdate skips invalid usage values", async () => {
   const calls: Array<unknown> = [];
   const ok = await emitAccurateClaudeContextUsageUpdate(
     {
-      sessions: {
-        "session-1": {
-          query: {
-            async getContextUsage() {
-              return {
-                totalTokens: 0,
-                maxTokens: 200_000,
-              };
-            },
-          },
-        },
-      },
       client: {
         async sessionUpdate(params: unknown) {
           calls.push(params);
         },
+        async extNotification() {},
       },
       logger: {
         error() {},
       },
     },
     "session-1",
+    0,
+    200_000,
   );
 
   assert.equal(ok, false);

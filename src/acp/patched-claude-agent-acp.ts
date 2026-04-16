@@ -11,17 +11,18 @@ import {
   loadManagedSettings,
 } from "@agentclientprotocol/claude-agent-acp/dist/utils.js";
 
-type ClaudeContextUsage = {
-  totalTokens: number;
-  maxTokens: number;
-};
-
-type ClaudePromptContextQuery = {
-  getContextUsage(): Promise<ClaudeContextUsage>;
-};
-
-type ClaudePatchedSession = {
-  query: ClaudePromptContextQuery;
+type ClaudeSdkResultMessage = {
+  type?: unknown;
+  usage?: {
+    input_tokens?: unknown;
+    output_tokens?: unknown;
+  } | null;
+  modelUsage?: Record<
+    string,
+    {
+      contextWindow?: unknown;
+    }
+  > | null;
 };
 
 type ClaudeUsageUpdateClient = {
@@ -33,6 +34,10 @@ type ClaudeUsageUpdateClient = {
       size: number;
     };
   }): Promise<void>;
+  extNotification: (
+    method: string,
+    params: Record<string, unknown>,
+  ) => Promise<void>;
 };
 
 type ClaudeUsageUpdateLogger = {
@@ -40,7 +45,6 @@ type ClaudeUsageUpdateLogger = {
 };
 
 type ClaudeUsageUpdateAgentLike = {
-  sessions: Record<string, ClaudePatchedSession | undefined>;
   client: ClaudeUsageUpdateClient;
   logger: ClaudeUsageUpdateLogger;
 };
@@ -48,11 +52,55 @@ type ClaudeUsageUpdateAgentLike = {
 const PROMPT_PATCH_MARKER = Symbol.for(
   "feishu-cursor-bridge/claude-agent-acp-context-patch",
 );
-const CONTEXT_QUERY_TIMEOUT_MS = 500;
+
+function extractUsedTokensFromResultMessage(raw: unknown): number | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const message = raw as ClaudeSdkResultMessage;
+  if (message.type !== "result") return undefined;
+  const usage = message.usage;
+  if (!usage || typeof usage !== "object") return undefined;
+  const inputTokens = usage.input_tokens;
+  const outputTokens = usage.output_tokens;
+  if (
+    typeof inputTokens !== "number" ||
+    !Number.isFinite(inputTokens) ||
+    inputTokens < 0 ||
+    typeof outputTokens !== "number" ||
+    !Number.isFinite(outputTokens) ||
+    outputTokens < 0
+  ) {
+    return undefined;
+  }
+  return Math.floor(inputTokens + outputTokens);
+}
+
+function extractMaxTokensFromResultMessage(raw: unknown): number | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const message = raw as ClaudeSdkResultMessage;
+  if (message.type !== "result") return undefined;
+  const rawModelUsage = message.modelUsage;
+  if (!rawModelUsage || typeof rawModelUsage !== "object") return undefined;
+
+  let maxTokens = 0;
+  for (const usageEntry of Object.values(rawModelUsage)) {
+    if (!usageEntry || typeof usageEntry !== "object") continue;
+    const contextWindow = usageEntry.contextWindow;
+    if (
+      typeof contextWindow === "number" &&
+      Number.isFinite(contextWindow) &&
+      contextWindow > maxTokens
+    ) {
+      maxTokens = contextWindow;
+    }
+  }
+  return maxTokens > 0 ? Math.floor(maxTokens) : undefined;
+}
 
 export async function emitAccurateClaudeContextUsageUpdate(
   agent: ClaudeUsageUpdateAgentLike,
   sessionId: string,
+  usedTokens: number,
+  maxTokens: number,
   sendSessionUpdate:
     | ((params: {
         sessionId: string;
@@ -63,44 +111,28 @@ export async function emitAccurateClaudeContextUsageUpdate(
         };
       }) => Promise<void>)
     | undefined = undefined,
-  timeoutMs = CONTEXT_QUERY_TIMEOUT_MS,
 ): Promise<boolean> {
-  const session = agent.sessions[sessionId];
-  if (!session) return false;
+  if (
+    !Number.isFinite(usedTokens) ||
+    usedTokens <= 0 ||
+    !Number.isFinite(maxTokens) ||
+    maxTokens <= 0
+  ) {
+    return false;
+  }
 
   try {
-    const contextUsage = (await withTimeout(
-      session.query.getContextUsage(),
-      timeoutMs,
-      "getContextUsage timeout",
-    )) as ClaudeContextUsage;
-
-    if (
-      !Number.isFinite(contextUsage.totalTokens) ||
-      !Number.isFinite(contextUsage.maxTokens) ||
-      contextUsage.totalTokens <= 0 ||
-      contextUsage.maxTokens <= 0
-    ) {
-      return false;
-    }
-
     const update = {
       sessionId,
       update: {
         sessionUpdate: "usage_update",
-        used: Math.floor(contextUsage.totalTokens),
-        size: Math.floor(contextUsage.maxTokens),
+        used: Math.floor(usedTokens),
+        size: Math.floor(maxTokens),
       },
     } as const;
     await (sendSessionUpdate ?? agent.client.sessionUpdate.bind(agent.client))(update);
     return true;
   } catch (error) {
-    if (
-      error instanceof Error &&
-      /timeout|Query closed before response received/i.test(error.message)
-    ) {
-      return false;
-    }
     agent.logger.error(
       `[patched-claude-agent-acp] failed to refresh context usage sessionId=${sessionId}`,
       error instanceof Error ? error.message : error,
@@ -126,7 +158,32 @@ export function patchClaudeAcpAgentContextUsage(): void {
     params: Parameters<ClaudeAcpAgent["prompt"]>[0],
   ): ReturnType<ClaudeAcpAgent["prompt"]> {
     const originalSessionUpdate = this.client.sessionUpdate.bind(this.client);
+    const originalExtNotification = this.client.extNotification.bind(this.client);
     let correctedUsageSent = false;
+    let latestUsedTokens: number | undefined;
+    let latestMaxTokens: number | undefined;
+
+    this.client.extNotification = async (method, notificationParams) => {
+      if (
+        method === "_claude/sdkMessage" &&
+        notificationParams.sessionId === params.sessionId
+      ) {
+        const usedTokens = extractUsedTokensFromResultMessage(
+          notificationParams.message,
+        );
+        if (usedTokens != null) {
+          latestUsedTokens = usedTokens;
+        }
+        const maxTokens = extractMaxTokensFromResultMessage(
+          notificationParams.message,
+        );
+        if (maxTokens != null) {
+          latestMaxTokens = maxTokens;
+        }
+      }
+      await originalExtNotification(method, notificationParams);
+    };
+
     this.client.sessionUpdate = async (notification) => {
       await originalSessionUpdate(notification);
       const update = notification.update;
@@ -134,9 +191,12 @@ export function patchClaudeAcpAgentContextUsage(): void {
       if (notification.sessionId !== params.sessionId) return;
       if (update?.sessionUpdate !== "usage_update") return;
       if (update.cost == null) return;
+      if (latestUsedTokens == null) return;
       correctedUsageSent = await emitAccurateClaudeContextUsageUpdate(
         this as unknown as ClaudeUsageUpdateAgentLike,
         params.sessionId,
+        latestUsedTokens,
+        latestMaxTokens ?? notification.update.size,
         originalSessionUpdate,
       );
     };
@@ -145,6 +205,7 @@ export function patchClaudeAcpAgentContextUsage(): void {
       return await originalPrompt.call(this, params);
     } finally {
       this.client.sessionUpdate = originalSessionUpdate;
+      this.client.extNotification = originalExtNotification;
     }
   };
   proto[PROMPT_PATCH_MARKER] = true;
@@ -154,27 +215,6 @@ patchClaudeAcpAgentContextUsage();
 
 function isEntrypoint(): boolean {
   return process.argv[1] != null && pathToFileURL(process.argv[1]).href === import.meta.url;
-}
-
-async function withTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  message: string,
-): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<T>((_, reject) => {
-        timer = setTimeout(() => {
-          reject(new Error(message));
-        }, timeoutMs);
-        timer.unref?.();
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
 }
 
 if (isEntrypoint()) {
