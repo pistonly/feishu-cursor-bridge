@@ -79,6 +79,8 @@ function stripThinkingTimers(text: string): string {
 /** Mutable state while scanning stream-json lines (assistant dedupe + tool correlation). */
 interface CursorStreamAccumState {
   assistantText: string;
+  /** Whether assistant text has already been emitted downstream for this turn. */
+  sawAssistantContent: boolean;
   /** Monotonic ids for stream-json tools when the CLI omits `call_id`. */
   streamToolSeq: number;
   /** LIFO stack: `completed` without id pops the latest synthetic id from `started`. */
@@ -808,6 +810,7 @@ export class CursorCliBridge {
         const blocks = this.extractStreamingContentBlocks(ev, streamState);
         if (onChunk) {
           for (const block of blocks) {
+            streamState.sawAssistantContent = true;
             await onChunk({ type: 'content', data: block });
           }
         }
@@ -882,7 +885,11 @@ export class CursorCliBridge {
 
       case 'result':
         if (onChunk) {
-          if (ev.result != null && typeof ev.result === 'string') {
+          if (
+            !streamState.sawAssistantContent &&
+            ev.result != null &&
+            typeof ev.result === 'string'
+          ) {
             const text = this.normalizeStreamingAssistantText(
               ev.result,
               streamState,
@@ -1228,6 +1235,7 @@ export class CursorCliBridge {
       let streamBuffer = '';
       const streamState: CursorStreamAccumState = {
         assistantText: '',
+        sawAssistantContent: false,
         streamToolSeq: 0,
         pendingStreamToolStack: [],
       };

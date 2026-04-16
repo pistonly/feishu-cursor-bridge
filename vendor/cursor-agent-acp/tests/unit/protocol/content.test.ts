@@ -1477,6 +1477,17 @@ That should work!`;
       expect(result2).toBeDefined();
     });
 
+    it('should preserve blank lines before a streamed code block', async () => {
+      const chunk = 'Here is some code:\n\n```python\nprint("test")\n';
+
+      const result = await contentProcessor.processStreamChunk(chunk);
+
+      expect(result).toEqual({
+        type: 'text',
+        text: 'Here is some code:\n\n',
+      });
+    });
+
     it('should handle text and code in same chunk', async () => {
       const chunk = 'Some text\n```js\ncode();\n```\n';
 
@@ -1510,6 +1521,18 @@ That should work!`;
       expect(result).toBeDefined();
       expect(result?.type).toBe('text');
       expect(result?.text).toContain('javascript');
+    });
+
+    it('should preserve indentation and intentional blank lines inside streamed code blocks', async () => {
+      await contentProcessor.processStreamChunk('```python\n');
+      await contentProcessor.processStreamChunk('  print("test")\n');
+
+      const result = await contentProcessor.processStreamChunk('\n```\n');
+
+      expect(result).toEqual({
+        type: 'text',
+        text: '\n```python\n  print("test")\n\n```\n',
+      });
     });
 
     it('should finalize with remaining text', async () => {

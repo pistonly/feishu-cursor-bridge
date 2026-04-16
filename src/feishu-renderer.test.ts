@@ -118,3 +118,14 @@ test("FeishuCardState 在多张卡片时只把状态摘要放到最后一张", (
   assert.equal(chunks.slice(0, -1).some((chunk) => chunk.includes("`cursor-official` | Auto | —")), false);
   assert.equal(chunks.at(-1)?.includes("`cursor-official` | Auto | —"), true);
 });
+
+test("FeishuCardState 会保留主回复首尾的有效换行", () => {
+  const state = new FeishuCardState();
+  state.apply({
+    type: "agent_message_chunk",
+    sessionId: "session-1",
+    text: "\n```ts\n  const answer = 42;\n```\n",
+  });
+
+  assert.equal(state.toMarkdown(), "\n```ts\n  const answer = 42;\n```\n");
+});

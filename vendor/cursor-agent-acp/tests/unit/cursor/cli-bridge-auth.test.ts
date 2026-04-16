@@ -256,6 +256,71 @@ describe('CursorCliBridge - Authentication Status Parsing', () => {
     });
   });
 
+  describe('stream-json result fallback', () => {
+    test('should ignore final result text after assistant chunks were emitted', async () => {
+      const onChunk = jest.fn().mockResolvedValue(undefined);
+      const streamState = {
+        assistantText: '',
+        sawAssistantContent: false,
+        streamToolSeq: 0,
+        pendingStreamToolStack: [],
+      };
+
+      await (bridge as any).dispatchCursorStreamEvent(
+        {
+          type: 'assistant',
+          message: {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'Hello world' }],
+          },
+        },
+        streamState,
+        onChunk
+      );
+      await (bridge as any).dispatchCursorStreamEvent(
+        {
+          type: 'result',
+          result: 'Hello world',
+        },
+        streamState,
+        onChunk
+      );
+
+      const contentCalls = onChunk.mock.calls.filter(
+        (call) => call[0]?.type === 'content'
+      );
+      expect(contentCalls).toHaveLength(1);
+      expect(contentCalls[0]?.[0]?.data).toEqual({
+        type: 'text',
+        text: 'Hello world',
+      });
+    });
+
+    test('should use result text as fallback when no assistant chunks were emitted', async () => {
+      const onChunk = jest.fn().mockResolvedValue(undefined);
+      const streamState = {
+        assistantText: '',
+        sawAssistantContent: false,
+        streamToolSeq: 0,
+        pendingStreamToolStack: [],
+      };
+
+      await (bridge as any).dispatchCursorStreamEvent(
+        {
+          type: 'result',
+          result: 'Final-only response',
+        },
+        streamState,
+        onChunk
+      );
+
+      expect(onChunk).toHaveBeenCalledWith({
+        type: 'content',
+        data: { type: 'text', text: 'Final-only response' },
+      });
+    });
+  });
+
   describe('streaming timeout', () => {
     function createMockChildProcess() {
       const child = new EventEmitter() as EventEmitter & {

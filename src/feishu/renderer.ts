@@ -393,7 +393,7 @@ export class FeishuCardState {
           body += (tl[i] as Extract<TimelineEntry, { k: "main" }>).text;
         }
         parts.push(
-          ...this.splitMainBodySections(body.trim(), opts.maxMarkdownLength),
+          ...this.splitMainBodySections(body, opts.maxMarkdownLength),
         );
         i++;
         continue;

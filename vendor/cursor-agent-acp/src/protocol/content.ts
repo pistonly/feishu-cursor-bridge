@@ -385,6 +385,14 @@ export class ContentProcessor {
   }
 
   /**
+   * Preserve code indentation and intentional blank lines while removing the
+   * separator newline immediately before a closing fence.
+   */
+  private preserveCodeBlockContent(text: string): string {
+    return text.replace(/\r?\n$/, '');
+  }
+
+  /**
    * Finalize streaming and return any remaining partial content
    * Call this at the end of streaming to flush any buffered content
    */
@@ -467,9 +475,9 @@ export class ContentProcessor {
         const language = startMatch[1]?.trim();
 
         // If there's content before the code block, return it as text first
-        if (beforeCode.trim()) {
+        if (beforeCode.length > 0) {
           // Extract any complete text blocks before this code block
-          const textToReturn = beforeCode.trim();
+          const textToReturn = beforeCode;
           // Remove the opening marker and keep only the code content
           state.accumulatedContent = accumulated.substring(
             startMatch.index + startMatch[0].length
@@ -516,7 +524,7 @@ export class ContentProcessor {
           const imageMatch = accumulated.match(/\[Image data:[^\]]+\]/);
           if (imageMatch) {
             const imageIndex = accumulated.indexOf(imageMatch[0]);
-            const beforeImage = accumulated.substring(0, imageIndex).trim();
+            const beforeImage = accumulated.substring(0, imageIndex);
             const imageText = imageMatch[0];
             state.accumulatedContent = accumulated.substring(
               imageIndex + imageText.length
@@ -590,8 +598,10 @@ export class ContentProcessor {
               /\s/.test(afterMarker)));
 
         if (isValidClosing) {
-          const codeContent = accumulated.substring(0, closingIndex).trim();
-          const afterCode = accumulated.substring(closingIndex + 3).trimStart();
+          const codeContent = this.preserveCodeBlockContent(
+            accumulated.substring(0, closingIndex)
+          );
+          const afterCode = accumulated.substring(closingIndex + 3);
 
           if (codeContent.length > 0 || closingIndex > 0) {
             // Complete code block found - convert to text with code formatting
