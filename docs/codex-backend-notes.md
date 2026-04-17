@@ -1,6 +1,6 @@
 # Codex Backend Notes
 
-记录时间：2026-04-13，补充更新：2026-04-15
+记录时间：2026-04-13，补充更新：2026-04-15、2026-04-17
 
 ## 已验证现状
 
@@ -16,6 +16,29 @@
   - `sessionCapabilities.close`
   - `auth.logout`
 - `authMethods`：`chatgpt`、`CODEX_API_KEY`、`OPENAI_API_KEY`
+
+## 宿主机环境要求（2026-04-17 补充）
+
+- bridge 默认通过 `npx -y @zed-industries/codex-acp` 启动 Codex backend，因此宿主机必须先能直接启动这条命令
+- 当前实测的 Linux x64 包版本仍是 `@zed-industries/codex-acp@0.11.1`
+- 对下载到的 `codex-acp` 二进制执行 `ldd`，观察到它依赖：
+  - `libssl.so.3`
+  - `libcrypto.so.3`
+  - `GLIBC_2.32`
+  - `GLIBC_2.33`
+  - `GLIBC_2.34`
+- 因此，Ubuntu 20.04 这类仅提供 `glibc 2.31` 和 `libssl.so.1.1` 的宿主机，不能直接运行默认 `npx` 路径
+- 在该类旧环境上的典型报错：
+  - `libssl.so.3: cannot open shared object file`
+  - `libcrypto.so.3: cannot open shared object file`
+  - `GLIBC_2.34 not found`
+- 推荐处理方式：
+  - 使用更新的 Linux 宿主机 / 容器 / VM / WSL（例如 Ubuntu 22.04+）
+  - 或通过 `CODEX_AGENT_ACP_COMMAND` 覆盖为兼容当前宿主机 ABI 的本地 wrapper / 二进制
+- 不建议把“在 Conda 里额外安装 glibc / openssl”当作文档中的常规修复方案；默认 `npx` 下载到的 ELF 仍会优先使用系统动态加载器，除非调用方式也一起被 wrapper 接管
+- 维护侧 smoke 建议：
+  - 先在宿主机直接验证 `npx -y @zed-industries/codex-acp --help`
+  - 只有该命令本身可启动后，再验证 bridge 的 `/new --backend codex ...`
 
 ## 真实行为与宣告不一致点
 

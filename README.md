@@ -39,7 +39,7 @@ Feishu user ──(WebSocket)──> FeishuBot ──> Bridge
 ## Prerequisites
 
 1. **Node.js 18+**
-2. Install the runtime(s) you plan to use: Cursor official uses `agent`; `cursor-legacy` still shells out to `cursor-agent`; `claude` uses `claude-agent-acp` / Claude Code authentication; `codex` uses `@zed-industries/codex-acp`
+2. Install the runtime(s) you plan to use: Cursor official uses `agent`; `cursor-legacy` still shells out to `cursor-agent`; `claude` uses `claude-agent-acp` / Claude Code authentication; `codex` uses `@zed-industries/codex-acp`. On Linux, confirm `npx -y @zed-industries/codex-acp --help` works on the host first before enabling `codex`; the current tested Linux x64 package requires OpenSSL 3 and `glibc >= 2.34`
 3. Feishu enterprise app: bot, `im:message`, **`im:message.group_msg`** (required for group messages), `im:message:send_as_bot`, `im:chat`; for “one user + bot” no-@ logic, grant read chat / member APIs as needed (`im:chat` related)
 
 ## Quick Start
@@ -69,13 +69,22 @@ npm run build && npm start
 | `cursor-legacy` | Node.js + in-repo `vendor/cursor-agent-acp/` | Local `cursor-agent` / Cursor CLI must still be usable | `ACP_BACKEND=cursor-legacy`, optional `CURSOR_LEGACY_NODE_PATH`, `CURSOR_LEGACY_SESSION_DIR`, `CURSOR_LEGACY_EXTRA_ARGS` | Confirm `npm run dev` / `npm run build` succeeds, then use `/new --backend cursor-legacy ...` |
 | `cursor-tmux` | `tmux`, `cursor` CLI, Node.js | tmux available on host/container; Cursor CLI can run inside tmux pane | `ACP_BACKEND=cursor-tmux`, optional `TMUX_ACP_TSX_CLI`, `TMUX_ACP_SERVER_ENTRY`, `TMUX_ACP_SESSION_STORE`, `TMUX_ACP_START_COMMAND` | `docker-compose -f docker/compose.yaml run --rm tmux-acp-smoke` |
 | `claude` | `claude-agent-acp` or bundled dist / `npx` fallback | Claude Code auth must already be valid on the host; file send-back needs the bridge extension path to remain available | `ACP_BACKEND=claude`, optional `CLAUDE_AGENT_ACP_COMMAND`, `CLAUDE_AGENT_ACP_EXTRA_ARGS` | `docker-compose -f docker/compose.yaml run --rm claude-acp-smoke`, then a real `/new --backend claude ...` check |
-| `codex` | `npx` or local `codex-acp` command | Codex auth must already be valid on the host; usually `OPENAI_API_KEY` or `CODEX_API_KEY` | `ACP_BACKEND=codex`, optional `CODEX_AGENT_ACP_COMMAND`, `CODEX_AGENT_ACP_EXTRA_ARGS` | Confirm `npx @zed-industries/codex-acp` works locally, then use `/new --backend codex ...` |
+| `codex` | `npx` or local `codex-acp` command | Codex auth must already be valid on the host; usually `OPENAI_API_KEY` or `CODEX_API_KEY`. On Linux x64, the current tested `@zed-industries/codex-acp@0.11.1` also needs OpenSSL 3 (`libssl.so.3` / `libcrypto.so.3`) and `glibc >= 2.34` | `ACP_BACKEND=codex`, optional `CODEX_AGENT_ACP_COMMAND`, `CODEX_AGENT_ACP_EXTRA_ARGS` | Confirm `npx @zed-industries/codex-acp` works locally, then use `/new --backend codex ...` |
 
 Notes:
 
 - `service.sh` does not pick a backend for you; it only installs and runs `node dist/index.js`.
 - `BRIDGE_WORK_ALLOWLIST` is still mandatory for all backends.
 - Docker dev setup mirrors host tools/auth by bind-mounting local directories; if a backend works on the host but not in Docker, check mounted binaries, auth state, and path assumptions first.
+
+### Codex host requirements
+
+- By default the bridge launches Codex via `npx -y @zed-industries/codex-acp`; `/new --backend codex` can only work if that command already starts successfully on the host.
+- Current tested Linux x64 package: `@zed-industries/codex-acp@0.11.1`. In our probe it requires OpenSSL 3 (`libssl.so.3`, `libcrypto.so.3`) and `glibc >= 2.34`.
+- Ubuntu 20.04 (`glibc 2.31`, `libssl.so.1.1`) is therefore not enough for the default binary. Typical startup failures are `libssl.so.3: cannot open shared object file` and/or `GLIBC_2.34 not found`.
+- If the default `npx` binary is ABI-incompatible with the host, either run the bridge on a newer Linux host/container (for example Ubuntu 22.04+) or override `CODEX_AGENT_ACP_COMMAND` to a compatible local wrapper or binary.
+- Installing OpenSSL or glibc inside Conda does not usually fix the default `npx` path by itself, because the downloaded ELF still uses the system dynamic loader unless you wrap it explicitly.
+- Detailed behavior notes live in `docs/codex-backend-notes.md`.
 
 ### Auto-start (`service.sh`)
 
@@ -185,7 +194,7 @@ Notes:
 | `CONDA_ENV_NAME` | Conda env name whose `bin` is prepended to service PATH during `bash service.sh install` / `update`; skipped if Conda/env is missing | `base` |
 | `CLAUDE_AGENT_ACP_COMMAND` | Claude ACP child command | in-repo patched wrapper or `npx -y @agentclientprotocol/claude-agent-acp` |
 | `CLAUDE_AGENT_ACP_EXTRA_ARGS` | Extra args appended to Claude ACP child command | empty |
-| `CODEX_AGENT_ACP_COMMAND` | Codex ACP child command | `npx -y @zed-industries/codex-acp` |
+| `CODEX_AGENT_ACP_COMMAND` | Codex ACP child command; override this when the default `npx` binary is not ABI-compatible with the host | `npx -y @zed-industries/codex-acp` |
 | `CODEX_AGENT_ACP_EXTRA_ARGS` | Extra args appended to Codex ACP child command | empty |
 | `BRIDGE_WORK_ALLOWLIST` | **Required.** Comma-separated absolute workspace roots; compatible with `CURSOR_WORK_ALLOWLIST`; ACP child `cwd` = first entry | — |
 | `CURSOR_LEGACY_NODE_PATH` | Node binary used to spawn **in-repo** `cursor-agent-acp` (`cursor-legacy` only; compatible with `ACP_NODE_PATH`) | `process.execPath` |
@@ -311,13 +320,22 @@ npm run build && npm start
 | `cursor-legacy` | Node.js + 仓库内 `vendor/cursor-agent-acp/` | 宿主机上的 `cursor-agent` / Cursor CLI 仍需可用 | `ACP_BACKEND=cursor-legacy`，可选 `CURSOR_LEGACY_NODE_PATH`、`CURSOR_LEGACY_SESSION_DIR`、`CURSOR_LEGACY_EXTRA_ARGS` | 先确认 `npm run dev` / `npm run build` 正常，再用 `/new --backend cursor-legacy ...` |
 | `cursor-tmux` | `tmux`、`cursor` CLI、Node.js | 宿主机或容器里要能启动 tmux，且 tmux pane 内可执行 Cursor CLI | `ACP_BACKEND=cursor-tmux`，可选 `TMUX_ACP_TSX_CLI`、`TMUX_ACP_SERVER_ENTRY`、`TMUX_ACP_SESSION_STORE`、`TMUX_ACP_START_COMMAND` | `docker-compose -f docker/compose.yaml run --rm tmux-acp-smoke` |
 | `claude` | `claude-agent-acp`，或 bundled dist / `npx` 回退 | 宿主机需已有有效 Claude Code 认证；文件回传依赖 bridge 扩展链路可用 | `ACP_BACKEND=claude`，可选 `CLAUDE_AGENT_ACP_COMMAND`、`CLAUDE_AGENT_ACP_EXTRA_ARGS` | `docker-compose -f docker/compose.yaml run --rm claude-acp-smoke`，再补一次真实 `/new --backend claude ...` |
-| `codex` | `npx` 或本地 `codex-acp` 命令 | 宿主机需已有有效 Codex/OpenAI 认证；通常依赖 `OPENAI_API_KEY` 或 `CODEX_API_KEY` | `ACP_BACKEND=codex`，可选 `CODEX_AGENT_ACP_COMMAND`、`CODEX_AGENT_ACP_EXTRA_ARGS` | 先确认 `npx @zed-industries/codex-acp` 可用，再补一次真实 `/new --backend codex ...` |
+| `codex` | `npx` 或本地 `codex-acp` 命令 | 宿主机需已有有效 Codex/OpenAI 认证；通常依赖 `OPENAI_API_KEY` 或 `CODEX_API_KEY`。当前实测的 Linux x64 包 `@zed-industries/codex-acp@0.11.1` 还要求 OpenSSL 3（`libssl.so.3` / `libcrypto.so.3`）以及 `glibc >= 2.34` | `ACP_BACKEND=codex`，可选 `CODEX_AGENT_ACP_COMMAND`、`CODEX_AGENT_ACP_EXTRA_ARGS` | 先确认 `npx @zed-industries/codex-acp` 可用，再补一次真实 `/new --backend codex ...` |
 
 说明：
 
 - `service.sh` 不负责替你选择 backend，它只负责安装并运行 `node dist/index.js`。
 - 所有 backend 都仍然要求配置 `BRIDGE_WORK_ALLOWLIST`。
 - Docker dev setup 通过 bind mount 复用宿主机工具与认证；如果宿主机可用、容器里不可用，优先检查挂载的二进制、认证状态和绝对路径假设。
+
+### Codex 宿主机要求
+
+- bridge 默认通过 `npx -y @zed-industries/codex-acp` 启动 Codex；只有这条命令在宿主机上本身能正常启动，`/new --backend codex` 才可能工作。
+- 当前实测的 Linux x64 包版本是 `@zed-industries/codex-acp@0.11.1`；探测结果显示它依赖 OpenSSL 3（`libssl.so.3`、`libcrypto.so.3`）以及 `glibc >= 2.34`。
+- 因此 Ubuntu 20.04（`glibc 2.31`、`libssl.so.1.1`）不足以直接运行默认二进制。常见报错是 `libssl.so.3: cannot open shared object file` 和/或 `GLIBC_2.34 not found`。
+- 若默认 `npx` 拉起的二进制与宿主机 ABI 不兼容，建议把 bridge 跑在更新的 Linux 宿主机或容器中（例如 Ubuntu 22.04+），或者通过 `CODEX_AGENT_ACP_COMMAND` 改为兼容的本地 wrapper / 二进制。
+- 仅在 Conda 环境里安装 OpenSSL 或 glibc，通常并不能直接修复默认 `npx` 路径，因为下载到的 ELF 仍会优先使用系统动态加载器；除非你显式做一层 wrapper。
+- 更细的行为记录见 `docs/codex-backend-notes.md`。
 
 ### 开机自启（`service.sh`：macOS launchd / Linux systemd）
 
@@ -429,7 +447,7 @@ docker-compose -f docker/compose.yaml run --rm claude-acp-smoke
 | `CURSOR_AUTH_TOKEN` | 官方 ACP auth token（可选） | 空 |
 | `CLAUDE_AGENT_ACP_COMMAND` | Claude ACP 子进程命令 | 仓库内置 patched wrapper 或 `npx -y @agentclientprotocol/claude-agent-acp` |
 | `CLAUDE_AGENT_ACP_EXTRA_ARGS` | 追加到 Claude ACP 子进程命令后的额外参数 | 空 |
-| `CODEX_AGENT_ACP_COMMAND` | Codex ACP 子进程命令 | `npx -y @zed-industries/codex-acp` |
+| `CODEX_AGENT_ACP_COMMAND` | Codex ACP 子进程命令；若默认 `npx` 二进制与宿主机 ABI 不兼容，可在这里覆盖 | `npx -y @zed-industries/codex-acp` |
 | `CODEX_AGENT_ACP_EXTRA_ARGS` | 追加到 Codex ACP 子进程命令后的额外参数 | 空 |
 | `BRIDGE_WORK_ALLOWLIST` | **必填**，逗号分隔的绝对路径根；兼容 `CURSOR_WORK_ALLOWLIST`；ACP 子进程 `cwd` 取列表首项 | — |
 | `CURSOR_LEGACY_NODE_PATH` | 用于启动本仓 `vendor/cursor-agent-acp` 子进程的 Node（仅 `cursor-legacy`，兼容 `ACP_NODE_PATH`） | `process.execPath` |
