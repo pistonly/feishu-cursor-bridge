@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
-export type BridgeMaintenanceCommandKind = "restart" | "update";
+export type BridgeMaintenanceCommandKind = "restart" | "update" | "upgrade";
 export type BridgeMaintenanceTaskStatus = "succeeded" | "failed";
 
 export interface CompletedBridgeMaintenanceTask {
@@ -40,7 +40,7 @@ function parseCompletedTask(value: unknown): CompletedBridgeMaintenanceTask | un
   const finishedAt = value["finishedAt"];
   const forced = value["forced"];
   const detail = value["detail"];
-  if ((kind !== "restart" && kind !== "update") || (status !== "succeeded" && status !== "failed")) {
+  if ((kind !== "restart" && kind !== "update" && kind !== "upgrade") || (status !== "succeeded" && status !== "failed")) {
     return undefined;
   }
   if (typeof requestedBy !== "string") return undefined;
@@ -65,7 +65,7 @@ function parsePendingRestart(value: unknown): PendingBridgeMaintenanceRestart | 
   const requestedBy = value["requestedBy"];
   const requestedAt = value["requestedAt"];
   const forced = value["forced"];
-  if (kind !== "restart" && kind !== "update") return undefined;
+  if (kind !== "restart" && kind !== "update" && kind !== "upgrade") return undefined;
   if (typeof requestedBy !== "string") return undefined;
   if (typeof requestedAt !== "number" || !Number.isFinite(requestedAt)) return undefined;
   if (typeof forced !== "boolean") return undefined;

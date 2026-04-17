@@ -325,7 +325,35 @@ backend 差异：
 
 ---
 
-### 11. 状态（`/status`）
+### 11. 从 GitHub 升级（`/upgrade`）
+
+```text
+/upgrade
+/upgrade --force
+```
+
+**作用**：由 bridge 直接在后台执行 `bash service.sh upgrade`，按既有升级链路完成：
+
+- `git fetch`
+- 对目标分支执行 `git pull --ff-only`
+- `npm install`
+- `npm run build`
+- 重启 bridge 服务
+
+**权限与前提**：
+
+- 默认关闭；需先设置 `BRIDGE_ENABLE_UPGRADE_COMMAND=true`。
+- 仅允许命中 `BRIDGE_UPGRADE_ADMIN_OPEN_IDS` / `BRIDGE_UPGRADE_ADMIN_USER_IDS` / `BRIDGE_UPGRADE_ADMIN_UNION_IDS` 任一 allowlist 的飞书管理员触发。
+- 当前 bridge 进程需由 launchd / systemd 托管；否则会拒绝执行，避免升级后无法自动恢复。
+- 若已有上一轮升级处于 `queued` / `running`，会拒绝重复触发。
+
+**`--force`**：若当前仍有飞书请求正在处理中，默认会拒绝执行升级；此时可显式使用 `/upgrade --force` 跳过该检查。
+
+**结果持久化**：最近一次升级尝试会写入 `BRIDGE_UPGRADE_RESULT_FILE`（默认 `~/.feishu-cursor-bridge/upgrade-result.json`），因此 bridge 重启后，`/status` 仍可查看最近升级结果。
+
+---
+
+### 12. 状态（`/status`）
 
 **等价命令**：`/status`、`/状态`
 
@@ -352,7 +380,7 @@ backend 差异：
 
 ---
 
-### 12. 切换模型（`/model`）
+### 13. 切换模型（`/model`）
 
 **格式**：
 
@@ -452,5 +480,8 @@ backend 差异：
 | `BRIDGE_WORK_PRESETS`（兼容 `CURSOR_WORK_PRESETS`） | 可选；列表文件为空时用于首次写入的初始路径（逗号分隔）。 |
 | `SESSION_IDLE_TIMEOUT_MS` | 可选；控制 session 空闲多久后视为过期。设为 `0` 或 `infinity` 表示永不过期。 |
 | `BRIDGE_DEBUG` | 为 `true` 时：`/status` 追加调试详情；群聊「未 @ 且未命中双人群」时在**服务端日志**输出结构化对照（见上文「群聊 @ 与调试日志」）。 |
+| `BRIDGE_ENABLE_UPGRADE_COMMAND` | 为 `true` 时启用 bridge-native `/upgrade` 命令；默认关闭。 |
+| `BRIDGE_UPGRADE_ADMIN_OPEN_IDS` / `BRIDGE_UPGRADE_ADMIN_USER_IDS` / `BRIDGE_UPGRADE_ADMIN_UNION_IDS` | 允许触发 `/upgrade` 的飞书管理员 ID allowlist；至少命中一种才可执行。 |
+| `BRIDGE_UPGRADE_RESULT_FILE` | 最近一次 `/upgrade` 的持久化结果 JSON；bridge 重启后仍可据此判断升级是否完成。 |
 
 更多变量见项目根目录 `.env.example`。

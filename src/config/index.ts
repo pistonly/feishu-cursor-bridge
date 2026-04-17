@@ -20,6 +20,12 @@ function isBridgeMainScriptSourceIndex(): boolean {
   return path.resolve(raw).endsWith(path.join("src", "index.ts"));
 }
 
+export interface UpgradeAdminIds {
+  openIds: Set<string>;
+  userIds: Set<string>;
+  unionIds: Set<string>;
+}
+
 export interface Config {
   feishu: {
     appId: string;
@@ -90,13 +96,18 @@ export interface Config {
     managedByService: boolean;
     /** 实验参数：将 console.* 镜像写入日志文件 */
     experimentalLogToFile: boolean;
-    /** 实验参数：日志文件路径 */
+    /** 实验日志文件路径 */
     experimentalLogFilePath: string;
-    /**
-     * 为 true 时在飞书卡片与 `/resume` 回放摘要中展示 ACP `available_commands_update`（Cursor 内置 slash/skills 列表）。
-     * @default false — 环境变量未设或非 `true` 时为关闭
-     */
+    /** 是否在卡片中显示 ACP availableCommands */
     showAcpAvailableCommands: boolean;
+    /** 是否允许在飞书里使用 `/upgrade` 触发 bridge 自升级 */
+    enableUpgradeCommand: boolean;
+    /** 允许触发 `/upgrade` 的管理员飞书 ID 列表 */
+    upgradeAdmins: UpgradeAdminIds;
+    /** service.sh 的绝对路径，用于后台拉起 upgrade */
+    serviceScriptPath: string;
+    /** 最近一次升级结果 JSON 路径 */
+    upgradeResultPath: string;
   };
   autoApprovePermissions: boolean;
   bridgeDebug: boolean;
@@ -372,6 +383,10 @@ function parseStringList(raw: string | undefined): string[] {
     .filter((item, index, all) => item.length > 0 && all.indexOf(item) === index);
 }
 
+function parseIdList(raw: string | undefined): Set<string> {
+  return new Set(parseStringList(raw));
+}
+
 /**
  * 允许列表中的每个根须为目录；不存在则 `mkdir -p`（与旧版单一路径行为一致）。
  * ACP 子进程 `spawn(..., { cwd })` 要求 cwd 必须存在。
@@ -507,6 +522,9 @@ export function loadConfig(): Config {
       process.env["EXPERIMENT_LOG_FILE"]?.trim() || defaultExperimentalLogFile,
     ),
   );
+  const showAcpAvailableCommands =
+    (process.env["BRIDGE_SHOW_ACP_AVAILABLE_COMMANDS"] ?? "false").toLowerCase() ===
+    "true";
 
   const defaultPresetsFile = path.join(
     os.homedir(),
@@ -554,9 +572,25 @@ export function loadConfig(): Config {
     DEFAULT_CARD_SPLIT_TOOL_THRESHOLD,
   );
 
-  const showAcpAvailableCommands =
-    (process.env["BRIDGE_SHOW_ACP_AVAILABLE_COMMANDS"] ?? "false").toLowerCase() ===
+  const defaultUpgradeResultPath = path.join(
+    os.homedir(),
+    ".feishu-cursor-bridge",
+    "upgrade-result.json",
+  );
+  const upgradeResultPath = path.resolve(
+    expandHome(
+      process.env["BRIDGE_UPGRADE_RESULT_FILE"]?.trim() || defaultUpgradeResultPath,
+    ),
+  );
+  const enableUpgradeCommand =
+    (process.env["BRIDGE_ENABLE_UPGRADE_COMMAND"] ?? "false").toLowerCase() ===
     "true";
+  const upgradeAdmins: UpgradeAdminIds = {
+    openIds: parseIdList(process.env["BRIDGE_UPGRADE_ADMIN_OPEN_IDS"]),
+    userIds: parseIdList(process.env["BRIDGE_UPGRADE_ADMIN_USER_IDS"]),
+    unionIds: parseIdList(process.env["BRIDGE_UPGRADE_ADMIN_UNION_IDS"]),
+  };
+  const serviceScriptPath = path.resolve(process.cwd(), "service.sh");
 
   const bridgeFromSource = isBridgeMainScriptSourceIndex();
 
@@ -627,6 +661,10 @@ export function loadConfig(): Config {
       experimentalLogToFile,
       experimentalLogFilePath,
       showAcpAvailableCommands,
+      enableUpgradeCommand,
+      upgradeAdmins,
+      serviceScriptPath,
+      upgradeResultPath,
     },
     autoApprovePermissions:
       (process.env["AUTO_APPROVE_PERMISSIONS"] ?? "true").toLowerCase() ===

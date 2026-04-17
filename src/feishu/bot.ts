@@ -20,6 +20,11 @@ export interface FeishuMessage {
   chatId: string;
   chatType: "p2p" | "group";
   senderId: string;
+  senderIds?: {
+    openId?: string;
+    userId?: string;
+    unionId?: string;
+  };
   senderType: string;
   content: string;
   contentType: string;
@@ -1144,6 +1149,12 @@ export class FeishuBot extends EventEmitter {
     const postEmbeddedImageKeys =
       messageType === "post" ? parsePostEmbeddedImageKeys(rawContent) : undefined;
 
+    const senderIds = {
+      openId: sender.sender_id?.open_id || undefined,
+      userId: sender.sender_id?.user_id || undefined,
+      unionId: sender.sender_id?.union_id || undefined,
+    };
+
     const feishuMsg: FeishuMessage = {
       messageId: message.message_id,
       chatId: message.chat_id,
@@ -1153,6 +1164,7 @@ export class FeishuBot extends EventEmitter {
         sender.sender_id?.user_id ??
         sender.sender_id?.union_id ??
         "",
+      senderIds,
       senderType: sender.sender_type ?? "",
       content: this.parseContent(rawContent, messageType),
       contentType: messageType,

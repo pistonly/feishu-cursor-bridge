@@ -15,6 +15,7 @@
 | service PATH 注入的 Conda 环境名 | `CONDA_ENV_NAME` | `base`；若 Conda 或对应 env 不存在则跳过 |
 | `cursor-agent-acp` 适配器会话目录（仅 `legacy`） | `CURSOR_LEGACY_SESSION_DIR`（兼容 `CURSOR_ACP_SESSION_DIR`） | `~/.feishu-cursor-bridge/cursor-acp-sessions` |
 | 飞书 ↔ ACP 会话映射持久化 JSON | `BRIDGE_SESSION_STORE` | `~/.feishu-cursor-bridge/.feishu-bridge-sessions.json` |
+| 最近一次 bridge `/upgrade` 结果 JSON | `BRIDGE_UPGRADE_RESULT_FILE` | `~/.feishu-cursor-bridge/upgrade-result.json` |
 | `/new list`、`/new <序号>` 使用的快捷工作区列表 JSON | `BRIDGE_WORK_PRESETS_FILE`（兼容 `CURSOR_WORK_PRESETS_FILE`） | `~/.feishu-cursor-bridge/workspace-presets.json` |
 | 快捷列表为空时的种子路径（仅首次初始化） | `BRIDGE_WORK_PRESETS`（兼容 `CURSOR_WORK_PRESETS`） | 无默认；不设置则不从环境变量注入种子 |
 | `cursor-agent-acp` 入口脚本（仅 `legacy`） | — | 与桥接启动方式一致，**无单独环境变量**：**`node dist/index.js`** → **`vendor/cursor-agent-acp/dist/bin/cursor-agent-acp.js`**（`npm install` 的 `postinstall` 会 `build:adapter`）；**`tsx src/index.ts`**（`npm run dev`）→ **`vendor/cursor-agent-acp/src/bin/cursor-agent-acp.ts`** + **tsx** |
@@ -54,6 +55,12 @@
 
 - **默认**：`~/.feishu-cursor-bridge/.feishu-bridge-sessions.json`
 - **含义**：持久化「飞书会话 → ACP `sessionId`」等映射，便于进程重启后在支持 `loadSession` 时恢复。
+
+### bridge 升级结果 `BRIDGE_UPGRADE_RESULT_FILE`
+
+- **默认**：`~/.feishu-cursor-bridge/upgrade-result.json`
+- **含义**：持久化最近一次飞书 `/upgrade` 尝试的状态（如 `queued` / `running` / `succeeded` / `failed`）、请求时间、执行结果与简短输出尾部，便于 bridge 重启后仍可判断升级是否完成。
+- **用途**：当前主要用于防止重复触发升级，以及在 bridge 启动时修正已失效的 `running` 状态。
 
 ### 快捷工作区列表 `BRIDGE_WORK_PRESETS_FILE`（兼容 `CURSOR_WORK_PRESETS_FILE`） 与 `BRIDGE_WORK_PRESETS`（兼容 `CURSOR_WORK_PRESETS`）
 

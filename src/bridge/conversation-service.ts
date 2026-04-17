@@ -110,6 +110,9 @@ export class ConversationService {
   async handleUserPrompt(
     msg: FeishuMessage,
     session: UserSession,
+    opts?: {
+      onAcpEvent?: (ev: BridgeAcpEvent) => Promise<void> | void;
+    },
   ): Promise<string | undefined> {
     const startedAt = Date.now();
     const legacyCursorTimeoutMs = parseLegacyCursorTimeoutMs(this.config.acp.extraArgs);
@@ -244,6 +247,7 @@ export class ConversationService {
       if (ev.type === "agent_message_chunk") {
         aggregatedMain += ev.text;
       }
+      await opts?.onAcpEvent?.(ev);
 
       syncStatusSummary();
 

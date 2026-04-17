@@ -82,7 +82,8 @@ export type NewConversationCommand =
   | { kind: "sessions" }
   | { kind: "resume" }
   | { kind: "restart"; force: boolean; invalidUsage?: boolean }
-  | { kind: "update"; force: boolean; invalidUsage?: boolean };
+  | { kind: "update"; force: boolean; invalidUsage?: boolean }
+  | { kind: "upgrade"; force: boolean; invalidUsage?: boolean };
 
 export function parseNewConversationCommand(
   content: string,
@@ -107,7 +108,8 @@ export function parseNewConversationCommand(
     cmd !== "session" &&
     cmd !== "resume" &&
     cmd !== "restart" &&
-    cmd !== "update"
+    cmd !== "update" &&
+    cmd !== "upgrade"
   ) {
     return null;
   }
@@ -115,7 +117,7 @@ export function parseNewConversationCommand(
   if (cmd === "whoami") return { kind: "whoami" };
   if (cmd === "sessions" || cmd === "session") return { kind: "sessions" };
   if (cmd === "resume") return { kind: "resume" };
-  if (cmd === "restart" || cmd === "update") {
+  if (cmd === "restart" || cmd === "update" || cmd === "upgrade") {
     return parseMaintenanceCommand(cmd, tokens.slice(1));
   }
   if (cmd === "mode") {
@@ -224,9 +226,9 @@ function extractNewFlags(tokens: string[]): {
 }
 
 function parseMaintenanceCommand(
-  cmd: "restart" | "update",
+  cmd: "restart" | "update" | "upgrade",
   tokens: string[],
-): Extract<NewConversationCommand, { kind: "restart" | "update" }> {
+): Extract<NewConversationCommand, { kind: "restart" | "update" | "upgrade" }> {
   let force = false;
   let invalidUsage = false;
   for (const token of tokens) {

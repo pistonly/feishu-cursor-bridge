@@ -2,7 +2,7 @@
 # feishu-cursor-bridge 服务管理
 # macOS: launchd（~/Library/LaunchAgents/）
 # Linux: systemd --user（~/.config/systemd/user/）
-# 用法: bash service.sh [install|update|uninstall|start|stop|restart|status|logs]
+# 用法: bash service.sh [install|update|upgrade|uninstall|start|stop|restart|status|logs]
 set -e
 
 UNAME_S="$(uname -s)"
@@ -371,6 +371,113 @@ EOFUNIT
     echo "  ✅ systemd 用户单元已生成: $UNIT_FILE"
 }
 
+require_command() {
+    local cmd="$1"
+    local hint="$2"
+    if ! command -v "$cmd" &>/dev/null; then
+        echo "❌ 未找到命令: $cmd"
+        [[ -n "$hint" ]] && echo "   $hint"
+        exit 1
+    fi
+}
+
+resolve_upgrade_remote() {
+    local remote
+    remote="$(dotenv_get_value "BRIDGE_UPGRADE_REMOTE" 2>/dev/null || true)"
+    remote="$(trim_whitespace "$remote")"
+    if [[ -n "$remote" ]]; then
+        printf '%s\n' "$remote"
+        return 0
+    fi
+    printf 'origin\n'
+}
+
+resolve_upgrade_branch() {
+    local branch
+    branch="$(dotenv_get_value "BRIDGE_UPGRADE_BRANCH" 2>/dev/null || true)"
+    branch="$(trim_whitespace "$branch")"
+    if [[ -n "$branch" ]]; then
+        printf '%s\n' "$branch"
+        return 0
+    fi
+
+    branch="$(git -C "$BOT_DIR" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+    if [[ -n "$branch" ]]; then
+        printf '%s\n' "$branch"
+        return 0
+    fi
+
+    echo "❌ 当前不在任何本地分支上，请先切换到要升级的分支，或在 .env 中设置 BRIDGE_UPGRADE_BRANCH。"
+    exit 1
+}
+
+ensure_git_repository() {
+    if ! git -C "$BOT_DIR" rev-parse --is-inside-work-tree &>/dev/null; then
+        echo "❌ 当前目录不是 Git 仓库：$BOT_DIR"
+        exit 1
+    fi
+}
+
+ensure_clean_worktree() {
+    local status_output
+    status_output="$(git -C "$BOT_DIR" status --porcelain)"
+    if [[ -n "$status_output" ]]; then
+        echo "❌ 检测到未提交修改，已拒绝升级以避免覆盖本地改动。"
+        echo "   请先提交、stash 或清理工作区后再执行 bash service.sh upgrade"
+        git -C "$BOT_DIR" status --short
+        exit 1
+    fi
+}
+
+ensure_remote_exists() {
+    local remote="$1"
+    if ! git -C "$BOT_DIR" remote get-url "$remote" &>/dev/null; then
+        echo "❌ Git 远端不存在：$remote"
+        echo "   可在 .env 中设置 BRIDGE_UPGRADE_REMOTE 指定远端。"
+        exit 1
+    fi
+}
+
+cmd_upgrade() {
+    local remote branch local_head remote_head merge_base
+
+    require_command git "请先安装 Git 并确保其在 PATH 中。"
+    ensure_git_repository
+    ensure_clean_worktree
+
+    remote="$(resolve_upgrade_remote)"
+    branch="$(resolve_upgrade_branch)"
+    ensure_remote_exists "$remote"
+
+    echo "⬆️  从 GitHub 升级（git fetch + fast-forward + update）..."
+    echo "  🌐 远端: $remote"
+    echo "  🌿 分支: $branch"
+
+    git -C "$BOT_DIR" fetch "$remote" "$branch"
+
+    local_head="$(git -C "$BOT_DIR" rev-parse HEAD)"
+    remote_head="$(git -C "$BOT_DIR" rev-parse "$remote/$branch")"
+
+    if [[ "$local_head" == "$remote_head" ]]; then
+        echo "✅ 已是最新版本，无需升级。"
+        return 0
+    fi
+
+    merge_base="$(git -C "$BOT_DIR" merge-base HEAD "$remote/$branch")"
+    if [[ "$merge_base" != "$local_head" ]]; then
+        echo "❌ 当前分支无法对 $remote/$branch 进行 fast-forward。"
+        echo "   请先手动处理分叉/冲突，再执行 bash service.sh upgrade"
+        exit 1
+    fi
+
+    git -C "$BOT_DIR" pull --ff-only "$remote" "$branch"
+    cmd_update
+}
+
+print_upgrade_help() {
+    echo "  upgrade     从 GitHub 远端 fast-forward 拉取最新代码，再 npm install + build + restart"
+}
+
 require_systemctl() {
     if ! command -v systemctl &>/dev/null; then
         echo "❌ 未找到 systemctl，请使用已启用 systemd 的 Linux（如 Ubuntu 22.04+）。"
@@ -655,6 +762,7 @@ cmd_logs() {
 case "${1:-}" in
     install)   cmd_install ;;
     update)    cmd_update ;;
+    upgrade)   cmd_upgrade ;;
     uninstall) cmd_uninstall ;;
     start)     cmd_start ;;
     stop)      cmd_stop ;;
@@ -670,6 +778,7 @@ case "${1:-}" in
         echo "命令:"
         echo "  install     npm install + build + 安装自启动并启动"
         echo "  update      npm install + build + 重启（已 install 后改代码用此使新版本生效）"
+        echo "  upgrade     从 Git 远端 fast-forward 拉取最新代码，再 npm install + build + restart"
         echo "  uninstall   卸载自启动并停止服务"
         echo "  start       启动服务"
         echo "  stop        停止服务"

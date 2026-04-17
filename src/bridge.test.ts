@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import * as fsp from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import test from "node:test";
 import type { Config } from "./config/index.js";
 import { Bridge, formatNumber, formatPercent, formatSessionUsage } from "./bridge/bridge.js";
@@ -46,6 +49,14 @@ function createTestConfig(): Config {
       experimentalLogToFile: false,
       experimentalLogFilePath: "/tmp/bridge.log",
       showAcpAvailableCommands: false,
+      enableUpgradeCommand: false,
+      upgradeAdmins: {
+        openIds: new Set<string>(),
+        userIds: new Set<string>(),
+        unionIds: new Set<string>(),
+      },
+      serviceScriptPath: "/tmp/service.sh",
+      upgradeResultPath: "/tmp/upgrade-result.json",
     },
     autoApprovePermissions: false,
     bridgeDebug: false,
@@ -274,6 +285,128 @@ test("/restart 会拒绝非管理员", async () => {
   assert.match(sentTexts[0] ?? "", /仅允许管理员执行/);
 });
 
+test("/upgrade 会拒绝未启用命令", async () => {
+  const bridge = new Bridge(createTestConfig());
+  const sentTexts: string[] = [];
+
+  (bridge as any).ensureMaintenanceStateLoaded = async () => {};
+  (bridge as any).isManagedByService = async () => true;
+  (bridge as any).feishuBot = {
+    stripBotMentionKeepLines(content: string) {
+      return content;
+    },
+    async sendText(_chatId: string, body: string): Promise<void> {
+      sentTexts.push(body);
+    },
+  };
+
+  await (bridge as any).handleFeishuMessage(createMessage("/upgrade"));
+
+  assert.equal(sentTexts.length, 1);
+  assert.match(sentTexts[0] ?? "", /未启用聊天升级命令/);
+});
+
+test("/upgrade 会写入 queued 状态并启动后台 runner", async () => {
+  const config = createTestConfig();
+  config.bridge.enableUpgradeCommand = true;
+  config.bridge.upgradeAdmins.openIds.add("ou_admin_123");
+  const bridge = new Bridge(config);
+  const sentTexts: string[] = [];
+  const attempts: unknown[] = [];
+  let flushCalls = 0;
+  let launchedAttemptId: string | undefined;
+
+  (bridge as any).ensureMaintenanceStateLoaded = async () => {};
+  (bridge as any).isManagedByService = async () => true;
+  (bridge as any).launchBackgroundUpgrade = (attemptId: string) => {
+    launchedAttemptId = attemptId;
+  };
+  (bridge as any).upgradeResultStore = {
+    getAttempt() {
+      return undefined;
+    },
+    setAttempt(attempt: unknown) {
+      attempts.push(attempt);
+    },
+    async flush(): Promise<void> {
+      flushCalls += 1;
+    },
+  };
+  (bridge as any).feishuBot = {
+    stripBotMentionKeepLines(content: string) {
+      return content;
+    },
+    async sendText(_chatId: string, body: string): Promise<void> {
+      sentTexts.push(body);
+    },
+  };
+
+  await (bridge as any).handleFeishuMessage(
+    createMessage("/upgrade", {
+      senderId: "ou_admin_123",
+      senderIds: { openId: "ou_admin_123" },
+    }),
+  );
+
+  assert.equal(sentTexts.length, 1);
+  assert.match(sentTexts[0] ?? "", /已接受升级请求/);
+  assert.equal(flushCalls, 1);
+  assert.equal(attempts.length, 1);
+  assert.equal(typeof launchedAttemptId, "string");
+  assert.equal((attempts[0] as { state?: string }).state, "queued");
+  assert.equal((attempts[0] as { requestedBy?: { senderId?: string } }).requestedBy?.senderId, "ou_admin_123");
+  assert.equal((attempts[0] as { id?: string }).id, launchedAttemptId);
+});
+
+test("/upgrade 在 active prompt 存在时仅允许 --force", async () => {
+  const config = createTestConfig();
+  config.bridge.enableUpgradeCommand = true;
+  config.bridge.upgradeAdmins.openIds.add("ou_admin_123");
+  const bridge = new Bridge(config);
+  const sentTexts: string[] = [];
+  let launchCalls = 0;
+
+  (bridge as any).ensureMaintenanceStateLoaded = async () => {};
+  (bridge as any).isManagedByService = async () => true;
+  (bridge as any).activePrompts = new Set(["dm:user-1:1"]);
+  (bridge as any).launchBackgroundUpgrade = () => {
+    launchCalls += 1;
+  };
+  (bridge as any).upgradeResultStore = {
+    getAttempt() {
+      return undefined;
+    },
+    setAttempt(): void {},
+    async flush(): Promise<void> {},
+  };
+  (bridge as any).feishuBot = {
+    stripBotMentionKeepLines(content: string) {
+      return content;
+    },
+    async sendText(_chatId: string, body: string): Promise<void> {
+      sentTexts.push(body);
+    },
+  };
+
+  await (bridge as any).handleFeishuMessage(
+    createMessage("/upgrade", {
+      senderId: "ou_admin_123",
+      senderIds: { openId: "ou_admin_123" },
+    }),
+  );
+  await (bridge as any).handleFeishuMessage(
+    createMessage("/upgrade --force", {
+      senderId: "ou_admin_123",
+      senderIds: { openId: "ou_admin_123" },
+    }),
+  );
+
+  assert.equal(launchCalls, 1);
+  assert.match(sentTexts[0] ?? "", /当前仍有 1 个请求在处理中/);
+  assert.match(sentTexts[1] ?? "", /已接受升级请求（--force）/);
+});
+
+
 test("/model 在 codex backend 切换成功后会持久化首选模型", async () => {
   const bridge = new Bridge(createTestConfig());
   const sentTexts: string[] = [];
@@ -391,4 +524,91 @@ test("/model 成功后提示会回显运行时确认的当前模型", async () =
 
   assert.equal(sentTexts.length, 1);
   assert.match(sentTexts[0] ?? "", /已切换模型为 `claude-opus-4-6`/);
+});
+
+test("普通对话会为当前 slot 追加用户问题与回复日志", async () => {
+  const tmpRoot = await fsp.mkdtemp(
+    path.join(os.tmpdir(), "bridge-slot-log-"),
+  );
+  const config = createTestConfig();
+  config.bridge.sessionStorePath = path.join(tmpRoot, "sessions.json");
+
+  const bridge = new Bridge(config);
+  const slot = {
+    slotIndex: 1,
+    name: "legacy-debug",
+    session: {
+      backend: "cursor-legacy" as const,
+      sessionId: "session-1",
+      workspaceRoot: "/tmp/project",
+      chatId: "chat-1",
+      userId: "user-1",
+      chatType: "p2p" as const,
+      createdAt: 0,
+      lastActiveAt: 0,
+    },
+  };
+
+  (bridge as any).ensureMaintenanceStateLoaded = async () => {};
+  (bridge as any).flushPendingSessionNotices = async () => {};
+  (bridge as any).sessionManager = {
+    getSessionSnapshot() {
+      return {
+        sessionKey: "dm:user-1",
+        group: {
+          slots: [slot],
+          activeSlotIndex: 1,
+          nextSlotIndex: 2,
+        },
+        activeSlot: slot,
+        idleExpiresInMs: 60_000,
+      };
+    },
+    async getActiveSession() {
+      return slot.session;
+    },
+    async getSlot() {
+      return slot;
+    },
+    setSlotLastTurn() {},
+  };
+  (bridge as any).conversations = new Map([
+    [
+      "cursor-legacy",
+      {
+        async handleUserPrompt(
+          _msg: FeishuMessage,
+          _session: unknown,
+          opts?: { onAcpEvent?: (ev: unknown) => Promise<void> | void },
+        ) {
+          await opts?.onAcpEvent?.({
+            type: "agent_message_chunk",
+            sessionId: "session-1",
+            text: "原始 chunk 片段",
+          });
+          return "当前仓库状态如下：有改动。";
+        },
+      },
+    ],
+  ]);
+  (bridge as any).feishuBot = {
+    stripBotMentionKeepLines(content: string) {
+      return content;
+    },
+    async sendText(): Promise<void> {},
+  };
+
+  await (bridge as any).handleFeishuMessage(createMessage("检查项目当前的git状态"));
+
+  const logDir = path.join(tmpRoot, "slot-logs");
+  const files = await fsp.readdir(logDir);
+  assert.equal(files.length, 1);
+  assert.match(files[0] ?? "", /^cursor-legacy--slot-1--legacy-debug--dm-user-1--session-session-1--[a-f0-9]{12}\.log$/);
+  const content = await fsp.readFile(path.join(logDir, files[0]!), "utf8");
+  assert.match(content, /feishu_prompt/);
+  assert.match(content, /检查项目当前的git状态/);
+  assert.match(content, /acp_agent_message_chunk/);
+  assert.match(content, /原始 chunk 片段/);
+  assert.match(content, /bridge_reply/);
+  assert.match(content, /当前仓库状态如下：有改动。/);
 });

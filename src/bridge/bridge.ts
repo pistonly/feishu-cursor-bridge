@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { Config } from "../config/index.js";
 import { spawn } from "node:child_process";
 import * as path from "node:path";
@@ -53,6 +54,8 @@ import {
   type BridgeMaintenanceCommandKind,
   type CompletedBridgeMaintenanceTask,
 } from "./maintenance-state.js";
+import { UpgradeResultStore, type UpgradeAttemptRecord } from "./upgrade-result-store.js";
+import { SlotMessageLogStore } from "./slot-message-log.js";
 
 /** 无活跃 session 时，普通对话与部分命令的统一提示 */
 const NO_SESSION_HINT =
@@ -65,6 +68,17 @@ type RunningMaintenanceTask = {
   requestedAt: number;
   forced: boolean;
 };
+
+function isPidRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    if (err.code === "ESRCH") return false;
+    return true;
+  }
+}
 
 function formatWhoAmIMessage(senderId: string): string {
   if (!senderId.trim()) {
@@ -217,6 +231,8 @@ export class Bridge {
   private sessionManager: SessionManager;
   private presetsStore: WorkspacePresetsStore;
   private conversations: Map<AcpBackend, ConversationService>;
+  private upgradeResultStore: UpgradeResultStore;
+  private slotMessageLog: SlotMessageLogStore;
   /** key: `<sessionKey>:<slotIndex>` — 同一 slot 同一时刻只能有一个 prompt 在跑 */
   private activePrompts = new Set<string>();
   private maintenanceStateStore: BridgeMaintenanceStateStore;
@@ -243,8 +259,14 @@ export class Bridge {
     this.maintenanceStateStore = new BridgeMaintenanceStateStore(
       config.bridge.maintenanceStatePath,
     );
+    this.upgradeResultStore = new UpgradeResultStore(
+      config.bridge.upgradeResultPath,
+    );
     this.presetsStore = new WorkspacePresetsStore(
       config.bridge.workspacePresetsPath,
+    );
+    this.slotMessageLog = new SlotMessageLogStore(
+      path.join(path.dirname(config.bridge.sessionStorePath), "slot-logs"),
     );
     this.sessionManager = new SessionManager(
       this.runtimeRegistry,
@@ -268,6 +290,8 @@ export class Bridge {
     }
 
     await this.ensureMaintenanceStateLoaded();
+    await this.upgradeResultStore.load();
+    await this.reconcileUpgradeAttempt();
     await this.sessionManager.init();
     await this.presetsStore.load(this.config.bridge.workspacePresetsSeed);
 
@@ -349,6 +373,163 @@ export class Bridge {
     return created;
   }
 
+  private async reconcileUpgradeAttempt(): Promise<void> {
+    const attempt = this.upgradeResultStore.getAttempt();
+    if (!attempt) return;
+    if (attempt.state === "queued") {
+      this.upgradeResultStore.setAttempt({
+        ...attempt,
+        state: "failed",
+        finishedAt: Date.now(),
+        errorMessage: "Upgrade launcher did not start",
+      });
+      await this.upgradeResultStore.flush();
+      return;
+    }
+    if (attempt.state === "running") {
+      if (attempt.runnerPid && isPidRunning(attempt.runnerPid)) {
+        return;
+      }
+      this.upgradeResultStore.setAttempt({
+        ...attempt,
+        state: "failed",
+        finishedAt: Date.now(),
+        errorMessage: "Upgrade runner exited before persisting completion",
+      });
+      await this.upgradeResultStore.flush();
+    }
+  }
+
+  private isUpgradeAdmin(msg: FeishuMessage): boolean {
+    const admins = this.config.bridge.upgradeAdmins;
+    const senderIds = msg.senderIds;
+    return (
+      (!!senderIds?.openId && admins.openIds.has(senderIds.openId)) ||
+      (!!senderIds?.userId && admins.userIds.has(senderIds.userId)) ||
+      (!!senderIds?.unionId && admins.unionIds.has(senderIds.unionId))
+    );
+  }
+
+  private launchBackgroundUpgrade(attemptId: string): void {
+    const runnerEntry = path.resolve(process.cwd(), "dist", "upgrade-runner.js");
+    const child = spawn(process.execPath, [runnerEntry, attemptId], {
+      cwd: process.cwd(),
+      detached: true,
+      stdio: "ignore",
+      env: process.env,
+    });
+    child.unref();
+  }
+
+  private async handleUpgradeCommand(
+    msg: FeishuMessage,
+    command: { force: boolean; invalidUsage?: boolean },
+  ): Promise<void> {
+    if (command.invalidUsage) {
+      await this.feishuBot.sendText(
+        msg.chatId,
+        this.maintenanceUsage("upgrade"),
+        msg.messageId,
+        this.threadReplyOpts(msg),
+      );
+      return;
+    }
+    if (this.activePrompts.size > 0 && !command.force) {
+      await this.feishuBot.sendText(
+        msg.chatId,
+        `❌ 当前仍有 ${this.activePrompts.size} 个请求在处理中。请等待完成或先中断，再执行 \`/upgrade\`；若确认要直接升级，可改用 \`/upgrade --force\`。`,
+        msg.messageId,
+        this.threadReplyOpts(msg),
+      );
+      return;
+    }
+    if (!(await this.isManagedByService())) {
+      await this.feishuBot.sendText(
+        msg.chatId,
+        "❌ 当前进程未检测到 launchd/systemd 托管，无法保证升级后自动恢复。请先使用 `bash service.sh install` 或确保由服务管理器拉起。",
+        msg.messageId,
+        this.threadReplyOpts(msg),
+      );
+      return;
+    }
+    if (!this.config.bridge.enableUpgradeCommand) {
+      await this.feishuBot.sendText(
+        msg.chatId,
+        "❌ 当前未启用聊天升级命令。",
+        msg.messageId,
+        this.threadReplyOpts(msg),
+      );
+      return;
+    }
+    if (!this.isUpgradeAdmin(msg)) {
+      await this.feishuBot.sendText(
+        msg.chatId,
+        "❌ /upgrade 仅管理员可用。",
+        msg.messageId,
+        this.threadReplyOpts(msg),
+      );
+      return;
+    }
+
+    const existingAttempt = this.upgradeResultStore.getAttempt();
+    if (
+      existingAttempt &&
+      (existingAttempt.state === "queued" || existingAttempt.state === "running")
+    ) {
+      await this.feishuBot.sendText(
+        msg.chatId,
+        "ℹ️ 已有升级任务在执行，请勿重复触发。",
+        msg.messageId,
+        this.threadReplyOpts(msg),
+      );
+      return;
+    }
+
+    const threadId = this.threadScope(msg);
+    const attemptId = randomUUID();
+    this.upgradeResultStore.setAttempt({
+      id: attemptId,
+      state: "queued",
+      requestedAt: Date.now(),
+      requestedBy: {
+        chatId: msg.chatId,
+        messageId: msg.messageId,
+        senderId: msg.senderId,
+        chatType: msg.chatType,
+        ...(threadId ? { threadId } : {}),
+      },
+    });
+    await this.upgradeResultStore.flush();
+
+    try {
+      await this.feishuBot.sendText(
+        msg.chatId,
+        `✅ 已接受升级请求${command.force ? "（--force）" : ""}，正在后台执行 \`bash service.sh upgrade\`。桥接可能会短暂重启并恢复，稍后可发送 \`/status\` 验证。`,
+        msg.messageId,
+        this.threadReplyOpts(msg),
+      );
+      this.launchBackgroundUpgrade(attemptId);
+    } catch (err) {
+      this.upgradeResultStore.setAttempt({
+        ...(this.upgradeResultStore.getAttempt() ?? {
+          id: attemptId,
+          state: "queued",
+          requestedAt: Date.now(),
+        }),
+        state: "failed",
+        finishedAt: Date.now(),
+        errorMessage: err instanceof Error ? err.message : String(err),
+      });
+      await this.upgradeResultStore.flush();
+      await this.feishuBot.sendText(
+        msg.chatId,
+        `❌ 启动升级任务失败：${err instanceof Error ? err.message : String(err)}`,
+        msg.messageId,
+        this.threadReplyOpts(msg),
+      );
+    }
+  }
+
   private activeSnapshot(msg: FeishuMessage) {
     return this.sessionManager.getSessionSnapshot(
       msg.chatId,
@@ -403,6 +584,142 @@ export class Bridge {
     return `${msg.chatId}:${msg.senderId}`;
   }
 
+  private async appendSlotPromptLog(
+    sessionKey: string,
+    slot: SessionSlot,
+    session: {
+      backend: AcpBackend;
+      sessionId: string;
+      workspaceRoot: string;
+      chatId: string;
+      userId: string;
+      chatType: "p2p" | "group";
+      threadId?: string;
+      createdAt: number;
+      lastActiveAt: number;
+    },
+    msg: FeishuMessage,
+    rawFeishuContent: string,
+    agentPrompt: string,
+  ): Promise<void> {
+    try {
+      await this.slotMessageLog.appendPrompt(
+        {
+          sessionKey,
+          slot,
+          session,
+          msg,
+        },
+        rawFeishuContent,
+        agentPrompt,
+      );
+    } catch (error) {
+      console.warn(
+        `[bridge] failed to append slot prompt log slot=#${slot.slotIndex} sessionKey=${sessionKey}:`,
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }
+
+  private async appendSlotReplyLog(
+    sessionKey: string,
+    slot: SessionSlot,
+    session: {
+      backend: AcpBackend;
+      sessionId: string;
+      workspaceRoot: string;
+      chatId: string;
+      userId: string;
+      chatType: "p2p" | "group";
+      threadId?: string;
+      createdAt: number;
+      lastActiveAt: number;
+    },
+    msg: FeishuMessage,
+    reply: string,
+  ): Promise<void> {
+    try {
+      await this.slotMessageLog.appendReply({
+        sessionKey,
+        slot,
+        session,
+        msg,
+      }, reply);
+    } catch (error) {
+      console.warn(
+        `[bridge] failed to append slot reply log slot=#${slot.slotIndex} sessionKey=${sessionKey}:`,
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }
+
+  private async appendSlotAcpChunkLog(
+    sessionKey: string,
+    slot: SessionSlot,
+    session: {
+      backend: AcpBackend;
+      sessionId: string;
+      workspaceRoot: string;
+      chatId: string;
+      userId: string;
+      chatType: "p2p" | "group";
+      threadId?: string;
+      createdAt: number;
+      lastActiveAt: number;
+    },
+    msg: FeishuMessage,
+    chunkText: string,
+  ): Promise<void> {
+    try {
+      await this.slotMessageLog.appendAcpAgentMessageChunk(
+        {
+          sessionKey,
+          slot,
+          session,
+          msg,
+        },
+        chunkText,
+      );
+    } catch (error) {
+      console.warn(
+        `[bridge] failed to append slot ACP chunk log slot=#${slot.slotIndex} sessionKey=${sessionKey}:`,
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }
+
+  private async appendSlotErrorLog(
+    sessionKey: string,
+    slot: SessionSlot,
+    session: {
+      backend: AcpBackend;
+      sessionId: string;
+      workspaceRoot: string;
+      chatId: string;
+      userId: string;
+      chatType: "p2p" | "group";
+      threadId?: string;
+      createdAt: number;
+      lastActiveAt: number;
+    },
+    msg: FeishuMessage,
+    errorText: string,
+  ): Promise<void> {
+    try {
+      await this.slotMessageLog.appendError({
+        sessionKey,
+        slot,
+        session,
+        msg,
+      }, errorText);
+    } catch (error) {
+      console.warn(
+        `[bridge] failed to append slot error log slot=#${slot.slotIndex} sessionKey=${sessionKey}:`,
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }
+
   private async ensureMaintenanceStateLoaded(): Promise<void> {
     if (!this.maintenanceStateReady) {
       this.maintenanceStateReady = (async () => {
@@ -447,9 +764,31 @@ export class Bridge {
     task: CompletedBridgeMaintenanceTask,
   ): string {
     const statusLabel = task.status === "succeeded" ? "成功" : "失败";
-    const forceLabel = task.forced ? "，强制执行" : "";
-    const detail = task.detail?.trim() ? `\n  详情：${task.detail.trim()}` : "";
-    return `/${task.kind} ${statusLabel}（完成于 ${this.formatIsoTimestamp(task.finishedAt)}${forceLabel}）${detail}`;
+    const detail = task.detail?.trim() ? `；详情：${task.detail.trim()}` : "";
+    return `/${task.kind} ${statusLabel}（完成于 ${this.formatIsoTimestamp(task.finishedAt)}）${detail}`;
+  }
+
+  private formatUpgradeAttemptSummary(attempt: UpgradeAttemptRecord): string {
+    const stateLabel =
+      attempt.state === "queued"
+        ? "排队中"
+        : attempt.state === "running"
+          ? "执行中"
+          : attempt.state === "succeeded"
+            ? "成功"
+            : "失败";
+    const timeLabel =
+      attempt.state === "queued"
+        ? `请求于 ${this.formatIsoTimestamp(attempt.requestedAt)}`
+        : attempt.state === "running"
+          ? `开始于 ${this.formatIsoTimestamp(attempt.startedAt ?? attempt.requestedAt)}`
+          : `完成于 ${this.formatIsoTimestamp(attempt.finishedAt ?? attempt.startedAt ?? attempt.requestedAt)}`;
+    const detail = attempt.errorMessage?.trim()
+      ? `；原因：${attempt.errorMessage.trim()}`
+      : attempt.exitCode != null
+        ? `；退出码：${attempt.exitCode}`
+        : "";
+    return `${stateLabel}（${timeLabel}）${detail}`;
   }
 
   private maintenanceUsage(kind: BridgeMaintenanceCommandKind): string {
@@ -479,7 +818,7 @@ export class Bridge {
 
   private async handleMaintenanceCommand(
     msg: FeishuMessage,
-    command: { kind: "restart" | "update"; force: boolean; invalidUsage?: boolean },
+    command: { kind: "restart" | "update" | "upgrade"; force: boolean; invalidUsage?: boolean },
   ): Promise<void> {
     await this.ensureMaintenanceStateLoaded();
     if (command.invalidUsage) {
@@ -750,9 +1089,14 @@ export class Bridge {
       try {
         if (
           bridgeManagedCommand.kind === "restart" ||
-          bridgeManagedCommand.kind === "update"
+          bridgeManagedCommand.kind === "update" ||
+          bridgeManagedCommand.kind === "upgrade"
         ) {
-          await this.handleMaintenanceCommand(msg, bridgeManagedCommand);
+          if (bridgeManagedCommand.kind === "upgrade") {
+            await this.handleUpgradeCommand(msg, bridgeManagedCommand);
+          } else {
+            await this.handleMaintenanceCommand(msg, bridgeManagedCommand);
+          }
           return;
         }
 
@@ -1297,6 +1641,7 @@ export class Bridge {
       const maintenanceEnabled =
         this.config.bridge.adminUserIds.length > 0 && (await this.isManagedByService());
       const lastMaintenanceTask = this.maintenanceStateStore.getLastTask();
+      const lastUpgradeAttempt = this.upgradeResultStore.getAttempt();
       let body = `📊 活跃/内存 slot: ${stats.active}/${stats.total}`;
       body += `
 • 默认 backend：${this.config.acp.backend}`;
@@ -1341,6 +1686,9 @@ export class Bridge {
         body += `\n• 维护任务：进行中（\`/${this.activeMaintenance.kind}\`，开始于 ${this.formatIsoTimestamp(this.activeMaintenance.requestedAt)}）`;
       } else if (lastMaintenanceTask) {
         body += `\n• 上次维护：${this.formatMaintenanceTaskSummary(lastMaintenanceTask)}`;
+      }
+      if (lastUpgradeAttempt) {
+        body += `\n• 最近升级：${this.formatUpgradeAttemptSummary(lastUpgradeAttempt)}`;
       }
       if (this.config.bridgeDebug) {
         const idleLabel = snap
@@ -1538,6 +1886,7 @@ export class Bridge {
 
     try {
       this.activePrompts.add(promptKey);
+      let activeSlot: SessionSlot | undefined;
 
       const session = await this.sessionManager.getActiveSession(
         msg.chatId,
@@ -1604,8 +1953,45 @@ export class Bridge {
         ...msg,
         content: promptContent,
       };
+      activeSlot = await this.sessionManager.getSlot(
+        msg.chatId,
+        msg.senderId,
+        msg.chatType,
+        null,
+        this.threadScope(msg),
+      );
+      await this.appendSlotPromptLog(
+        sessionKey,
+        activeSlot,
+        session,
+        msgForPrompt,
+        content,
+        promptContent,
+      );
 
-      const lastReply = await this.conversationForBackend(session.backend).handleUserPrompt(msgForPrompt, session);
+      const lastReply = await this.conversationForBackend(session.backend).handleUserPrompt(
+        msgForPrompt,
+        session,
+        {
+          onAcpEvent: async (ev) => {
+            if (ev.type !== "agent_message_chunk") return;
+            await this.appendSlotAcpChunkLog(
+              sessionKey,
+              activeSlot,
+              session,
+              msgForPrompt,
+              ev.text,
+            );
+          },
+        },
+      );
+      await this.appendSlotReplyLog(
+        sessionKey,
+        activeSlot,
+        session,
+        msgForPrompt,
+        lastReply ?? "（无响应内容）",
+      );
       if (lastReply) {
         this.sessionManager.setSlotLastTurn(
           msg.chatId,
@@ -1622,6 +2008,25 @@ export class Bridge {
         `[bridge] Error processing message from ${msg.senderId}:`,
         err,
       );
+      try {
+        const slot = await this.sessionManager.getSlot(
+          msg.chatId,
+          msg.senderId,
+          msg.chatType,
+          null,
+          this.threadScope(msg),
+        );
+        const session = slot.session;
+        await this.appendSlotErrorLog(
+          sessionKey,
+          slot,
+          session,
+          msg,
+          err instanceof Error ? err.message : String(err),
+        );
+      } catch {
+        // ignore logging failures while already handling an error
+      }
       await this.feishuBot
         .sendText(
           msg.chatId,
