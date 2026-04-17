@@ -98,6 +98,8 @@ export interface Config {
     experimentalLogToFile: boolean;
     /** 实验日志文件路径 */
     experimentalLogFilePath: string;
+    /** 是否按 session/slot 落盘 prompt/chunk/reply/error 调试日志 */
+    slotMessageLogEnabled: boolean;
     /** 是否在卡片中显示 ACP availableCommands */
     showAcpAvailableCommands: boolean;
     /** 是否允许在飞书里使用 `/upgrade` 触发 bridge 自升级 */
@@ -660,6 +662,9 @@ export function loadConfig(): Config {
       managedByService,
       experimentalLogToFile,
       experimentalLogFilePath,
+      slotMessageLogEnabled:
+        (process.env["BRIDGE_SLOT_LOG_ENABLED"] ?? "false").toLowerCase() ===
+        "true",
       showAcpAvailableCommands,
       enableUpgradeCommand,
       upgradeAdmins,

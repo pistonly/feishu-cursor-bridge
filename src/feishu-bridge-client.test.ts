@@ -47,6 +47,7 @@ function createTestConfig(): Config {
       managedByService: false,
       experimentalLogToFile: false,
       experimentalLogFilePath: path.join(tmpRoot, "bridge.log"),
+      slotMessageLogEnabled: false,
       showAcpAvailableCommands: false,
       enableUpgradeCommand: false,
       upgradeAdmins: {

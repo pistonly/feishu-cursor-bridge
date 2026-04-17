@@ -232,7 +232,7 @@ export class Bridge {
   private presetsStore: WorkspacePresetsStore;
   private conversations: Map<AcpBackend, ConversationService>;
   private upgradeResultStore: UpgradeResultStore;
-  private slotMessageLog: SlotMessageLogStore;
+  private slotMessageLog: SlotMessageLogStore | null;
   /** key: `<sessionKey>:<slotIndex>` — 同一 slot 同一时刻只能有一个 prompt 在跑 */
   private activePrompts = new Set<string>();
   private maintenanceStateStore: BridgeMaintenanceStateStore;
@@ -265,9 +265,11 @@ export class Bridge {
     this.presetsStore = new WorkspacePresetsStore(
       config.bridge.workspacePresetsPath,
     );
-    this.slotMessageLog = new SlotMessageLogStore(
-      path.join(path.dirname(config.bridge.sessionStorePath), "slot-logs"),
-    );
+    this.slotMessageLog = config.bridge.slotMessageLogEnabled
+      ? new SlotMessageLogStore(
+          path.join(path.dirname(config.bridge.sessionStorePath), "slot-logs"),
+        )
+      : null;
     this.sessionManager = new SessionManager(
       this.runtimeRegistry,
       this.sessionStore,
@@ -286,6 +288,11 @@ export class Bridge {
     if (this.config.bridgeDebug) {
       console.log(
         "[bridge] BRIDGE_DEBUG=true — 控制台输出 ACP/会话信息；/status 含 session 与路径",
+      );
+    }
+    if (this.config.bridge.slotMessageLogEnabled) {
+      console.log(
+        `[bridge] BRIDGE_SLOT_LOG_ENABLED=true — slot 调试日志将写入 ${path.join(path.dirname(this.config.bridge.sessionStorePath), "slot-logs")}`,
       );
     }
 
@@ -602,8 +609,10 @@ export class Bridge {
     rawFeishuContent: string,
     agentPrompt: string,
   ): Promise<void> {
+    const slotMessageLog = this.slotMessageLog;
+    if (!slotMessageLog) return;
     try {
-      await this.slotMessageLog.appendPrompt(
+      await slotMessageLog.appendPrompt(
         {
           sessionKey,
           slot,
@@ -638,8 +647,10 @@ export class Bridge {
     msg: FeishuMessage,
     reply: string,
   ): Promise<void> {
+    const slotMessageLog = this.slotMessageLog;
+    if (!slotMessageLog) return;
     try {
-      await this.slotMessageLog.appendReply({
+      await slotMessageLog.appendReply({
         sessionKey,
         slot,
         session,
@@ -670,8 +681,10 @@ export class Bridge {
     msg: FeishuMessage,
     chunkText: string,
   ): Promise<void> {
+    const slotMessageLog = this.slotMessageLog;
+    if (!slotMessageLog) return;
     try {
-      await this.slotMessageLog.appendAcpAgentMessageChunk(
+      await slotMessageLog.appendAcpAgentMessageChunk(
         {
           sessionKey,
           slot,
@@ -705,8 +718,10 @@ export class Bridge {
     msg: FeishuMessage,
     errorText: string,
   ): Promise<void> {
+    const slotMessageLog = this.slotMessageLog;
+    if (!slotMessageLog) return;
     try {
-      await this.slotMessageLog.appendError({
+      await slotMessageLog.appendError({
         sessionKey,
         slot,
         session,

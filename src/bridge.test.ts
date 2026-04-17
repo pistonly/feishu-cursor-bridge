@@ -48,6 +48,7 @@ function createTestConfig(): Config {
       managedByService: true,
       experimentalLogToFile: false,
       experimentalLogFilePath: "/tmp/bridge.log",
+      slotMessageLogEnabled: false,
       showAcpAvailableCommands: false,
       enableUpgradeCommand: false,
       upgradeAdmins: {
@@ -532,6 +533,7 @@ test("普通对话会为当前 slot 追加用户问题与回复日志", async ()
   );
   const config = createTestConfig();
   config.bridge.sessionStorePath = path.join(tmpRoot, "sessions.json");
+  config.bridge.slotMessageLogEnabled = true;
 
   const bridge = new Bridge(config);
   const slot = {
@@ -611,4 +613,73 @@ test("普通对话会为当前 slot 追加用户问题与回复日志", async ()
   assert.match(content, /原始 chunk 片段/);
   assert.match(content, /bridge_reply/);
   assert.match(content, /当前仓库状态如下：有改动。/);
+});
+
+test("默认不会写 slot 调试日志", async () => {
+  const tmpRoot = await fsp.mkdtemp(
+    path.join(os.tmpdir(), "bridge-slot-log-disabled-"),
+  );
+  const config = createTestConfig();
+  config.bridge.sessionStorePath = path.join(tmpRoot, "sessions.json");
+
+  const bridge = new Bridge(config);
+  const slot = {
+    slotIndex: 1,
+    name: "legacy-debug",
+    session: {
+      backend: "cursor-legacy" as const,
+      sessionId: "session-1",
+      workspaceRoot: "/tmp/project",
+      chatId: "chat-1",
+      userId: "user-1",
+      chatType: "p2p" as const,
+      createdAt: 0,
+      lastActiveAt: 0,
+    },
+  };
+
+  (bridge as any).ensureMaintenanceStateLoaded = async () => {};
+  (bridge as any).flushPendingSessionNotices = async () => {};
+  (bridge as any).sessionManager = {
+    getSessionSnapshot() {
+      return {
+        sessionKey: "dm:user-1",
+        group: {
+          slots: [slot],
+          activeSlotIndex: 1,
+          nextSlotIndex: 2,
+        },
+        activeSlot: slot,
+        idleExpiresInMs: 60_000,
+      };
+    },
+    async getActiveSession() {
+      return slot.session;
+    },
+    async getSlot() {
+      return slot;
+    },
+    setSlotLastTurn() {},
+  };
+  (bridge as any).conversations = new Map([
+    [
+      "cursor-legacy",
+      {
+        async handleUserPrompt() {
+          return "当前仓库状态如下：有改动。";
+        },
+      },
+    ],
+  ]);
+  (bridge as any).feishuBot = {
+    stripBotMentionKeepLines(content: string) {
+      return content;
+    },
+    async sendText(): Promise<void> {},
+  };
+
+  await (bridge as any).handleFeishuMessage(createMessage("检查项目当前的git状态"));
+
+  const logDir = path.join(tmpRoot, "slot-logs");
+  await assert.rejects(fsp.access(logDir));
 });
