@@ -5,6 +5,12 @@ import * as path from "node:path";
 import test from "node:test";
 import type { Config } from "./config/index.js";
 import { Bridge, formatNumber, formatPercent, formatSessionUsage } from "./bridge/bridge.js";
+import { preprocessBridgeMessage } from "./bridge/bridge-message-preprocess.js";
+import { resolvePromptContentFromResource } from "./bridge/bridge-resource-prompt.js";
+import {
+  appendSlotErrorLog,
+  appendSlotPromptLog,
+} from "./bridge/bridge-slot-logging.js";
 import type { BridgeAcpRuntime } from "./acp/runtime-contract.js";
 import type { FeishuMessage } from "./feishu/bot.js";
 
@@ -682,4 +688,264 @@ test("默认不会写 slot 调试日志", async () => {
 
   const logDir = path.join(tmpRoot, "slot-logs");
   await assert.rejects(fsp.access(logDir));
+});
+
+test("preprocessBridgeMessage 会在群消息中分别使用单行与多行内容", async () => {
+  const msg = createMessage("@bot raw", {
+    chatType: "group",
+    mentions: [{ name: "bot" }] as never[],
+  });
+  const result = await preprocessBridgeMessage(
+    {
+      config: { bridgeDebug: false },
+      feishuBot: {
+        getGroupMentionIgnoredDebug(msg: FeishuMessage) {
+          return {
+            messageId: msg.messageId,
+            chatId: msg.chatId,
+            contentType: msg.contentType,
+            mentionCount: msg.mentions?.length ?? 0,
+            messageMentionIds: [],
+            inlineMentionIds: msg.inlineMentionIds,
+            bot: { resolved: false },
+            hint: "ignored",
+          };
+        },
+        isBotMentioned() {
+          return false;
+        },
+        async isPairUserBotGroup() {
+          return true;
+        },
+        stripBotMention() {
+          return "单行命令";
+        },
+        stripBotMentionKeepLines() {
+          return "多行\n命令";
+        },
+      },
+    },
+    msg,
+  );
+
+  assert.equal(result?.content, "单行命令");
+  assert.equal(result?.contentMultiline, "多行\n命令");
+  assert.equal(result?.hasIncomingResource, false);
+  assert.equal(result?.hasPostEmbeddedImages, false);
+});
+
+test("preprocessBridgeMessage 会忽略 markdown 包裹的 /topic", async () => {
+  const result = await preprocessBridgeMessage(
+    {
+      config: { bridgeDebug: false },
+      feishuBot: {
+        getGroupMentionIgnoredDebug(msg: FeishuMessage) {
+          return {
+            messageId: msg.messageId,
+            chatId: msg.chatId,
+            contentType: msg.contentType,
+            mentionCount: msg.mentions?.length ?? 0,
+            messageMentionIds: [],
+            inlineMentionIds: msg.inlineMentionIds,
+            bot: { resolved: false },
+            hint: "ignored",
+          };
+        },
+        isBotMentioned() {
+          return false;
+        },
+        async isPairUserBotGroup() {
+          return false;
+        },
+        stripBotMention(content: string) {
+          return content;
+        },
+        stripBotMentionKeepLines(content: string) {
+          return content;
+        },
+      },
+    },
+    createMessage("**/topic 发布说明**"),
+  );
+
+  assert.equal(result, null);
+});
+
+test("resolvePromptContentFromResource 会格式化飞书附件提示", async () => {
+  const downloads: Array<{ messageId: string; workspaceRoot: string }> = [];
+  const msg = createMessage("请查看附件", {
+    incomingResource: {
+      apiType: "file",
+      fileKey: "file-1",
+      messageKind: "file",
+      displayName: "spec.pdf",
+    } as never,
+  });
+  const session = {
+    backend: "cursor-official" as const,
+    sessionId: "session-1",
+    workspaceRoot: "/tmp/project",
+    chatId: "chat-1",
+    userId: "user-1",
+    chatType: "p2p" as const,
+    createdAt: 0,
+    lastActiveAt: 0,
+  };
+
+  const result = await resolvePromptContentFromResource(
+    {
+      feishuBot: {
+        async downloadIncomingResourceToWorkspace(messageId, _resource, workspaceRoot) {
+          downloads.push({ messageId, workspaceRoot });
+          return {
+            relativePath: ".feishu-incoming/spec.pdf",
+            absPath: "/tmp/project/.feishu-incoming/spec.pdf",
+          };
+        },
+      },
+    },
+    msg,
+    session,
+    "请查看附件",
+    false,
+  );
+
+  assert.deepEqual(downloads, [{ messageId: "msg-1", workspaceRoot: "/tmp/project" }]);
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.match(result.promptContent, /用户通过飞书发送了文件/);
+    assert.match(result.promptContent, /\.feishu-incoming\/spec\.pdf/);
+    assert.match(result.promptContent, /spec\.pdf/);
+  }
+});
+
+test("resolvePromptContentFromResource 会返回富文本图片下载错误", async () => {
+  const result = await resolvePromptContentFromResource(
+    {
+      feishuBot: {
+        async downloadIncomingResourceToWorkspace() {
+          throw new Error("download failed");
+        },
+      },
+    },
+    createMessage("正文", {
+      contentType: "post",
+      postEmbeddedImageKeys: ["img-1", "img-2"],
+    }),
+    {
+      backend: "cursor-official",
+      sessionId: "session-1",
+      workspaceRoot: "/tmp/project",
+      chatId: "chat-1",
+      userId: "user-1",
+      chatType: "p2p",
+      createdAt: 0,
+      lastActiveAt: 0,
+    },
+    "正文",
+    true,
+  );
+
+  assert.deepEqual(result, {
+    ok: false,
+    errorText: "❌ 无法下载飞书富文本内嵌图片：download failed",
+  });
+});
+
+test("appendSlotPromptLog 会把上下文透传给 store", async () => {
+  const slot = {
+    slotIndex: 2,
+    name: "debug",
+    session: {
+      backend: "cursor-official" as const,
+      sessionId: "session-2",
+      workspaceRoot: "/tmp/project",
+      chatId: "chat-1",
+      userId: "user-1",
+      chatType: "p2p" as const,
+      createdAt: 0,
+      lastActiveAt: 0,
+    },
+  };
+  const calls: Array<{ entry: unknown; raw: string; prompt: string }> = [];
+
+  await appendSlotPromptLog(
+    {
+      slotMessageLog: {
+        async appendPrompt(entry: unknown, raw: string, prompt: string) {
+          calls.push({ entry, raw, prompt });
+        },
+      } as never,
+      sessionKey: "dm:user-1",
+      slot,
+      session: slot.session,
+      msg: createMessage("原始消息"),
+    },
+    "飞书原文",
+    "Agent Prompt",
+  );
+
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0], {
+    entry: {
+      sessionKey: "dm:user-1",
+      slot,
+      session: slot.session,
+      msg: createMessage("原始消息"),
+    },
+    raw: "飞书原文",
+    prompt: "Agent Prompt",
+  });
+});
+
+test("appendSlotErrorLog 会吞掉 store 写入失败并告警", async () => {
+  const warnings: unknown[][] = [];
+  const originalWarn = console.warn;
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args);
+  };
+
+  try {
+    await appendSlotErrorLog(
+      {
+        slotMessageLog: {
+          async appendError() {
+            throw new Error("write failed");
+          },
+        } as never,
+        sessionKey: "dm:user-1",
+        slot: {
+          slotIndex: 3,
+          session: {
+            backend: "cursor-official",
+            sessionId: "session-3",
+            workspaceRoot: "/tmp/project",
+            chatId: "chat-1",
+            userId: "user-1",
+            chatType: "p2p",
+            createdAt: 0,
+            lastActiveAt: 0,
+          },
+        } as never,
+        session: {
+          backend: "cursor-official",
+          sessionId: "session-3",
+          workspaceRoot: "/tmp/project",
+          chatId: "chat-1",
+          userId: "user-1",
+          chatType: "p2p",
+          createdAt: 0,
+          lastActiveAt: 0,
+        },
+        msg: createMessage("原始消息"),
+      },
+      "错误文本",
+    );
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  assert.equal(warnings.length, 1);
+  assert.match(String(warnings[0]?.[0]), /failed to append slot error log/);
+  assert.equal(warnings[0]?.[1], "write failed");
 });

@@ -14,12 +14,7 @@ import type {
   BridgeAcpRuntime,
 } from "../acp/runtime-contract.js";
 import { formatJsonRpcLikeError } from "../utils/format-json-rpc-error.js";
-import {
-  FeishuBot,
-  FEISHU_INCOMING_DIR_NAME,
-  type FeishuIncomingResource,
-  type FeishuMessage,
-} from "../feishu/bot.js";
+import { FeishuBot, type FeishuMessage } from "../feishu/bot.js";
 import {
   matchesBridgeHelpCommand,
   matchesBridgeStartCommand,
@@ -56,10 +51,16 @@ import {
 } from "./maintenance-state.js";
 import { UpgradeResultStore, type UpgradeAttemptRecord } from "./upgrade-result-store.js";
 import { SlotMessageLogStore } from "./slot-message-log.js";
+import { NO_SESSION_HINT } from "./bridge-context.js";
+import { preprocessBridgeMessage } from "./bridge-message-preprocess.js";
+import { resolvePromptContentFromResource } from "./bridge-resource-prompt.js";
+import {
+  appendSlotAcpChunkLog,
+  appendSlotErrorLog,
+  appendSlotPromptLog,
+  appendSlotReplyLog,
+} from "./bridge-slot-logging.js";
 
-/** 无活跃 session 时，普通对话与部分命令的统一提示 */
-const NO_SESSION_HINT =
-  "当前没有可用的 session。请先发送 `/new list` 查看工作区列表，再用 `/new <序号>` 或 `/new <目录绝对路径>` 创建 session。\n\n发送 `/commands`、`/help` 或只发 `/`（全角 `／` 亦可）可查看本桥接支持的全部命令，**无需先建 session**。";
 const MAINTENANCE_OUTPUT_LIMIT = 12_000;
 
 type RunningMaintenanceTask = {
@@ -92,48 +93,6 @@ function formatWhoAmIMessage(senderId: string): string {
   ].join("\n");
 }
 
-function formatIncomingAttachmentPrompt(
-  relativePath: string,
-  res: FeishuIncomingResource,
-): string {
-  const kindLabel =
-    res.messageKind === "image"
-      ? "图片"
-      : res.messageKind === "audio"
-        ? "音频"
-        : res.messageKind === "video"
-          ? "视频"
-          : "文件";
-  const lines: string[] = [
-    `用户通过飞书发送了${kindLabel}，已保存到工作区子目录 \`${FEISHU_INCOMING_DIR_NAME}/\`。`,
-    "",
-    `相对路径（相对工作区根目录）：\`${relativePath}\``,
-  ];
-  if (res.displayName) {
-    lines.push(`原始文件名：\`${res.displayName}\``);
-  }
-  lines.push(`（飞书消息类型：${res.messageKind}；资源接口 type=\`${res.apiType}\`）`);
-  return lines.join("\n");
-}
-
-function formatPostEmbeddedImagesPrompt(
-  textBody: string,
-  relativePaths: string[],
-): string {
-  const lines: string[] = [
-    `用户发送了飞书富文本（post）消息，其中包含 ${relativePaths.length} 张内嵌图片，已保存到工作区子目录 \`${FEISHU_INCOMING_DIR_NAME}/\`。`,
-    "",
-  ];
-  for (let i = 0; i < relativePaths.length; i++) {
-    lines.push(`${i + 1}. 相对路径（相对工作区根目录）：\`${relativePaths[i]}\``);
-  }
-  lines.push("", "（飞书消息类型：post；资源接口 type=\`image\`）");
-  const trimmed = textBody.trim();
-  if (trimmed) {
-    lines.push("", "富文本中的文字内容如下：", "", trimmed);
-  }
-  return lines.join("\n");
-}
 
 function formatDurationMs(ms: number): string {
   if (!Number.isFinite(ms)) {
@@ -240,8 +199,6 @@ export class Bridge {
   private activeMaintenance: RunningMaintenanceTask | null = null;
   private restartTimer: ReturnType<typeof setTimeout> | null = null;
   private cleanupInterval: ReturnType<typeof setInterval> | null = null;
-  /** 记录已发送过欢迎消息的用户 */
-  private welcomedUsers = new Set<string>();
 
   constructor(config: Config) {
     this.config = config;
@@ -591,149 +548,6 @@ export class Bridge {
     return `${msg.chatId}:${msg.senderId}`;
   }
 
-  private async appendSlotPromptLog(
-    sessionKey: string,
-    slot: SessionSlot,
-    session: {
-      backend: AcpBackend;
-      sessionId: string;
-      workspaceRoot: string;
-      chatId: string;
-      userId: string;
-      chatType: "p2p" | "group";
-      threadId?: string;
-      createdAt: number;
-      lastActiveAt: number;
-    },
-    msg: FeishuMessage,
-    rawFeishuContent: string,
-    agentPrompt: string,
-  ): Promise<void> {
-    const slotMessageLog = this.slotMessageLog;
-    if (!slotMessageLog) return;
-    try {
-      await slotMessageLog.appendPrompt(
-        {
-          sessionKey,
-          slot,
-          session,
-          msg,
-        },
-        rawFeishuContent,
-        agentPrompt,
-      );
-    } catch (error) {
-      console.warn(
-        `[bridge] failed to append slot prompt log slot=#${slot.slotIndex} sessionKey=${sessionKey}:`,
-        error instanceof Error ? error.message : error,
-      );
-    }
-  }
-
-  private async appendSlotReplyLog(
-    sessionKey: string,
-    slot: SessionSlot,
-    session: {
-      backend: AcpBackend;
-      sessionId: string;
-      workspaceRoot: string;
-      chatId: string;
-      userId: string;
-      chatType: "p2p" | "group";
-      threadId?: string;
-      createdAt: number;
-      lastActiveAt: number;
-    },
-    msg: FeishuMessage,
-    reply: string,
-  ): Promise<void> {
-    const slotMessageLog = this.slotMessageLog;
-    if (!slotMessageLog) return;
-    try {
-      await slotMessageLog.appendReply({
-        sessionKey,
-        slot,
-        session,
-        msg,
-      }, reply);
-    } catch (error) {
-      console.warn(
-        `[bridge] failed to append slot reply log slot=#${slot.slotIndex} sessionKey=${sessionKey}:`,
-        error instanceof Error ? error.message : error,
-      );
-    }
-  }
-
-  private async appendSlotAcpChunkLog(
-    sessionKey: string,
-    slot: SessionSlot,
-    session: {
-      backend: AcpBackend;
-      sessionId: string;
-      workspaceRoot: string;
-      chatId: string;
-      userId: string;
-      chatType: "p2p" | "group";
-      threadId?: string;
-      createdAt: number;
-      lastActiveAt: number;
-    },
-    msg: FeishuMessage,
-    chunkText: string,
-  ): Promise<void> {
-    const slotMessageLog = this.slotMessageLog;
-    if (!slotMessageLog) return;
-    try {
-      await slotMessageLog.appendAcpAgentMessageChunk(
-        {
-          sessionKey,
-          slot,
-          session,
-          msg,
-        },
-        chunkText,
-      );
-    } catch (error) {
-      console.warn(
-        `[bridge] failed to append slot ACP chunk log slot=#${slot.slotIndex} sessionKey=${sessionKey}:`,
-        error instanceof Error ? error.message : error,
-      );
-    }
-  }
-
-  private async appendSlotErrorLog(
-    sessionKey: string,
-    slot: SessionSlot,
-    session: {
-      backend: AcpBackend;
-      sessionId: string;
-      workspaceRoot: string;
-      chatId: string;
-      userId: string;
-      chatType: "p2p" | "group";
-      threadId?: string;
-      createdAt: number;
-      lastActiveAt: number;
-    },
-    msg: FeishuMessage,
-    errorText: string,
-  ): Promise<void> {
-    const slotMessageLog = this.slotMessageLog;
-    if (!slotMessageLog) return;
-    try {
-      await slotMessageLog.appendError({
-        sessionKey,
-        slot,
-        session,
-        msg,
-      }, errorText);
-    } catch (error) {
-      console.warn(
-        `[bridge] failed to append slot error log slot=#${slot.slotIndex} sessionKey=${sessionKey}:`,
-        error instanceof Error ? error.message : error,
-      );
-    }
-  }
 
   private async ensureMaintenanceStateLoaded(): Promise<void> {
     if (!this.maintenanceStateReady) {
@@ -978,104 +792,22 @@ export class Bridge {
     }
   }
 
-  /**
-   * `/topic …` 普通命令：整条消息直接丢弃，不调 SessionManager、不连 ACP、不建 session。
-   * 飞书富文本常把 `/topic` 包在 **、`` ` `` 里，行首不是 `/`，需额外判断。
-   */
-  private shouldIgnoreTopicMessage(msg: FeishuMessage): boolean {
-    const raw = msg.content.replace(/\r\n/g, "\n").trim();
-    const mentions = msg.mentions;
-    for (const lineRaw of raw.split("\n")) {
-      const line = this.feishuBot
-        .stripBotMentionKeepLines(lineRaw.trim(), mentions)
-        .trim();
-      if (!line) continue;
-
-      let head = line
-        .replace(/^[\uFEFF\u200b-\u200d\u3000\s]+/, "")
-        .replace(/^／/, "/")
-        .trimStart();
-      for (let i = 0; i < 24; i++) {
-        const n = head.replace(/^(\*{1,2}|`{1,3}|_{1,2}|~{1,2}|>+|\s)+/, "");
-        if (n === head) break;
-        head = n.trimStart();
-      }
-      head = head.replace(/^／/, "/").trimStart();
-      if (/^\/topic\b/i.test(head)) {
-        console.log("[bridge] /topic ignored — no session, no ACP prompt");
-        return true;
-      }
-
-      const m = line.match(/\/topic\b/i);
-      if (m && m.index !== undefined) {
-        const before = line.slice(0, m.index);
-        if (
-          !/[\u4e00-\u9fff]/.test(before) &&
-          /^[\s`*_~>"'（）【】\[\]\\\-+/=|.,:;!?]*$/.test(before)
-        ) {
-          console.log(
-            "[bridge] /topic ignored (wrapped in markdown, no text before /topic) — no session, no ACP prompt",
-          );
-          return true;
-        }
-      }
-    }
-    // 极短消息：飞书可能把整段包成一句说明 + `` `/topic` ``，上面规则仍够不着
-    if (raw.length <= 120 && /\/topic\b/i.test(raw)) {
-      console.log(
-        "[bridge] /topic ignored (short message, contains /topic) — no session, no ACP prompt",
-      );
-      return true;
-    }
-    return false;
-  }
 
   private async handleFeishuMessage(msg: FeishuMessage): Promise<void> {
-    const hasIncomingResource = msg.incomingResource != null;
-    const hasPostEmbeddedImages = (msg.postEmbeddedImageKeys?.length ?? 0) > 0;
-    if (
-      msg.contentType !== "text" &&
-      msg.contentType !== "post" &&
-      !hasIncomingResource
-    ) {
-      return;
-    }
+    const preprocessed = await preprocessBridgeMessage(
+      {
+        config: this.config,
+        feishuBot: this.feishuBot,
+      },
+      msg,
+    );
+    if (!preprocessed) return;
 
-    // 在任何 await、群成员校验、SessionManager、ACP 之前丢弃（整条消息当没看见）
-    if (this.shouldIgnoreTopicMessage(msg)) {
-      return;
-    }
-
-    let content = msg.content.trim();
-    /** 去掉 @ 后**保留换行**，用于 `/help`、`/stop` 等与 post「标题+换行+命令」一致的判定；`content` 仍为压成单行后的文本（解析斜杠命令、发往 Agent）。 */
-    let contentMultiline = content;
-
-    if (msg.chatType === "group") {
-      const mentioned = this.feishuBot.isBotMentioned(msg);
-      const pairUserBot =
-        !mentioned && (await this.feishuBot.isPairUserBotGroup(msg.chatId));
-      if (!mentioned && !pairUserBot) {
-        if (this.config.bridgeDebug) {
-          console.log(
-            "[bridge:debug] 群消息已收到但未判定为 @ 机器人，已忽略",
-            this.feishuBot.getGroupMentionIgnoredDebug(msg),
-          );
-        }
-        return;
-      }
-      if (this.config.bridgeDebug && pairUserBot) {
-        console.log(
-          "[bridge:debug] 群为 1 用户 + 1 机器人，免 @ 处理",
-          msg.messageId,
-        );
-      }
-      contentMultiline = this.feishuBot
-        .stripBotMentionKeepLines(content, msg.mentions)
-        .trim();
-      content = this.feishuBot.stripBotMention(content, msg.mentions).trim();
-    }
-
-    if (!content) return;
+    let {
+      content,
+      contentMultiline,
+      hasPostEmbeddedImages,
+    } = preprocessed;
     await this.ensureMaintenanceStateLoaded();
 
     if (matchesBridgeStartCommand(contentMultiline)) {
@@ -1920,49 +1652,23 @@ export class Bridge {
       }
       await this.flushPendingSessionNotices(msg);
 
-      let promptContent = content;
-      if (msg.incomingResource) {
-        try {
-          const { relativePath } = await this.feishuBot.downloadIncomingResourceToWorkspace(
-            msg.messageId,
-            msg.incomingResource,
-            session.workspaceRoot,
-          );
-          promptContent = formatIncomingAttachmentPrompt(
-            relativePath,
-            msg.incomingResource,
-          );
-        } catch (err) {
-          await this.feishuBot.sendText(
-            msg.chatId,
-            `❌ 无法下载飞书附件：${err instanceof Error ? err.message : String(err)}`,
-            msg.messageId,
-            this.threadReplyOpts(msg),
-          );
-          return;
-        }
-      } else if (hasPostEmbeddedImages && msg.postEmbeddedImageKeys) {
-        try {
-          const relativePaths: string[] = [];
-          for (const imageKey of msg.postEmbeddedImageKeys) {
-            const { relativePath } = await this.feishuBot.downloadIncomingResourceToWorkspace(
-              msg.messageId,
-              { apiType: "image", fileKey: imageKey, messageKind: "image" },
-              session.workspaceRoot,
-            );
-            relativePaths.push(relativePath);
-          }
-          promptContent = formatPostEmbeddedImagesPrompt(content, relativePaths);
-        } catch (err) {
-          await this.feishuBot.sendText(
-            msg.chatId,
-            `❌ 无法下载飞书富文本内嵌图片：${err instanceof Error ? err.message : String(err)}`,
-            msg.messageId,
-            this.threadReplyOpts(msg),
-          );
-          return;
-        }
+      const resourcePrompt = await resolvePromptContentFromResource(
+        { feishuBot: this.feishuBot },
+        msg,
+        session,
+        content,
+        hasPostEmbeddedImages,
+      );
+      if (!resourcePrompt.ok) {
+        await this.feishuBot.sendText(
+          msg.chatId,
+          resourcePrompt.errorText,
+          msg.messageId,
+          this.threadReplyOpts(msg),
+        );
+        return;
       }
+      const promptContent = resourcePrompt.promptContent;
 
       const msgForPrompt: FeishuMessage = {
         ...msg,
@@ -1975,11 +1681,14 @@ export class Bridge {
         null,
         this.threadScope(msg),
       );
-      await this.appendSlotPromptLog(
-        sessionKey,
-        activeSlot,
-        session,
-        msgForPrompt,
+      await appendSlotPromptLog(
+        {
+          slotMessageLog: this.slotMessageLog,
+          sessionKey,
+          slot: activeSlot,
+          session,
+          msg: msgForPrompt,
+        },
         content,
         promptContent,
       );
@@ -1990,21 +1699,27 @@ export class Bridge {
         {
           onAcpEvent: async (ev) => {
             if (ev.type !== "agent_message_chunk") return;
-            await this.appendSlotAcpChunkLog(
-              sessionKey,
-              activeSlot,
-              session,
-              msgForPrompt,
+            await appendSlotAcpChunkLog(
+              {
+                slotMessageLog: this.slotMessageLog,
+                sessionKey,
+                slot: activeSlot,
+                session,
+                msg: msgForPrompt,
+              },
               ev.text,
             );
           },
         },
       );
-      await this.appendSlotReplyLog(
-        sessionKey,
-        activeSlot,
-        session,
-        msgForPrompt,
+      await appendSlotReplyLog(
+        {
+          slotMessageLog: this.slotMessageLog,
+          sessionKey,
+          slot: activeSlot,
+          session,
+          msg: msgForPrompt,
+        },
         lastReply ?? "（无响应内容）",
       );
       if (lastReply) {
@@ -2032,11 +1747,14 @@ export class Bridge {
           this.threadScope(msg),
         );
         const session = slot.session;
-        await this.appendSlotErrorLog(
-          sessionKey,
-          slot,
-          session,
-          msg,
+        await appendSlotErrorLog(
+          {
+            slotMessageLog: this.slotMessageLog,
+            sessionKey,
+            slot,
+            session,
+            msg,
+          },
           err instanceof Error ? err.message : String(err),
         );
       } catch {
@@ -2066,7 +1784,6 @@ export class Bridge {
         msg.messageId,
         this.threadReplyOpts(msg),
       );
-      this.welcomedUsers.add(msg.senderId);
     } catch (err) {
       console.warn(
         `[bridge] Failed to send welcome card to user ${msg.senderId} in chat ${msg.chatId}: ${err instanceof Error ? err.message : String(err)}`,
