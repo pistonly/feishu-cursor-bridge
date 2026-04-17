@@ -319,6 +319,149 @@ describe('CursorCliBridge - Authentication Status Parsing', () => {
         data: { type: 'text', text: 'Final-only response' },
       });
     });
+
+    test('should ignore assistant full replay after incremental chunks', async () => {
+      const onChunk = jest.fn().mockResolvedValue(undefined);
+      const streamState = {
+        assistantText: '',
+        sawAssistantContent: false,
+        streamToolSeq: 0,
+        pendingStreamToolStack: [],
+      };
+
+      for (const text of ['Hello', ' world']) {
+        await (bridge as any).dispatchCursorStreamEvent(
+          {
+            type: 'assistant',
+            message: {
+              role: 'assistant',
+              content: [{ type: 'text', text }],
+            },
+          },
+          streamState,
+          onChunk
+        );
+      }
+
+      await (bridge as any).dispatchCursorStreamEvent(
+        {
+          type: 'assistant',
+          message: {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'Hello world' }],
+          },
+        },
+        streamState,
+        onChunk
+      );
+
+      const contentCalls = onChunk.mock.calls.filter(
+        (call) => call[0]?.type === 'content'
+      );
+      expect(contentCalls).toHaveLength(2);
+      expect(contentCalls.map((call) => call[0]?.data?.text)).toEqual([
+        'Hello',
+        ' world',
+      ]);
+      expect(streamState.assistantText).toBe('Hello world');
+    });
+
+    test('should dedupe replayed text blocks inside a multi-block assistant event', async () => {
+      const onChunk = jest.fn().mockResolvedValue(undefined);
+      const streamState = {
+        assistantText: '',
+        sawAssistantContent: false,
+        streamToolSeq: 0,
+        pendingStreamToolStack: [],
+      };
+
+      await (bridge as any).dispatchCursorStreamEvent(
+        {
+          type: 'assistant',
+          message: {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'Hello world' }],
+          },
+        },
+        streamState,
+        onChunk
+      );
+
+      await (bridge as any).dispatchCursorStreamEvent(
+        {
+          type: 'assistant',
+          message: {
+            role: 'assistant',
+            content: [
+              { type: 'text', text: 'Hello world' },
+              { type: 'text', text: '!' },
+            ],
+          },
+        },
+        streamState,
+        onChunk
+      );
+
+      const contentCalls = onChunk.mock.calls.filter(
+        (call) => call[0]?.type === 'content'
+      );
+      expect(contentCalls).toHaveLength(2);
+      expect(contentCalls[0]?.[0]?.data).toEqual({
+        type: 'text',
+        text: 'Hello world',
+      });
+      expect(contentCalls[1]?.[0]?.data).toEqual({
+        type: 'text',
+        text: '!',
+      });
+      expect(streamState.assistantText).toBe('Hello world!');
+    });
+
+    test('should keep normal continuation chunks that only share a short prefix', async () => {
+      const onChunk = jest.fn().mockResolvedValue(undefined);
+      const streamState = {
+        assistantText: '',
+        sawAssistantContent: false,
+        streamToolSeq: 0,
+        pendingStreamToolStack: [],
+      };
+
+      await (bridge as any).dispatchCursorStreamEvent(
+        {
+          type: 'assistant',
+          message: {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'Line 1
+' }],
+          },
+        },
+        streamState,
+        onChunk
+      );
+
+      await (bridge as any).dispatchCursorStreamEvent(
+        {
+          type: 'assistant',
+          message: {
+            role: 'assistant',
+            content: [{ type: 'text', text: '
+Line 2' }],
+          },
+        },
+        streamState,
+        onChunk
+      );
+
+      const contentCalls = onChunk.mock.calls.filter(
+        (call) => call[0]?.type === 'content'
+      );
+      expect(contentCalls).toHaveLength(2);
+      expect(contentCalls.map((call) => call[0]?.data?.text)).toEqual([
+        'Line 1\n',
+        '\nLine 2',
+      ]);
+      expect(streamState.assistantText).toBe('Line 1\n\nLine 2');
+    });
   });
 
   describe('streaming timeout', () => {

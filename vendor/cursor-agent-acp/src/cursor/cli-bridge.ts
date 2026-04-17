@@ -963,6 +963,16 @@ export class CursorCliBridge {
     }
   }
 
+  private findStreamingTextOverlap(previousText: string, nextText: string): number {
+    const maxOverlap = Math.min(previousText.length, nextText.length);
+    for (let size = maxOverlap; size > 0; size -= 1) {
+      if (previousText.endsWith(nextText.slice(0, size))) {
+        return size;
+      }
+    }
+    return 0;
+  }
+
   private normalizeStreamingAssistantText(
     text: string,
     state: { assistantText: string }
@@ -983,6 +993,23 @@ export class CursorCliBridge {
       state.assistantText = text;
       return delta;
     }
+    if (previousText.endsWith(text)) {
+      return '';
+    }
+    const overlap = this.findStreamingTextOverlap(previousText, text);
+    if (overlap > 0) {
+      const delta = text.slice(overlap);
+      if (!delta) {
+        return '';
+      }
+      // Treat overlap as a replay only when the retained suffix is at least as
+      // large as the newly introduced tail. This avoids swallowing normal
+      // continuation chunks that merely share a short prefix such as a newline.
+      if (overlap >= delta.length) {
+        state.assistantText += delta;
+        return delta;
+      }
+    }
     state.assistantText += text;
     return text;
   }
@@ -996,7 +1023,7 @@ export class CursorCliBridge {
     }
     const ev = event as {
       type?: string;
-      message?: { content?: Array<{ type?: string; text?: string }> };
+      message?: { content?: Array<{ type?: string; text?: string; [key: string]: unknown }> };
     };
     if (ev.type !== 'assistant') {
       return [];
@@ -1005,22 +1032,28 @@ export class CursorCliBridge {
     if (!Array.isArray(blocks) || blocks.length === 0) {
       return [];
     }
-    if (
-      blocks.length === 1 &&
-      blocks[0]?.type === 'text' &&
-      typeof blocks[0].text === 'string'
-    ) {
-      const text = this.normalizeStreamingAssistantText(blocks[0].text, state);
-      if (!text) {
-        return [];
-      }
-      return [{ ...blocks[0], text }] as Array<{
-        type: string;
-        text?: string;
-        [key: string]: unknown;
-      }>;
-    }
-    return blocks as Array<{ type: string; text?: string; [key: string]: unknown }>;
+
+    type StreamContentBlock = {
+      type: string;
+      text?: string;
+      [key: string]: unknown;
+    };
+
+    return blocks
+      .map((block): StreamContentBlock | null => {
+        if (!block?.type) {
+          return null;
+        }
+        if (block.type !== 'text' || typeof block.text !== 'string') {
+          return block as StreamContentBlock;
+        }
+        const text = this.normalizeStreamingAssistantText(block.text, state);
+        if (!text) {
+          return null;
+        }
+        return { ...block, text } as StreamContentBlock;
+      })
+      .filter((block): block is StreamContentBlock => block != null);
   }
 
   /**
