@@ -37,7 +37,7 @@
 
 仅发送一个字符 **`/`**（ASCII U+002F）或全角 **`／`**（U+FF0F），且整段消息去掉首尾空白后**仅有该字符**时，与 `/help` 等价（便于快速唤起帮助）。
 
-**作用**：机器人回复本桥接内置命令的分类列表（精简版）；正文会说明**当前活跃 session 所属 backend** 下 **`/model` / `/mode`** 是由桥接调 ACP，还是原样交给 Cursor CLI（`cursor-tmux` backend）。若当前还没有活跃 session，则按默认 backend 说明。回复内容由 `src/bridge/bridge-commands-help.ts` 中的 `formatBridgeCommandsHelp` 生成。
+**作用**：机器人回复本桥接内置命令的分类列表（精简版）；正文会说明当前支持的 session / 工作区、模型、模式与维护命令。若当前还没有活跃 session，则按默认 backend 说明。回复内容由 `src/bridge/bridge-commands-help.ts` 中的 `formatBridgeCommandsHelp` 生成。
 
 **无需 session**：与 `/status` 类似，**没有活跃 session 也可使用**；无 session 时的统一提示里也会引导使用本组命令。
 
@@ -87,7 +87,7 @@
 /new "/path/with spaces/in name"
 /new /home/you/project --backend cursor-official
 /new ~/projects/my-app -b legacy
-/new "/path/with spaces/in name" -b tmux
+/new "/path/with spaces/in name" -b claude
 ```
 
 使用快捷列表中第 N 项作为工作区：
@@ -113,10 +113,10 @@
 指定 backend 的格式：
 
 ```text
-/new <路径> --backend <cursor-official|cursor-legacy|cursor-tmux|claude|codex>
-/new <序号> --backend <cursor-official|cursor-legacy|cursor-tmux|claude|codex>
-/new <路径> -b <official|legacy|tmux|claude|codex|cc|cx>
-/new <序号> -b <official|legacy|tmux|claude|codex|cc|cx>
+/new <路径> --backend <cursor-official|cursor-legacy|claude|codex>
+/new <序号> --backend <cursor-official|cursor-legacy|claude|codex>
+/new <路径> -b <official|legacy|claude|codex|cc|cx>
+/new <序号> -b <official|legacy|claude|codex|cc|cx>
 ```
 
 说明：
@@ -267,16 +267,12 @@
 /mode <模式ID>
 ```
 
-**作用**：
-
-- `cursor-official` / `cursor-legacy` / `claude` backend：查看或切换**当前活跃 session** 的 ACP mode，**不会**把整条消息再发给大模型。
-- `cursor-tmux` backend：bridge 会把 `/mode ...` 原样发给真实的交互式 Cursor CLI pane，由 CLI 自己处理；bridge 不再维护一个“权威 mode 列表”。
+**作用**：`cursor-official` / `cursor-legacy` / `claude` / `codex` backend 下，查看或切换**当前活跃 session** 的 ACP mode，**不会**把整条消息再发给大模型。
 
 backend 差异：
 
-- `cursor-official` / `cursor-legacy` / `claude` 不带参数时：返回当前 session 已知的可用模式列表与当前模式。
-- `cursor-official` / `cursor-legacy` / `claude` 带参数时：调用 ACP `session/set_mode` 切换当前 session 模式。
-- `cursor-tmux` backend 下，无论是否带参数，都会把 `/mode` 原样发给 Cursor CLI，由 CLI 自己展示或切换。
+- `cursor-official` / `cursor-legacy` / `claude` / `codex` 不带参数时：返回当前 session 已知的可用模式列表与当前模式。
+- `cursor-official` / `cursor-legacy` / `claude` / `codex` 带参数时：调用 ACP `session/set_mode` 切换当前 session 模式。
 
 **示例**：
 
@@ -390,10 +386,7 @@ backend 差异：
 /model <序号>
 ```
 
-**作用**：
-
-- `cursor-legacy` / `cursor-official` / `claude` / `codex` backend：bridge 直接调用 ACP `session/set_model` 切换**当前活跃 session** 的模型，**不会**把整条消息再发给大模型（避免仅出现「解释 /model」类回复）。
-- `cursor-tmux` backend：bridge 会把 `/model ...` 原样发给真实的交互式 Cursor CLI pane，由 CLI 自己处理；此时不走 ACP `session/set_model`，也不依赖 bridge 侧缓存的模型列表。
+**作用**：`cursor-legacy` / `cursor-official` / `claude` / `codex` backend 下，bridge 直接调用 ACP `session/set_model` 切换**当前活跃 session** 的模型，**不会**把整条消息再发给大模型（避免仅出现「解释 /model」类回复）。
 
 **示例**：
 
@@ -407,13 +400,12 @@ backend 差异：
 
 - 默认 `cursor-official` backend 下，以**当前 ACP session 返回的 `availableModels`** 为准，而不是 `cursor-agent models` 的 alias 列表。
 - 机器人返回列表时，反引号中的值就是可直接提交给 ACP `session/set_model` 的**精确 selector**；若带 `[]` 或其它参数后缀，必须完整带上。
-- 除 `cursor-tmux` 外，只要 `/model` 由 bridge 接管，列表都会带 `【n】` 序号，可直接使用 `/model <序号>`；桥接会按当前 session 的可用模型列表做 1-based 解析。
+- 只要 `/model` 由 bridge 接管，列表都会带 `【n】` 序号，可直接使用 `/model <序号>`；桥接会按当前 session 的可用模型列表做 1-based 解析。
 - `cursor-legacy` / `cursor-official` / `claude` / `codex` backend 下，若当前 session 尚未拿到模型状态，机器人会回退到基础用法提示；此时请先让该 slot 建立/恢复 session 并完成一轮交互，再使用模型 id、selector 或序号。
 
 未带参数时：
 
 - `cursor-legacy` / `cursor-official` / `claude` / `codex` backend 下，若当前 session 已拿到模型状态，机器人会直接返回可用模型列表与当前模型；否则回退到基础用法提示。
-- `cursor-tmux` backend 下，会把 `/model` 原样发给 Cursor CLI，由 CLI 自己展示当前模型或可选项。
 
 ---
 
@@ -423,7 +415,7 @@ backend 差异：
 你：/new list            → 查看快捷工作区列表
 你：/new 1 --backend cursor-official   → 用列表第 1 项创建 session #1（须已在 allowlist 内）
 你：/sessions            → 查看当前 session 列表
-你：/new ~/proj-b --backend cursor-tmux --name proj-b   → 新建 session #2，工作区为 ~/proj-b（须在 allowlist 下）
+你：/new ~/proj-b --backend codex --name proj-b   → 新建 session #2，工作区为 ~/proj-b（须在 allowlist 下）
 你：（对话，针对 proj-b）
 你：/switch 1            → 切回 session #1（proj-b 保持 ACP 连接）
 你：（继续对话，针对原来的工作区）

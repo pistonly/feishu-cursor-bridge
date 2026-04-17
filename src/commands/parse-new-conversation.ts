@@ -6,12 +6,16 @@ const NEW_COMMAND_BACKEND_ALIASES: Record<string, AcpBackend> = {
   "cursor-official": "cursor-official",
   legacy: "cursor-legacy",
   "cursor-legacy": "cursor-legacy",
-  tmux: "cursor-tmux",
-  "cursor-tmux": "cursor-tmux",
   claude: "claude",
   cc: "claude",
   codex: "codex",
   cx: "codex",
+};
+
+type NewCommandCommon = {
+  backend?: AcpBackend;
+  invalidUsage?: boolean;
+  invalidBackend?: string;
 };
 
 export function matchesInterruptUserCommand(content: string): boolean {
@@ -68,12 +72,12 @@ export function matchesBridgeStartCommand(content: string): boolean {
 
 export type NewConversationCommand =
   | { kind: "mode"; modeId?: string }
-  | { kind: "new"; variant: "default"; name?: string; backend?: AcpBackend }
-  | { kind: "new"; variant: "workspace"; path: string; name?: string; backend?: AcpBackend }
-  | { kind: "new"; variant: "preset"; index: number; name?: string; backend?: AcpBackend }
-  | { kind: "new"; variant: "list"; backend?: AcpBackend }
-  | { kind: "new"; variant: "add-list"; path: string; backend?: AcpBackend }
-  | { kind: "new"; variant: "remove-list"; index: number; backend?: AcpBackend }
+  | ({ kind: "new"; variant: "default"; name?: string } & NewCommandCommon)
+  | ({ kind: "new"; variant: "workspace"; path: string; name?: string } & NewCommandCommon)
+  | ({ kind: "new"; variant: "preset"; index: number; name?: string } & NewCommandCommon)
+  | ({ kind: "new"; variant: "list" } & NewCommandCommon)
+  | ({ kind: "new"; variant: "add-list"; path: string } & NewCommandCommon)
+  | ({ kind: "new"; variant: "remove-list"; index: number } & NewCommandCommon)
   | { kind: "switch"; target: number | string | null }
   | { kind: "reply"; target: number | string | null }
   | { kind: "rename"; target: number | string | null; name: string }
@@ -159,28 +163,76 @@ export function parseNewConversationCommand(
 
   if (tokens.length === 1) return { kind: "new", variant: "list" };
 
-  const { name, backend, remainingTokens } = extractNewFlags(tokens.slice(1));
-  if (remainingTokens.length === 0) {
-    return { kind: "new", variant: "default", name, backend };
+  const extracted = extractNewFlags(tokens.slice(1));
+  const newCommandMeta = extracted.invalidBackend
+    ? { invalidUsage: true as const, invalidBackend: extracted.invalidBackend }
+    : {};
+  if (extracted.remainingTokens.length === 0) {
+    return {
+      kind: "new",
+      variant: "default",
+      name: extracted.name,
+      backend: extracted.backend,
+      ...newCommandMeta,
+    };
   }
 
-  const sub = remainingTokens[0];
+  const sub = extracted.remainingTokens[0];
   const subLc = sub.toLowerCase();
-  if (subLc === "list") return { kind: "new", variant: "list", backend };
+  if (subLc === "list") {
+    return {
+      kind: "new",
+      variant: "list",
+      backend: extracted.backend,
+      ...newCommandMeta,
+    };
+  }
   if (subLc === "add-list") {
-    return { kind: "new", variant: "add-list", path: remainingTokens.slice(1).join(" ").trim(), backend };
+    return {
+      kind: "new",
+      variant: "add-list",
+      path: extracted.remainingTokens.slice(1).join(" ").trim(),
+      backend: extracted.backend,
+      ...newCommandMeta,
+    };
   }
   if (subLc === "remove-list") {
-    const idxTok = remainingTokens[1];
+    const idxTok = extracted.remainingTokens[1];
     if (!idxTok || !/^\d+$/.test(idxTok)) {
-      return { kind: "new", variant: "remove-list", index: 0, backend };
+      return {
+        kind: "new",
+        variant: "remove-list",
+        index: 0,
+        backend: extracted.backend,
+        ...newCommandMeta,
+      };
     }
-    return { kind: "new", variant: "remove-list", index: parseInt(idxTok, 10), backend };
+    return {
+      kind: "new",
+      variant: "remove-list",
+      index: parseInt(idxTok, 10),
+      backend: extracted.backend,
+      ...newCommandMeta,
+    };
   }
   if (/^\d+$/.test(sub)) {
-    return { kind: "new", variant: "preset", index: parseInt(sub, 10), name, backend };
+    return {
+      kind: "new",
+      variant: "preset",
+      index: parseInt(sub, 10),
+      name: extracted.name,
+      backend: extracted.backend,
+      ...newCommandMeta,
+    };
   }
-  return { kind: "new", variant: "workspace", path: remainingTokens.join(" ").trim(), name, backend };
+  return {
+    kind: "new",
+    variant: "workspace",
+    path: extracted.remainingTokens.join(" ").trim(),
+    name: extracted.name,
+    backend: extracted.backend,
+    ...newCommandMeta,
+  };
 }
 
 function normalizeBackend(raw: string | undefined): AcpBackend | undefined {
@@ -192,11 +244,13 @@ function normalizeBackend(raw: string | undefined): AcpBackend | undefined {
 function extractNewFlags(tokens: string[]): {
   name: string | undefined;
   backend: AcpBackend | undefined;
+  invalidBackend: string | undefined;
   remainingTokens: string[];
 } {
   const remaining: string[] = [];
   let name: string | undefined;
   let backend: AcpBackend | undefined;
+  let invalidBackend: string | undefined;
   let i = 0;
   while (i < tokens.length) {
     const tok = tokens[i];
@@ -209,20 +263,29 @@ function extractNewFlags(tokens: string[]): {
       name = eq >= 0 ? tok.slice(eq + 1) : "";
       i += 1;
     } else if ((tokLc === "--backend" || tokLc === "-b") && i + 1 < tokens.length) {
-      backend = normalizeBackend(tokens[i + 1]);
-      if (!backend) remaining.push(tok, tokens[i + 1]);
+      const next = tokens[i + 1];
+      const normalized = normalizeBackend(next);
+      if (normalized) {
+        backend = normalized;
+      } else {
+        invalidBackend ??= next;
+      }
       i += 2;
     } else if (tokLc.startsWith("--backend=") || tokLc.startsWith("-b=")) {
       const value = tokLc.startsWith("-b=") ? tok.slice(3) : tok.slice("--backend=".length);
-      backend = normalizeBackend(value);
-      if (!backend) remaining.push(tok);
+      const normalized = normalizeBackend(value);
+      if (normalized) {
+        backend = normalized;
+      } else {
+        invalidBackend ??= value;
+      }
       i += 1;
     } else {
       remaining.push(tok);
       i += 1;
     }
   }
-  return { name, backend, remainingTokens: remaining };
+  return { name, backend, invalidBackend, remainingTokens: remaining };
 }
 
 function parseMaintenanceCommand(

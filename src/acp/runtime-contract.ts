@@ -4,7 +4,6 @@ import type { FeishuBridgeClient } from "./feishu-bridge-client.js";
 export type AcpBackend =
   | "cursor-official"
   | "cursor-legacy"
-  | "cursor-tmux"
   | "claude"
   | "codex";
 
@@ -86,10 +85,6 @@ export interface AcpRuntimeResolver {
 
 export function isCursorLegacyBackend(backend: AcpBackend): boolean {
   return backend === "cursor-legacy";
-}
-
-export function isTmuxBackend(backend: AcpBackend): boolean {
-  return backend === "cursor-tmux";
 }
 
 export function isOfficialCursorBackend(backend: AcpBackend): boolean {

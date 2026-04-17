@@ -71,10 +71,8 @@ interface StoreFileV3 {
 const BACKEND_ALIASES: Record<string, AcpBackend> = {
   official: "cursor-official",
   legacy: "cursor-legacy",
-  tmux: "cursor-tmux",
   "cursor-official": "cursor-official",
   "cursor-legacy": "cursor-legacy",
-  "cursor-tmux": "cursor-tmux",
   claude: "claude",
   codex: "codex",
 };
@@ -84,7 +82,11 @@ function normalizeBackend(
   defaultBackend: AcpBackend,
 ): AcpBackend {
   if (!backend) return defaultBackend;
-  return BACKEND_ALIASES[backend] ?? defaultBackend;
+  const normalized = backend.trim().toLowerCase();
+  if (normalized === "tmux" || normalized === "cursor-tmux") {
+    return defaultBackend;
+  }
+  return BACKEND_ALIASES[normalized] ?? defaultBackend;
 }
 
 function normalizeRecovery(

@@ -69,6 +69,18 @@ test("parseNewConversationCommand 支持 /new -b 简写与 backend 别名", () =
   });
 });
 
+test("parseNewConversationCommand 会把已移除的 tmux backend 标记为非法用法", () => {
+  assert.deepEqual(parseNewConversationCommand("/new 1 -b tmux"), {
+    kind: "new",
+    variant: "preset",
+    index: 1,
+    backend: undefined,
+    name: undefined,
+    invalidUsage: true,
+    invalidBackend: "tmux",
+  });
+});
+
 test("parseNewConversationCommand 支持维护命令与 --force", () => {
   assert.deepEqual(parseNewConversationCommand("/restart"), {
     kind: "restart",

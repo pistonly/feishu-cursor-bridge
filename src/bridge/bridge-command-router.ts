@@ -441,6 +441,18 @@ async function handleNewCommand(
   msg: FeishuMessage,
   command: Extract<ReturnType<typeof parseNewConversationCommand>, { kind: "new" }>,
 ): Promise<void> {
+  if (command.invalidUsage) {
+    await ctx.feishuBot.sendText(
+      msg.chatId,
+      command.invalidBackend
+        ? `❌ 不支持的 backend：\`${command.invalidBackend}\`。可用值：\`cursor-official\` / \`cursor-legacy\` / \`claude\` / \`codex\`（简写：\`official\` / \`legacy\` / \`cc\` / \`cx\`）。`
+        : "❌ `/new` 参数不正确。请先发送 `/commands` 或 `/help` 查看用法。",
+      msg.messageId,
+      ctx.threadReplyOpts(msg),
+    );
+    return;
+  }
+
   if (command.variant === "list") {
     const presets = ctx.presetsStore.getPresets();
     const interactiveCard = buildWorkspaceWithBackendSelectCardMarkdown({
