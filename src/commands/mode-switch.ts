@@ -1,3 +1,6 @@
+import {
+  formatCurrentModeLine,
+} from "../acp/session-display-format.js";
 import type { AcpSessionModeState } from "../acp/runtime-contract.js";
 import { formatJsonRpcLikeError } from "../utils/format-json-rpc-error.js";
 
@@ -8,19 +11,6 @@ function formatModeLine(
   const title =
     mode.name && mode.name !== mode.modeId ? `${mode.name} -> ${exact}` : exact;
   return mode.description ? `• ${title} — ${mode.description}` : `• ${title}`;
-}
-
-function formatCurrentMode(
-  modeState: AcpSessionModeState,
-): string | undefined {
-  if (!modeState.currentModeId) return undefined;
-  const current = modeState.availableModes.find(
-    (mode) => mode.modeId === modeState.currentModeId,
-  );
-  if (current?.name && current.name !== current.modeId) {
-    return `当前模式：${current.name}（精确值：\`${current.modeId}\`）`;
-  }
-  return `当前模式：\`${modeState.currentModeId}\``;
 }
 
 function formatAvailableModes(modeState: AcpSessionModeState): string {
@@ -62,7 +52,7 @@ export function formatModeUsage(
     return body.join("\n");
   }
   body.push("", formatAvailableModes(modeState));
-  const current = formatCurrentMode(modeState);
+  const current = formatCurrentModeLine(modeState);
   if (current) {
     body.push(current);
   }
@@ -78,7 +68,7 @@ export function formatModeSwitchFailure(
     return body.join("");
   }
   body.push(`\n\n${formatAvailableModes(modeState)}`);
-  const current = formatCurrentMode(modeState);
+  const current = formatCurrentModeLine(modeState);
   if (current) {
     body.push(`\n${current}`);
   }

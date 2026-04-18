@@ -1,3 +1,4 @@
+import { formatPercent } from "./session-display-format.js";
 import type {
   SessionNotification,
   SessionUpdate,
@@ -185,7 +186,7 @@ export function mapSessionUpdateToBridgeEvents(
         type: "usage_update",
         sessionId,
         summary: usage
-          ? `用量统计已更新（${usage.percent.toFixed(1).replace(/\.0$/, "")}%）`
+          ? `用量统计已更新（${formatPercent(usage.percent)}）`
           : "用量统计已更新",
         ...(usage ? { usage } : {}),
       });

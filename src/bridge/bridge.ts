@@ -13,6 +13,10 @@ import type {
   AcpSessionUsageState,
   BridgeAcpRuntime,
 } from "../acp/runtime-contract.js";
+import {
+  formatSessionModelLabel,
+  formatSessionUsage as formatDisplaySessionUsage,
+} from "../acp/session-display-format.js";
 import { FeishuBot, type FeishuMessage } from "../feishu/bot.js";
 import { SessionManager } from "../session/manager.js";
 import { SessionStore } from "../session/store.js";
@@ -78,32 +82,16 @@ function formatDurationMs(ms: number): string {
   return `${Math.round(ms / 60_000)} 分钟`;
 }
 
-export function formatNumber(value: number): string {
-  return new Intl.NumberFormat("en-US").format(value);
-}
-
-export function formatPercent(value: number): string {
-  return `${value.toFixed(1).replace(/\.0$/, "")}%`;
-}
-
-export function formatSessionUsage(
+function formatSessionUsage(
   usage: AcpSessionUsageState | undefined,
 ): string | undefined {
-  if (!usage) return undefined;
-  return `${formatPercent(usage.percent)} (${formatNumber(usage.usedTokens)} / ${formatNumber(usage.maxTokens)})`;
+  return formatDisplaySessionUsage(usage);
 }
 
 function formatSessionModel(
   modelState: AcpSessionModelState | undefined,
 ): string | undefined {
-  if (!modelState?.currentModelId) return undefined;
-  const current = modelState.availableModels.find(
-    (model) => model.modelId === modelState.currentModelId,
-  );
-  if (current?.name && current.name !== current.modelId) {
-    return current.name;
-  }
-  return `\`${modelState.currentModelId}\``;
+  return formatSessionModelLabel(modelState);
 }
 
 function appendWithLimit(buffer: string, chunk: string, limit: number): string {

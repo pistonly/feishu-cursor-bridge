@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import type { Config } from "./config/index.js";
-import { Bridge, formatNumber, formatPercent, formatSessionUsage } from "./bridge/bridge.js";
+import { Bridge } from "./bridge/bridge.js";
 import { preprocessBridgeMessage } from "./bridge/bridge-message-preprocess.js";
 import { resolvePromptContentFromResource } from "./bridge/bridge-resource-prompt.js";
 import {
@@ -87,24 +87,6 @@ function createMessage(content: string, overrides: Partial<FeishuMessage> = {}):
     ...overrides,
   } as unknown as FeishuMessage;
 }
-
-test("formatPercent 与 formatNumber 按 status 展示需要格式化数值", () => {
-  assert.equal(formatPercent(1.119263157894737), "1.1%");
-  assert.equal(formatPercent(25), "25%");
-  assert.equal(formatNumber(10633), "10,633");
-});
-
-test("formatSessionUsage 返回 context 百分比与 token 占用", () => {
-  assert.equal(
-    formatSessionUsage({
-      usedTokens: 10633,
-      maxTokens: 950000,
-      percent: 1.119263157894737,
-    }),
-    "1.1% (10,633 / 950,000)",
-  );
-  assert.equal(formatSessionUsage(undefined), undefined);
-});
 
 test("/status 会显示当前模型与 context 用量", async () => {
   const bridge = new Bridge(createTestConfig());
