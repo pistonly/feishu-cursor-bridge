@@ -1,3 +1,8 @@
+import {
+  formatCompatibleBackendAliases,
+  formatPreferredBackendShortcuts,
+  formatSupportedBackendValues,
+} from "../acp/backend-metadata.js";
 import { captureAcpReplayDuring } from "../acp/replay-capture.js";
 import type { AcpBackend } from "../acp/runtime-contract.js";
 import {
@@ -469,10 +474,13 @@ async function handleNewCommand(
   command: Extract<ReturnType<typeof parseNewConversationCommand>, { kind: "new" }>,
 ): Promise<void> {
   if (command.invalidUsage) {
+    const backendValues = formatSupportedBackendValues();
+    const shortcuts = formatPreferredBackendShortcuts();
+    const compatibleAliases = formatCompatibleBackendAliases();
     await ctx.feishuBot.sendText(
       msg.chatId,
       command.invalidBackend
-        ? `❌ 不支持的 backend：\`${command.invalidBackend}\`。可用值：\`cursor-official\` / \`cursor-legacy\` / \`claude\` / \`codex\`（常用简写：\`cur\` / \`legacy\` / \`cc\` / \`cx\`；也兼容 \`official\`）。`
+        ? `❌ 不支持的 backend：\`${command.invalidBackend}\`。可用值：${backendValues}（常用简写：${shortcuts}${compatibleAliases ? `；也兼容 ${compatibleAliases}` : ""}）。`
         : "❌ `/new` 参数不正确。请先发送 `/commands` 或 `/help` 查看用法。",
       msg.messageId,
       ctx.threadReplyOpts(msg),

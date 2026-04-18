@@ -2,6 +2,11 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+  ACP_BACKENDS,
+  CONFIG_BACKEND_ALIAS_MAP,
+  parseBackendAlias,
+} from "../acp/backend-metadata.js";
+import {
   resolveClaudeAgentAcpDistEntry,
   resolveClaudeAgentAcpSourceEntry,
   resolveLegacyAdapterDistEntry,
@@ -122,19 +127,6 @@ export interface Config {
 }
 
 const LOG_LEVELS = new Set(["debug", "info", "warn", "error"]);
-const ACP_BACKENDS = new Set<AcpBackend>([
-  "cursor-official",
-  "cursor-legacy",
-  "claude",
-  "codex",
-]);
-
-const LEGACY_BACKEND_ALIASES: Record<string, AcpBackend> = {
-  official: "cursor-official",
-  legacy: "cursor-legacy",
-  claude: "claude",
-  codex: "codex",
-};
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -240,10 +232,7 @@ function hasCodexConfigOverride(args: string[], key: string): boolean {
 
 function parseAcpBackend(raw: string | undefined): AcpBackend {
   const normalized = raw?.trim().toLowerCase() || "cursor-official";
-  const mapped = LEGACY_BACKEND_ALIASES[normalized] ?? normalized;
-  return ACP_BACKENDS.has(mapped as AcpBackend)
-    ? (mapped as AcpBackend)
-    : "cursor-official";
+  return parseBackendAlias(normalized, CONFIG_BACKEND_ALIAS_MAP) ?? "cursor-official";
 }
 
 function parseEnabledAcpBackends(

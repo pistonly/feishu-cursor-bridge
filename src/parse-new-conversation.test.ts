@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  BACKEND_METADATA,
+  COMMAND_BACKEND_ALIAS_MAP,
+} from "./acp/backend-metadata.js";
+import {
   matchesBridgeHelpCommand,
   matchesBridgeStartCommand,
   matchesInterruptUserCommand,
@@ -53,20 +57,20 @@ test("parseNewConversationCommand 支持 /new --backend codex", () => {
 });
 
 test("parseNewConversationCommand 支持 /new -b 简写与 backend 别名", () => {
-  assert.deepEqual(parseNewConversationCommand("/new 1 -b cur"), {
-    kind: "new",
-    variant: "preset",
-    index: 1,
-    backend: "cursor-official",
-    name: undefined,
-  });
-  assert.deepEqual(parseNewConversationCommand("/new 1 -b cc"), {
-    kind: "new",
-    variant: "preset",
-    index: 1,
-    backend: "claude",
-    name: undefined,
-  });
+  for (const [alias, backend] of Object.entries(COMMAND_BACKEND_ALIAS_MAP)) {
+    assert.deepEqual(parseNewConversationCommand(`/new 1 -b ${alias}`), {
+      kind: "new",
+      variant: "preset",
+      index: 1,
+      backend,
+      name: undefined,
+    });
+  }
+
+  for (const metadata of BACKEND_METADATA) {
+    assert.equal(Array.from(metadata.commandAliases).includes(metadata.id), true);
+  }
+
   assert.deepEqual(parseNewConversationCommand("/new /tmp/demo -b=cx"), {
     kind: "new",
     variant: "workspace",

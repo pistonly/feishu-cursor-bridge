@@ -1,8 +1,15 @@
+import {
+  formatSupportedBackendValuePattern,
+  getBackendShortcut,
+} from "../acp/backend-metadata.js";
 import type { AcpBackend } from "../acp/runtime-contract.js";
 
 export function formatBridgeCommandsHelp(_backend: AcpBackend): string {
   const acpNote =
     "在当前 session 的 backend 下，`/model` 与 `/mode` 由桥接调用 ACP；不带参数时列出当前活跃 session 的可用模型 / 模式。";
+  const backendPattern = formatSupportedBackendValuePattern();
+  const officialShortcut = getBackendShortcut("cursor-official");
+  const claudeShortcut = getBackendShortcut("claude");
 
   return [
     "📖 **本桥接识别的命令一览**",
@@ -13,8 +20,8 @@ export function formatBridgeCommandsHelp(_backend: AcpBackend): string {
     "",
     "**Session 与工作区**",
     "• `/new` — 同 `/new list`（工作区快捷列表）",
-    "• `/new <序号> --backend <cursor-official|cursor-legacy|claude|codex>` — 用列表第 N 项创建并切换到新 session；也支持 `-b <backend>`，如 `-b cur` / `-b cc`",
-    "• `/new <目录绝对路径> --backend <cursor-official|cursor-legacy|claude|codex>` — 指定工作区；可附 `--name <名称>`，`-b cur` 等同 `--backend cursor-official`",
+    `• \`/new <序号> --backend <${backendPattern}>\` — 用列表第 N 项创建并切换到新 session；也支持 \`-b <backend>\`，如 \`-b ${officialShortcut}\` / \`-b ${claudeShortcut}\``,
+    `• \`/new <目录绝对路径> --backend <${backendPattern}>\` — 指定工作区；可附 \`--name <名称>\`，\`-b ${officialShortcut}\` 等同 \`--backend cursor-official\``,
     "• `/new add-list <路径>` / `/new remove-list <序号>` — 维护快捷列表",
     "• `/sessions` — 列出当前聊天/话题下所有 session（含 backend）",
     "• `/switch` — 切到上一槽位；`/switch <编号或名称>` — 指定槽位",

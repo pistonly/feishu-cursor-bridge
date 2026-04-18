@@ -112,17 +112,21 @@
 
 指定 backend 的格式：
 
+<!-- backend-command-syntax:start -->
 ```text
 /new <路径> --backend <cursor-official|cursor-legacy|claude|codex>
 /new <序号> --backend <cursor-official|cursor-legacy|claude|codex>
 /new <路径> -b <official|cur|legacy|claude|codex|cc|cx>
 /new <序号> -b <official|cur|legacy|claude|codex|cc|cx>
 ```
+<!-- backend-command-syntax:end -->
 
 说明：
 
 - `-b` 是 `--backend` 的简写。
+<!-- backend-alias-guide:start -->
 - backend 值支持完整名称，也支持常用简写：`cur` = `cursor-official`、`cc` = `claude`、`cx` = `codex`；`legacy` 继续使用全写，`official` 仍兼容。
+<!-- backend-alias-guide:end -->
 - `--backend` 仅对**真正创建 session** 的 `/new <路径>`、`/new <序号>` 生效。
 - `/new`、`/new list`、`/new add-list`、`/new remove-list` 不创建 session，因此不使用 `--backend`。
 - 当前服务只允许选择启动时启用的 backend；若某 backend 未启用，机器人会直接报错。

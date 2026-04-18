@@ -1,17 +1,7 @@
+import { COMMAND_BACKEND_ALIAS_MAP, parseBackendAlias } from "../acp/backend-metadata.js";
 import { parseShellLikeArgs } from "../config/index.js";
 import type { AcpBackend } from "../acp/runtime-contract.js";
 
-const NEW_COMMAND_BACKEND_ALIASES: Record<string, AcpBackend> = {
-  official: "cursor-official",
-  cur: "cursor-official",
-  "cursor-official": "cursor-official",
-  legacy: "cursor-legacy",
-  "cursor-legacy": "cursor-legacy",
-  claude: "claude",
-  cc: "claude",
-  codex: "codex",
-  cx: "codex",
-};
 
 type NewCommandCommon = {
   backend?: AcpBackend;
@@ -237,9 +227,7 @@ export function parseNewConversationCommand(
 }
 
 function normalizeBackend(raw: string | undefined): AcpBackend | undefined {
-  const normalized = raw?.trim().toLowerCase();
-  if (!normalized) return undefined;
-  return NEW_COMMAND_BACKEND_ALIASES[normalized];
+  return parseBackendAlias(raw, COMMAND_BACKEND_ALIAS_MAP);
 }
 
 function extractNewFlags(tokens: string[]): {

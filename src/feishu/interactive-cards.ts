@@ -1,10 +1,8 @@
+import {
+  buildBackendDescriptionLines,
+  getBackendShortcut,
+} from "../acp/backend-metadata.js";
 import type { AcpBackend } from "../acp/runtime-contract.js";
-
-const BACKEND_SHORTCUTS: Partial<Record<AcpBackend, string>> = {
-  "cursor-official": "cur",
-  claude: "cc",
-  codex: "cx",
-};
 
 /**
  * 交互式卡片数据结构
@@ -76,7 +74,7 @@ export function buildWorkspaceWithBackendSelectCardMarkdown(
     for (const backend of opts.enabledBackends) {
       const isDefault = backend === opts.defaultBackend;
       const defaultMarker = isDefault ? " (默认)" : "";
-      const shortcut = BACKEND_SHORTCUTS[backend];
+      const shortcut = getBackendShortcut(backend);
       const shortcutNote = shortcut ? ` / \`-b ${shortcut}\`` : "";
       lines.push(`• \`--backend ${backend}\`${shortcutNote}${defaultMarker}`);
     }
@@ -110,10 +108,7 @@ export function buildWelcomeCardMarkdown(): string {
     "   • 发送 `/new <路径>` 使用自定义路径",
     "",
     "**2. 支持的后端:**",
-    "   • `cursor-official` - Cursor 官方 ACP 后端",
-    "   • `cursor-legacy` - 内嵌适配器后端",
-    "   • `claude` - Claude AI 后端",
-    "   • `codex` - Codex ACP 后端",
+    ...buildBackendDescriptionLines("   • "),
     "",
     "**3. 命令示例:**",
     "   • `/new 1 -b cur` - 使用第 1 个工作区和 Cursor 官方后端",

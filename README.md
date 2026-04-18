@@ -217,6 +217,9 @@ Proxy precedence: `wss_proxy` / `ws_proxy` > `https_proxy` / `http_proxy` / `all
 
 - **DM / group**: after you **create a session** with `/new list` then `/new <index or path>` (paths must fall under `BRIDGE_WORK_ALLOWLIST`), normal messages go to Cursor; without a session the bot asks you to `/new` first
 - **Incoming attachments**: when a session is active, files/images/audio/video sent from Feishu are downloaded into `.feishu-incoming/` under the current workspace and then described to the Agent as local paths; `/fileback` is the opposite direction, for asking the Agent to send workspace files back to Feishu
+<!-- backend-readme-switch-en:start -->
+- **Switch backend**: use `/new <index or path> --backend <cursor-official|cursor-legacy|claude|codex>` to select the backend for a new session; `-b <official|cur|legacy|claude|codex|cc|cx>` is also supported. The backend must be included in `ACP_ENABLED_BACKENDS`, or it will not be available.
+<!-- backend-readme-switch-en:end -->
 - **Group**: @ the bot + content ( **`im:message.group_msg`** must be enabled or group events won’t arrive); in **topic** groups, each `thread_id` maps to its own ACP session (not shared with the main group chat)
 - **Multi-session**: `/new <index or path>` creates and switches (old session stays connected); bare `/new` lists presets; `/sessions` lists; `/switch <index or name>` switches active (no arg → last used); `/close` closes one; `/rename` helps name-based switching. Full syntax: `docs/feishu-commands.md`
 - `/status` or `/状态`: session stats, always shows ACP backend; `cursor-official` / `cursor-legacy` / `claude` / `codex` show known mode for the active session; recovery metadata is shown when available; `cursor-official` now shows the active ACP `sessionId`, `claude` stably shows the current Claude resume session id, and `codex` shows the active ACP `sessionId` by default; with `BRIDGE_DEBUG=true`, adds more paths, modes, and session details. For the `claude` backend, the Feishu context usage shown here is a fast approximate value from ACP `usage_update`; if you need a closer current-context snapshot, run `/context` in the Claude session. See [docs/claude-context-calibration-notes.md](docs/claude-context-calibration-notes.md).
@@ -464,7 +467,9 @@ docker-compose -f docker/compose.yaml run --rm claude-acp-smoke
 ## 使用方式
 
 - **私聊 / 群聊**：须先用 **`/new list`** 再 **`/new <序号或路径>`** 创建 session（路径须在 `BRIDGE_WORK_ALLOWLIST` 下），之后普通消息才会进 Agent；无 session 时机器人会提示先 `/new`
-- **切换 backend**：可用 `/new <序号或路径> --backend <cursor-official|cursor-legacy|claude|codex>` 为新 session 指定 backend；但该 backend 必须已包含在 `ACP_ENABLED_BACKENDS` 中，否则不会被启动
+<!-- backend-readme-switch-zh:start -->
+- **切换 backend**：可用 `/new <序号或路径> --backend <cursor-official|cursor-legacy|claude|codex>` 为新 session 指定 backend；也支持 `-b <official|cur|legacy|claude|codex|cc|cx>`；但该 backend 必须已包含在 `ACP_ENABLED_BACKENDS` 中，否则不会被启动
+<!-- backend-readme-switch-zh:end -->
 - **飞书附件入站**：有活跃 session 时，用户直接发送的文件 / 图片 / 音频 / 视频会先下载到当前工作区的 `.feishu-incoming/`，再把相对路径说明交给 Agent；`/fileback` 则是反方向，用于让 Agent 把工作区文件回传到飞书
 - **群聊**：@机器人 + 内容（开发平台须为应用开通 **`im:message.group_msg`**，否则群消息事件不会投递到机器人）；**话题群**内不同话题（`thread_id`）会**分别**映射 ACP 会话，与群主页会话互不共享
 - **多 session 切换**：`/new <序号或路径>` 新建并切到该 session（裸 `/new` 等同列表）；`/sessions` 列表；`/switch <编号或名称>` 切换活跃 session（无参数时切到上一次用过的）；`/close` 关闭指定；`/rename` 便于用名称切换。完整语法与快捷列表见 `docs/feishu-commands.md`
