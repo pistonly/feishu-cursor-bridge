@@ -898,6 +898,166 @@ test("appendSlotPromptLog 会把上下文透传给 store", async () => {
   });
 });
 
+
+
+test("忙时新消息会进入排队并提示可撤销", async () => {
+  const bridge = new Bridge(createTestConfig());
+  const sentTexts: string[] = [];
+  let releaseFirstPrompt: (() => void) | undefined;
+  const handledPrompts: string[] = [];
+
+  const slot = {
+    slotIndex: 1,
+    session: {
+      backend: "cursor-official" as const,
+      sessionId: "session-1",
+      workspaceRoot: "/tmp/project",
+      chatId: "chat-1",
+      userId: "user-1",
+      chatType: "p2p" as const,
+      createdAt: 0,
+      lastActiveAt: 0,
+    },
+  };
+
+  (bridge as any).ensureMaintenanceStateLoaded = async () => {};
+  (bridge as any).flushPendingSessionNotices = async () => {};
+  (bridge as any).sessionManager = {
+    getSessionSnapshot() {
+      return {
+        sessionKey: "dm:user-1",
+        group: { slots: [slot], activeSlotIndex: 1, nextSlotIndex: 2 },
+        activeSlot: slot,
+        idleExpiresInMs: 60_000,
+      };
+    },
+    async getSlot(_chatId: string, _userId: string, _chatType: string, target: number | null) {
+      assert.equal(target, 1);
+      return slot;
+    },
+    setSlotLastTurn() {},
+  };
+  (bridge as any).conversations = new Map([
+    [
+      "cursor-official",
+      {
+        async handleUserPrompt(msg: FeishuMessage) {
+          handledPrompts.push(msg.content);
+          if (handledPrompts.length === 1) {
+            await new Promise<void>((resolve) => {
+              releaseFirstPrompt = resolve;
+            });
+          }
+          return `reply:${msg.content}`;
+        },
+      },
+    ],
+  ]);
+  (bridge as any).feishuBot = {
+    stripBotMentionKeepLines(content: string) {
+      return content;
+    },
+    async sendText(_chatId: string, body: string): Promise<void> {
+      sentTexts.push(body);
+    },
+    async sendCard(): Promise<string> {
+      return "card-1";
+    },
+    async updateCard(): Promise<void> {},
+  };
+
+  const first = (bridge as any).handleFeishuMessage(createMessage("first"));
+  await Promise.resolve();
+  await (bridge as any).handleFeishuMessage(createMessage("second", { messageId: "msg-2" }));
+
+  assert.match(sentTexts[sentTexts.length - 1] ?? "", /已加入排队/);
+  assert.match(sentTexts[sentTexts.length - 1] ?? "", /\/cancel/);
+
+  releaseFirstPrompt?.();
+  await first;
+
+  assert.deepEqual(handledPrompts, ["first", "second"]);
+  assert.ok(sentTexts.some((text) => /已开始处理刚才排队的消息/.test(text)));
+});
+
+test("忙时后来的排队消息会覆盖之前的排队消息", async () => {
+  const bridge = new Bridge(createTestConfig());
+  const sentTexts: string[] = [];
+  let releaseFirstPrompt: (() => void) | undefined;
+  const handledPrompts: string[] = [];
+
+  const slot = {
+    slotIndex: 1,
+    session: {
+      backend: "cursor-official" as const,
+      sessionId: "session-1",
+      workspaceRoot: "/tmp/project",
+      chatId: "chat-1",
+      userId: "user-1",
+      chatType: "p2p" as const,
+      createdAt: 0,
+      lastActiveAt: 0,
+    },
+  };
+
+  (bridge as any).ensureMaintenanceStateLoaded = async () => {};
+  (bridge as any).flushPendingSessionNotices = async () => {};
+  (bridge as any).sessionManager = {
+    getSessionSnapshot() {
+      return {
+        sessionKey: "dm:user-1",
+        group: { slots: [slot], activeSlotIndex: 1, nextSlotIndex: 2 },
+        activeSlot: slot,
+        idleExpiresInMs: 60_000,
+      };
+    },
+    async getSlot() {
+      return slot;
+    },
+    setSlotLastTurn() {},
+  };
+  (bridge as any).conversations = new Map([
+    [
+      "cursor-official",
+      {
+        async handleUserPrompt(msg: FeishuMessage) {
+          handledPrompts.push(msg.content);
+          if (handledPrompts.length === 1) {
+            await new Promise<void>((resolve) => {
+              releaseFirstPrompt = resolve;
+            });
+          }
+          return `reply:${msg.content}`;
+        },
+      },
+    ],
+  ]);
+  (bridge as any).feishuBot = {
+    stripBotMentionKeepLines(content: string) {
+      return content;
+    },
+    async sendText(_chatId: string, body: string): Promise<void> {
+      sentTexts.push(body);
+    },
+    async sendCard(): Promise<string> {
+      return "card-1";
+    },
+    async updateCard(): Promise<void> {},
+  };
+
+  const first = (bridge as any).handleFeishuMessage(createMessage("first"));
+  await Promise.resolve();
+  await (bridge as any).handleFeishuMessage(createMessage("second", { messageId: "msg-2" }));
+  await (bridge as any).handleFeishuMessage(createMessage("third", { messageId: "msg-3" }));
+
+  assert.ok(sentTexts.some((text) => /替换之前的排队消息/.test(text)));
+
+  releaseFirstPrompt?.();
+  await first;
+
+  assert.deepEqual(handledPrompts, ["first", "third"]);
+});
+
 test("appendSlotErrorLog 会吞掉 store 写入失败并告警", async () => {
   const warnings: unknown[][] = [];
   const originalWarn = console.warn;
@@ -948,4 +1108,60 @@ test("appendSlotErrorLog 会吞掉 store 写入失败并告警", async () => {
   assert.equal(warnings.length, 1);
   assert.match(String(warnings[0]?.[0]), /failed to append slot error log/);
   assert.equal(warnings[0]?.[1], "write failed");
+});
+
+test("/cancel 在仅有排队消息时会撤销排队", async () => {
+  const bridge = new Bridge(createTestConfig());
+  const sentTexts: string[] = [];
+
+  const slot = {
+    slotIndex: 1,
+    name: "main",
+    session: {
+      backend: "cursor-official" as const,
+      sessionId: "session-1",
+      workspaceRoot: "/tmp/project",
+      chatId: "chat-1",
+      userId: "user-1",
+      chatType: "p2p" as const,
+      createdAt: 0,
+      lastActiveAt: 0,
+    },
+  };
+
+  (bridge as any).ensureMaintenanceStateLoaded = async () => {};
+  (bridge as any).sessionManager = {
+    getSessionSnapshot() {
+      return {
+        sessionKey: "dm:user-1",
+        group: { slots: [slot], activeSlotIndex: 1, nextSlotIndex: 2 },
+        activeSlot: slot,
+        idleExpiresInMs: 60_000,
+      };
+    },
+  };
+  (bridge as any).queuedPrompts = new Map([
+    [
+      "dm:user-1:1",
+      {
+        msg: createMessage("queued", { messageId: "msg-q" }),
+        content: "queued",
+        hasPostEmbeddedImages: false,
+        slotIndex: 1,
+      },
+    ],
+  ]);
+  (bridge as any).feishuBot = {
+    stripBotMentionKeepLines(content: string) {
+      return content;
+    },
+    async sendText(_chatId: string, body: string): Promise<void> {
+      sentTexts.push(body);
+    },
+  };
+
+  await (bridge as any).handleFeishuMessage(createMessage("/cancel"));
+
+  assert.equal((bridge as any).queuedPrompts.size, 0);
+  assert.match(sentTexts[0] ?? "", /已撤销当前槽位中的排队消息/);
 });

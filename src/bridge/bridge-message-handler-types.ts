@@ -27,6 +27,13 @@ export type ActiveMaintenanceInfo = {
   requestedAt: number;
 } | null;
 
+export type QueuedPrompt = {
+  msg: FeishuMessage;
+  content: string;
+  hasPostEmbeddedImages: boolean;
+  slotIndex: number;
+};
+
 export interface BridgeMessageHandlerDeps {
   config: Config;
   feishuBot: FeishuBot;
@@ -36,6 +43,7 @@ export interface BridgeMessageHandlerDeps {
   maintenanceStateStore: BridgeMaintenanceStateStore;
   upgradeResultStore: UpgradeResultStore;
   activePrompts: Set<string>;
+  queuedPrompts: Map<string, QueuedPrompt>;
   ensureMaintenanceStateLoaded(): Promise<void>;
   handleUpgradeCommand(
     msg: FeishuMessage,

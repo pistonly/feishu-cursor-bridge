@@ -48,6 +48,18 @@ function buildSlotLastTurnCardContent(slot: SessionSlot): string | null {
   return body + (truncated ? "\n\n_（内容过长，已截断）_" : "");
 }
 
+function formatSessionLabel(slot: SessionSlot): string {
+  return `#${slot.slotIndex}${slot.name ? ` (${slot.name})` : ""}`;
+}
+
+function clearQueuedPromptForSlot(
+  ctx: BridgeMessageHandlerDeps,
+  sessionKey: string,
+  slotIndex: number,
+): boolean {
+  return ctx.queuedPrompts.delete(`${sessionKey}:${slotIndex}`);
+}
+
 async function sendWelcomeCard(
   ctx: BridgeMessageHandlerDeps,
   msg: FeishuMessage,
@@ -107,7 +119,7 @@ ${lines.join("\n\n")}
 • \`/switch <编号或名称>\` — 切换
 • \`/reply [编号或名称]\` — 重发上一轮缓存回复
 • \`/fileback <说明>\` — 向 Agent 附带「用 FEISHU_SEND_FILE 发文件」说明后再发你的任务
-• \`/stop\` / \`/cancel\` — 中断**当前活跃**槽位正在生成的回复（不关 session）
+• \`/stop\` / \`/cancel\` — 中断**当前活跃**槽位正在生成的回复，并撤销该槽位排队消息（不关 session）
 • \`/resume\` — 对当前 session 执行 ACP \`session/load\`（测试/恢复）
 • \`/mode <模式ID>\` — 切换当前 session 模式
 • \`/rename <新名字>\` — 重命名当前 session
@@ -394,6 +406,13 @@ async function handleCloseCommand(
     );
     return;
   }
+  const snapshot = ctx.sessionManager.getSessionSnapshot(
+    msg.chatId,
+    msg.senderId,
+    msg.chatType,
+    ctx.threadScope(msg),
+  );
+  const sessionKey = snapshot?.sessionKey;
   if (target === "all") {
     const { closed } = await ctx.sessionManager.closeAllSlots(
       msg.chatId,
@@ -401,6 +420,11 @@ async function handleCloseCommand(
       msg.chatType,
       ctx.threadScope(msg),
     );
+    if (sessionKey) {
+      for (const slot of closed) {
+        clearQueuedPromptForSlot(ctx, sessionKey, slot.slotIndex);
+      }
+    }
     await ctx.flushPendingSessionNotices(msg);
     const summary = closed
       .map((slot) => {
@@ -423,6 +447,9 @@ async function handleCloseCommand(
     target,
     ctx.threadScope(msg),
   );
+  if (sessionKey) {
+    clearQueuedPromptForSlot(ctx, sessionKey, closed.slotIndex);
+  }
   await ctx.flushPendingSessionNotices(msg);
   const label = closed.name ? ` (${closed.name})` : "";
   const tail = removedEntireGroup
@@ -786,10 +813,21 @@ async function handleInterruptCommand(
   const sessionKey = snap.sessionKey;
   const active = snap.activeSlot;
   const promptKey = `${sessionKey}:${active.slotIndex}`;
-  if (!ctx.activePrompts.has(promptKey)) {
+  const hasActivePrompt = ctx.activePrompts.has(promptKey);
+  const hadQueuedPrompt = clearQueuedPromptForSlot(ctx, sessionKey, active.slotIndex);
+  if (!hasActivePrompt && !hadQueuedPrompt) {
     await ctx.feishuBot.sendText(
       msg.chatId,
-      "ℹ️ 当前活跃 session 没有正在生成的回复。其它槽位若在生成，请先 `/switch` 到该槽位再发 `/stop`。",
+      "ℹ️ 当前活跃 session 既没有正在生成的回复，也没有排队中的消息。其它槽位若在生成，请先 `/switch` 到该槽位再发 `/stop`。",
+      msg.messageId,
+      ctx.threadReplyOpts(msg),
+    );
+    return true;
+  }
+  if (!hasActivePrompt && hadQueuedPrompt) {
+    await ctx.feishuBot.sendText(
+      msg.chatId,
+      `✅ 已撤销当前槽位中的排队消息（${formatSessionLabel(active)}）。`,
       msg.messageId,
       ctx.threadReplyOpts(msg),
     );
@@ -804,8 +842,10 @@ async function handleInterruptCommand(
       `#${active.slotIndex}: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
-  const label = `#${active.slotIndex}${active.name ? ` (${active.name})` : ""}`;
-  let body = `✅ 已向进行中的任务发送中断请求（${label}），效果与在 Cursor / Cursor Agent 侧中断本轮生成类似；session 仍保留，可继续对话。`;
+  const label = formatSessionLabel(active);
+  let body = hadQueuedPrompt
+    ? `✅ 已向进行中的任务发送中断请求（${label}），并撤销该槽位中的排队消息；session 仍保留，可继续对话。`
+    : `✅ 已向进行中的任务发送中断请求（${label}），效果与在 Cursor / Cursor Agent 侧中断本轮生成类似；session 仍保留，可继续对话。`;
   if (errors.length > 0) {
     body += `\n\n⚠️ 中断失败：\n${errors.join("\n")}`;
   }

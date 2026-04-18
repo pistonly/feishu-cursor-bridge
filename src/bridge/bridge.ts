@@ -164,6 +164,8 @@ export class Bridge {
   private slotMessageLog: SlotMessageLogStore | null;
   /** key: `<sessionKey>:<slotIndex>` — 同一 slot 同一时刻只能有一个 prompt 在跑 */
   private activePrompts = new Set<string>();
+  /** key: `<sessionKey>:<slotIndex>` — 同一 slot 最多保留 1 条排队消息，新的会覆盖旧的 */
+  private queuedPrompts = new Map<string, import("./bridge-message-handler-types.js").QueuedPrompt>();
   private maintenanceStateStore: BridgeMaintenanceStateStore;
   private maintenanceStateReady: Promise<void> | null = null;
   private activeMaintenance: RunningMaintenanceTask | null = null;
@@ -742,6 +744,7 @@ export class Bridge {
       maintenanceStateStore: this.maintenanceStateStore,
       upgradeResultStore: this.upgradeResultStore,
       activePrompts: this.activePrompts,
+      queuedPrompts: this.queuedPrompts,
       ensureMaintenanceStateLoaded: () => this.ensureMaintenanceStateLoaded(),
       handleUpgradeCommand: (msg, command) =>
         this.handleUpgradeCommand(msg, command),
