@@ -54,10 +54,12 @@ npm run dev
 # or
 npm run build && npm start
 
+<!-- readme-dev-helper-en:start -->
 # Debug: stop other instances before dev (single-instance lock)
 # ./scripts/bridge-dev.sh
 # npm run dev:restart
 # scripts/bridge-dev.sh and service.sh now share the same TS-side env/path resolution rules for lock/log defaults.
+<!-- readme-dev-helper-en:end -->
 ```
 
 ### Backend deployment matrix
@@ -101,10 +103,12 @@ User unit: **`~/.config/systemd/user/feishu-cursor-bridge.service`**, **`Restart
 To start the user service **at boot without an interactive login**, run once: **`sudo loginctl enable-linger "$USER"`** (optional).
 
 ```bash
+<!-- readme-service-commands-en:start -->
 bash service.sh install    # npm install + build + install + start
 bash service.sh update     # after git pull / code edits: rebuild dist + restart
 bash service.sh status
 bash service.sh logs       # macOS: follow log file; Linux: journalctl -f
+<!-- readme-service-commands-en:end -->
 ```
 
 | Command | Description |
@@ -120,7 +124,9 @@ bash service.sh logs       # macOS: follow log file; Linux: journalctl -f
 
 After code changes: prefer **`bash service.sh update`** so dependency + compile + restart happen in one step. It now also refreshes the plist / systemd unit first, so PATH-related changes in `.env` (for example `CONDA_ENV_NAME` / `CONDA_ROOT`) take effect immediately. Alternatively run `npm run build` then **`bash service.sh restart`**. Re-run **`bash service.sh install`** if you need to refresh the plist / systemd unit or your **Node binary path** changed.
 
+<!-- readme-test-discovery-note-en:start -->
 `npm test` now runs through the repo-local Node entry `scripts/run-tests.mjs` instead of shell `find | xargs`, so test discovery stays in-repo and cross-shell behavior is more stable.
+<!-- readme-test-discovery-note-en:end -->
 
 ### Docker dev setup
 
@@ -309,9 +315,12 @@ npm run dev
 # 或
 npm run build && npm start
 
+<!-- readme-dev-helper-zh:start -->
 # 调试：先结束已有实例再起 dev（与单实例锁配合，避免多进程）
 # ./scripts/bridge-dev.sh
 # npm run dev:restart
+# scripts/bridge-dev.sh 和 service.sh 现在共用同一套 TS 侧 env/path 解析语义来确定 lock/log 默认值。
+<!-- readme-dev-helper-zh:end -->
 ```
 
 ### backend 部署对照
@@ -355,10 +364,12 @@ npm run build && npm start
 若要在**未登录图形会话时**仍随开机启动当前用户的单元，可执行一次：**`sudo loginctl enable-linger "$USER"`**（可选）。
 
 ```bash
+<!-- readme-service-commands-zh:start -->
 bash service.sh install    # npm install + build + 安装并启动
 bash service.sh update     # pull / 改代码后：install + build + 重启，使 dist 生效
 bash service.sh status
 bash service.sh logs       # macOS：跟日志文件；Linux：journalctl -f
+<!-- readme-service-commands-zh:end -->
 ```
 
 | 命令 | 说明 |
@@ -374,7 +385,9 @@ bash service.sh logs       # macOS：跟日志文件；Linux：journalctl -f
 
 代码更新后优先 **`bash service.sh update`**（依赖 + 编译 + 重启一步完成）。它现在也会先刷新 plist / systemd unit，因此 `.env` 里的 PATH 相关变更（例如 `CONDA_ENV_NAME` / `CONDA_ROOT`）会立即生效。也可手动 `npm run build` 再 **`bash service.sh restart`**。需要**重写 plist / systemd unit** 或更换 **Node 路径**时再执行 **`bash service.sh install`**。
 
+<!-- readme-test-discovery-note-zh:start -->
 `npm test` 现在通过仓库内的 Node 入口 `scripts/run-tests.mjs` 做测试发现，不再依赖 shell 的 `find | xargs`，便于后续维护并减少跨 shell 差异。
+<!-- readme-test-discovery-note-zh:end -->
 
 ### Docker 开发联调
 
