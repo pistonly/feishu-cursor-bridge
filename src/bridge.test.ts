@@ -251,7 +251,7 @@ test("/update --force 会执行构建并登记待重启状态", async () => {
       return undefined;
     },
   };
-  (bridge as any).activePrompts = new Set(["dm:user-1:1"]);
+  ((bridge as any).promptCoordinator as any).activePrompts = new Set(["dm:user-1:1"]);
   (bridge as any).feishuBot = {
     stripBotMentionKeepLines(content: string) {
       return content;
@@ -375,7 +375,7 @@ test("/upgrade 在 active prompt 存在时仅允许 --force", async () => {
 
   (bridge as any).ensureMaintenanceStateLoaded = async () => {};
   (bridge as any).isManagedByService = async () => true;
-  (bridge as any).activePrompts = new Set(["dm:user-1:1"]);
+  ((bridge as any).promptCoordinator as any).activePrompts = new Set(["dm:user-1:1"]);
   (bridge as any).launchBackgroundUpgrade = () => {
     launchCalls += 1;
   };
@@ -1140,7 +1140,7 @@ test("/cancel 在仅有排队消息时会撤销排队", async () => {
       };
     },
   };
-  (bridge as any).queuedPrompts = new Map([
+  ((bridge as any).promptCoordinator as any).queuedPrompts = new Map([
     [
       "dm:user-1:1",
       {
@@ -1162,6 +1162,9 @@ test("/cancel 在仅有排队消息时会撤销排队", async () => {
 
   await (bridge as any).handleFeishuMessage(createMessage("/cancel"));
 
-  assert.equal((bridge as any).queuedPrompts.size, 0);
+  assert.equal(
+    ((bridge as any).promptCoordinator as any).queuedPrompts.size,
+    0,
+  );
   assert.match(sentTexts[0] ?? "", /已撤销当前槽位中的排队消息/);
 });

@@ -57,14 +57,6 @@ function formatSessionLabel(slot: SessionSlot): string {
   return `#${slot.slotIndex}${slot.name ? ` (${slot.name})` : ""}`;
 }
 
-function clearQueuedPromptForSlot(
-  ctx: BridgeMessageHandlerDeps,
-  sessionKey: string,
-  slotIndex: number,
-): boolean {
-  return ctx.queuedPrompts.delete(`${sessionKey}:${slotIndex}`);
-}
-
 async function sendWelcomeCard(
   ctx: BridgeMessageHandlerDeps,
   msg: FeishuMessage,
@@ -427,7 +419,7 @@ async function handleCloseCommand(
     );
     if (sessionKey) {
       for (const slot of closed) {
-        clearQueuedPromptForSlot(ctx, sessionKey, slot.slotIndex);
+        ctx.promptCoordinator.clearQueuedPromptForSlot(sessionKey, slot.slotIndex);
       }
     }
     await ctx.flushPendingSessionNotices(msg);
@@ -453,7 +445,7 @@ async function handleCloseCommand(
     ctx.threadScope(msg),
   );
   if (sessionKey) {
-    clearQueuedPromptForSlot(ctx, sessionKey, closed.slotIndex);
+    ctx.promptCoordinator.clearQueuedPromptForSlot(sessionKey, closed.slotIndex);
   }
   await ctx.flushPendingSessionNotices(msg);
   const label = closed.name ? ` (${closed.name})` : "";
@@ -820,9 +812,15 @@ async function handleInterruptCommand(
   }
   const sessionKey = snap.sessionKey;
   const active = snap.activeSlot;
-  const promptKey = `${sessionKey}:${active.slotIndex}`;
-  const hasActivePrompt = ctx.activePrompts.has(promptKey);
-  const hadQueuedPrompt = clearQueuedPromptForSlot(ctx, sessionKey, active.slotIndex);
+  const promptState = ctx.promptCoordinator.getSlotPromptState(
+    sessionKey,
+    active.slotIndex,
+  );
+  const hasActivePrompt = promptState.hasActivePrompt;
+  const hadQueuedPrompt = ctx.promptCoordinator.clearQueuedPromptForSlot(
+    sessionKey,
+    active.slotIndex,
+  );
   if (!hasActivePrompt && !hadQueuedPrompt) {
     await ctx.feishuBot.sendText(
       msg.chatId,

@@ -25,6 +25,7 @@ import {
 } from "./maintenance-state.js";
 import { UpgradeResultStore, type UpgradeAttemptRecord } from "./upgrade-result-store.js";
 import { SlotMessageLogStore } from "./slot-message-log.js";
+import { PromptCoordinator } from "./prompt-coordinator.js";
 import {
   handleBridgeMessage,
   type BridgeMessageHandlerDeps,
@@ -160,12 +161,9 @@ export class Bridge {
   private sessionManager: SessionManager;
   private presetsStore: WorkspacePresetsStore;
   private conversations: Map<AcpBackend, ConversationService>;
-  private upgradeResultStore: UpgradeResultStore;
   private slotMessageLog: SlotMessageLogStore | null;
-  /** key: `<sessionKey>:<slotIndex>` — 同一 slot 同一时刻只能有一个 prompt 在跑 */
-  private activePrompts = new Set<string>();
-  /** key: `<sessionKey>:<slotIndex>` — 同一 slot 最多保留 1 条排队消息，新的会覆盖旧的 */
-  private queuedPrompts = new Map<string, import("./bridge-message-handler-types.js").QueuedPrompt>();
+  private upgradeResultStore: UpgradeResultStore;
+  private promptCoordinator: PromptCoordinator;
   private maintenanceStateStore: BridgeMaintenanceStateStore;
   private maintenanceStateReady: Promise<void> | null = null;
   private activeMaintenance: RunningMaintenanceTask | null = null;
@@ -211,6 +209,16 @@ export class Bridge {
       },
     );
     this.conversations = new Map();
+    this.promptCoordinator = new PromptCoordinator({
+      getFeishuBot: () => this.feishuBot,
+      getSessionManager: () => this.sessionManager,
+      getSlotMessageLog: () => this.slotMessageLog,
+      flushPendingSessionNotices: (msg) => this.flushPendingSessionNotices(msg),
+      threadReplyOpts: (msg) => this.threadReplyOpts(msg),
+      threadScope: (msg) => this.threadScope(msg),
+      conversationForBackend: (backend) => this.conversationForBackend(backend),
+      feishuSessionKey: (msg) => this.feishuSessionKey(msg),
+    });
   }
 
   async start(): Promise<void> {
@@ -370,10 +378,11 @@ export class Bridge {
       );
       return;
     }
-    if (this.activePrompts.size > 0 && !command.force) {
+    const activePromptCount = this.promptCoordinator.getActivePromptCount();
+    if (activePromptCount > 0 && !command.force) {
       await this.feishuBot.sendText(
         msg.chatId,
-        `❌ 当前仍有 ${this.activePrompts.size} 个请求在处理中。请等待完成或先中断，再执行 \`/upgrade\`；若确认要直接升级，可改用 \`/upgrade --force\`。`,
+        `❌ 当前仍有 ${activePromptCount} 个请求在处理中。请等待完成或先中断，再执行 \`/upgrade\`；若确认要直接升级，可改用 \`/upgrade --force\`。`,
         msg.messageId,
         this.threadReplyOpts(msg),
       );
@@ -646,10 +655,11 @@ export class Bridge {
       );
       return;
     }
-    if (this.activePrompts.size > 0 && !command.force) {
+    const activePromptCount = this.promptCoordinator.getActivePromptCount();
+    if (activePromptCount > 0 && !command.force) {
       await this.feishuBot.sendText(
         msg.chatId,
-        `❌ 当前仍有 ${this.activePrompts.size} 个请求在处理中。请等待完成或先中断，再执行 \`/${command.kind}\`；若确认要直接维护，可改用 \`/${command.kind} --force\`。`,
+        `❌ 当前仍有 ${activePromptCount} 个请求在处理中。请等待完成或先中断，再执行 \`/${command.kind}\`；若确认要直接维护，可改用 \`/${command.kind} --force\`。`,
         msg.messageId,
         this.threadReplyOpts(msg),
       );
@@ -743,8 +753,7 @@ export class Bridge {
       slotMessageLog: this.slotMessageLog,
       maintenanceStateStore: this.maintenanceStateStore,
       upgradeResultStore: this.upgradeResultStore,
-      activePrompts: this.activePrompts,
-      queuedPrompts: this.queuedPrompts,
+      promptCoordinator: this.promptCoordinator,
       ensureMaintenanceStateLoaded: () => this.ensureMaintenanceStateLoaded(),
       handleUpgradeCommand: (msg, command) =>
         this.handleUpgradeCommand(msg, command),

@@ -19,6 +19,7 @@ import type {
 } from "./upgrade-result-store.js";
 import type { SlotMessageLogStore } from "./slot-message-log.js";
 import type { ConversationService } from "./conversation-service.js";
+import type { PromptCoordinator } from "./prompt-coordinator.js";
 
 export type ThreadReplyOpts = { replyInThread: true } | undefined;
 
@@ -26,13 +27,6 @@ export type ActiveMaintenanceInfo = {
   kind: BridgeMaintenanceCommandKind;
   requestedAt: number;
 } | null;
-
-export type QueuedPrompt = {
-  msg: FeishuMessage;
-  content: string;
-  hasPostEmbeddedImages: boolean;
-  slotIndex: number;
-};
 
 export interface BridgeMessageHandlerDeps {
   config: Config;
@@ -42,8 +36,7 @@ export interface BridgeMessageHandlerDeps {
   slotMessageLog: SlotMessageLogStore | null;
   maintenanceStateStore: BridgeMaintenanceStateStore;
   upgradeResultStore: UpgradeResultStore;
-  activePrompts: Set<string>;
-  queuedPrompts: Map<string, QueuedPrompt>;
+  promptCoordinator: PromptCoordinator;
   ensureMaintenanceStateLoaded(): Promise<void>;
   handleUpgradeCommand(
     msg: FeishuMessage,

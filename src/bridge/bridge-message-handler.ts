@@ -6,7 +6,6 @@ import {
 import type { FeishuMessage } from "../feishu/bot.js";
 import type { MessageHandlerContext } from "./bridge-context.js";
 import { handleBridgeCommand } from "./bridge-command-router.js";
-import { handlePromptMessage } from "./bridge-prompt-handler.js";
 import { handleStatusCommand } from "./bridge-status.js";
 import type { BridgeMessageHandlerDeps } from "./bridge-message-handler-types.js";
 
@@ -50,8 +49,7 @@ export async function handleBridgeMessage(
     return;
   }
 
-  await handlePromptMessage(
-    ctx,
+  await ctx.promptCoordinator.handlePromptMessage(
     msg,
     content,
     hasPostEmbeddedImages,
