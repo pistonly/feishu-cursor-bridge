@@ -43,6 +43,13 @@ if [[ -z "$NPM_BIN" || ! -x "$NPM_BIN" ]]; then
     exit 1
 fi
 
+SCRIPT_CONFIG_CMD=("$NPM_BIN" exec -- tsx src/script-config-cli.ts get)
+
+get_script_config() {
+    local key="$1"
+    (cd "$BOT_DIR" && "${SCRIPT_CONFIG_CMD[@]}" "$key")
+}
+
 service_base_path_linux() {
     echo "$(dirname "$NODE_BIN"):$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
 }
@@ -59,125 +66,14 @@ service_path_macos() {
     build_service_path "$(service_base_path_macos)"
 }
 
-trim_whitespace() {
-    local value="$1"
-    value="${value#"${value%%[![:space:]]*}"}"
-    value="${value%"${value##*[![:space:]]}"}"
-    printf '%s\n' "$value"
-}
-
-strip_matching_quotes() {
-    local value="$1"
-    if [[ ${#value} -ge 2 ]]; then
-        if [[ "$value" == \"*\" && "$value" == *\" ]]; then
-            value="${value:1:${#value}-2}"
-        elif [[ "$value" == \'*\' && "$value" == *\' ]]; then
-            value="${value:1:${#value}-2}"
-        fi
-    fi
-    printf '%s\n' "$value"
-}
-
-dotenv_get_value_fallback() {
-    local key="$1"
-    [[ -f "$DOTENV_FILE" ]] || return 1
-
-    local value
-    value="$(awk -v key="$key" '
-        BEGIN {
-            pattern = "^[[:space:]]*(export[[:space:]]+)?" key "[[:space:]]*="
-        }
-        $0 ~ pattern {
-            raw = $0
-            sub(pattern, "", raw)
-            value = raw
-            found = 1
-        }
-        END {
-            if (!found) exit 1
-            print value
-        }
-    ' "$DOTENV_FILE")" || return 1
-
-    value="$(trim_whitespace "$value")"
-    value="$(strip_matching_quotes "$value")"
-    printf '%s\n' "$value"
-}
-
-dotenv_get_value() {
-    local key="$1"
-    [[ -f "$DOTENV_FILE" ]] || return 1
-
-    local value
-    if value="$("$NODE_BIN" --input-type=module -e '
-        import fs from "node:fs";
-
-        const [key, envFile] = process.argv.slice(1);
-
-        try {
-          const dotenv = await import("dotenv");
-          const parsed = dotenv.parse(fs.readFileSync(envFile));
-          if (!(key in parsed)) process.exit(1);
-          process.stdout.write(parsed[key]);
-        } catch (error) {
-          process.exit(2);
-        }
-    ' "$key" "$DOTENV_FILE" 2>/dev/null)"; then
-        printf '%s\n' "$value"
-        return 0
-    fi
-
-    dotenv_get_value_fallback "$key"
-}
-
-expand_home_path() {
-    local p="$1"
-    if [[ "$p" == "~/"* ]]; then
-        printf '%s\n' "$HOME/${p#\~/}"
-    else
-        printf '%s\n' "$p"
-    fi
-}
-
-resolve_conda_root() {
-    local root_raw root_path
-    root_raw="$(dotenv_get_value "CONDA_ROOT" 2>/dev/null || true)"
-    if [[ -n "$root_raw" ]]; then
-        root_path="$(expand_home_path "$root_raw")"
-        printf '%s\n' "$root_path"
-        return 0
-    fi
-
-    if [[ -d "$HOME/miniconda3" ]]; then
-        printf '%s\n' "$HOME/miniconda3"
-        return 0
-    fi
-
-    if [[ -d "$HOME/anaconda3" ]]; then
-        printf '%s\n' "$HOME/anaconda3"
-        return 0
-    fi
-
-    return 1
-}
-
 resolve_conda_bin() {
-    local env_name conda_root conda_bin
-    env_name="$(dotenv_get_value "CONDA_ENV_NAME" 2>/dev/null || true)"
-    env_name="$(trim_whitespace "$env_name")"
-    if [[ -z "$env_name" ]]; then
-        env_name="base"
+    local conda_bin
+    conda_bin="$(get_script_config condaBinPath 2>/dev/null || true)"
+    if [[ -n "$conda_bin" && -d "$conda_bin" ]]; then
+        printf '%s\n' "$conda_bin"
+        return 0
     fi
-
-    conda_root="$(resolve_conda_root)" || return 1
-    if [[ "$env_name" == "base" ]]; then
-        conda_bin="$conda_root/bin"
-    else
-        conda_bin="$conda_root/envs/$env_name/bin"
-    fi
-
-    [[ -d "$conda_bin" ]] || return 1
-    printf '%s\n' "$conda_bin"
+    return 1
 }
 
 build_service_path() {
@@ -192,29 +88,13 @@ build_service_path() {
     fi
 }
 
-resolve_path_like_app() {
-    local raw_path="$1"
-    local expanded
-    expanded="$(expand_home_path "$raw_path")"
-
-    "$NODE_BIN" --input-type=module -e '
-        import path from "node:path";
-
-        const [baseDir, targetPath] = process.argv.slice(1);
-        process.stdout.write(path.resolve(baseDir, targetPath));
-    ' "$BOT_DIR" "$expanded"
-}
-
 print_app_log_config() {
-    local default_app_log="$HOME/.feishu-cursor-bridge/logs/bridge.log"
-    local enabled_raw enabled_lower app_log_raw app_log_path
+    local enabled_raw enabled_lower app_log_path
 
-    enabled_raw="$(dotenv_get_value "EXPERIMENT_LOG_TO_FILE" 2>/dev/null || true)"
-    app_log_raw="$(dotenv_get_value "EXPERIMENT_LOG_FILE" 2>/dev/null || true)"
-    if [[ -n "$app_log_raw" ]]; then
-        app_log_path="$(resolve_path_like_app "$app_log_raw")"
-    else
-        app_log_path="$default_app_log"
+    enabled_raw="$(get_script_config experimentalLogToFile 2>/dev/null || true)"
+    app_log_path="$(get_script_config experimentalLogFilePath 2>/dev/null || true)"
+    if [[ -z "$app_log_path" ]]; then
+        app_log_path="$HOME/.feishu-cursor-bridge/logs/bridge.log"
     fi
 
     if [[ ! -f "$DOTENV_FILE" ]]; then
@@ -383,8 +263,7 @@ require_command() {
 
 resolve_upgrade_remote() {
     local remote
-    remote="$(dotenv_get_value "BRIDGE_UPGRADE_REMOTE" 2>/dev/null || true)"
-    remote="$(trim_whitespace "$remote")"
+    remote="$(get_script_config upgradeRemote 2>/dev/null || true)"
     if [[ -n "$remote" ]]; then
         printf '%s\n' "$remote"
         return 0
@@ -394,8 +273,7 @@ resolve_upgrade_remote() {
 
 resolve_upgrade_branch() {
     local branch
-    branch="$(dotenv_get_value "BRIDGE_UPGRADE_BRANCH" 2>/dev/null || true)"
-    branch="$(trim_whitespace "$branch")"
+    branch="$(get_script_config upgradeBranch 2>/dev/null || true)"
     if [[ -n "$branch" ]]; then
         printf '%s\n' "$branch"
         return 0

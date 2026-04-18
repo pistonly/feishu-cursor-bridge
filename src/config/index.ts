@@ -136,11 +136,15 @@ function requireEnv(name: string): string {
   return value;
 }
 
-export function expandHome(p: string): string {
+export function expandHomeWith(p: string, homeDir: string): string {
   if (p.startsWith("~/")) {
-    return path.join(os.homedir(), p.slice(2));
+    return path.join(homeDir, p.slice(2));
   }
   return p;
+}
+
+export function expandHome(p: string): string {
+  return expandHomeWith(p, os.homedir());
 }
 
 /**

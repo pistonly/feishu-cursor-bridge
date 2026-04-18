@@ -5,37 +5,26 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-LOCK_FILE="${BRIDGE_SINGLE_INSTANCE_LOCK:-$HOME/.feishu-cursor-bridge/bridge.lock}"
-LOG_FILE="${BRIDGE_DEV_LOG_FILE:-$HOME/.feishu-cursor-bridge/logs/bridge-dev.log}"
+NPM_BIN="$(command -v npm 2>/dev/null || true)"
+if [[ -z "$NPM_BIN" ]]; then
+  echo "❌ 未找到 npm，请先安装 Node.js/npm。"
+  exit 1
+fi
+
+SCRIPT_CONFIG_CMD=("$NPM_BIN" exec -- tsx src/script-config-cli.ts get)
+get_script_config() {
+  local key="$1"
+  (cd "$ROOT" && "${SCRIPT_CONFIG_CMD[@]}" "$key")
+}
+
+LOCK_FILE_DEFAULT="$HOME/.feishu-cursor-bridge/bridge.lock"
+LOG_FILE_DEFAULT="$HOME/.feishu-cursor-bridge/logs/bridge-dev.log"
+LOCK_FILE="${BRIDGE_SINGLE_INSTANCE_LOCK:-$(get_script_config singleInstanceLockPath 2>/dev/null || printf '%s' "$LOCK_FILE_DEFAULT")}"
+LOG_FILE="${BRIDGE_DEV_LOG_FILE:-$(get_script_config bridgeDevLogPath 2>/dev/null || printf '%s' "$LOG_FILE_DEFAULT")}"
 SERVICE_SCRIPT="$ROOT/service.sh"
 UNAME_S="$(uname -s)"
 LAUNCHD_LABEL="com.feishu-cursor-bridge"
 SYSTEMD_UNIT="feishu-cursor-bridge.service"
-
-# 从 .env 读取 BRIDGE_SINGLE_INSTANCE_LOCK（仅当环境中未设置该变量时）
-if [[ -z "${BRIDGE_SINGLE_INSTANCE_LOCK+x}" ]] && [[ -f "$ROOT/.env" ]]; then
-  line="$(grep -E '^[[:space:]]*(export[[:space:]]+)?BRIDGE_SINGLE_INSTANCE_LOCK=' "$ROOT/.env" 2>/dev/null | tail -1 || true)"
-  if [[ -n "$line" ]]; then
-    value="${line#*=}"
-    value="${value%%#*}"
-    value="$(echo "$value" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")"
-    if [[ "$value" =~ ^~(/|$) ]]; then
-      value="${value/\~/$HOME}"
-    fi
-    LOCK_FILE="$value"
-  fi
-fi
-
-expand_lock_path() {
-  local p="$1"
-  if [[ "$p" =~ ^~(/|$) ]]; then
-    echo "${p/\~/$HOME}"
-  else
-    echo "$p"
-  fi
-}
-LOCK_FILE="$(expand_lock_path "$LOCK_FILE")"
-LOG_FILE="$(expand_lock_path "$LOG_FILE")"
 
 read_lock_pid() {
   if [[ ! -f "$LOCK_FILE" ]]; then
@@ -185,7 +174,7 @@ case "$cmd" in
     mkdir -p "$(dirname "$LOG_FILE")"
     echo "[bridge-dev] Starting in background: npm run dev"
     echo "[bridge-dev] Log file: $LOG_FILE"
-    nohup npm run dev >>"$LOG_FILE" 2>&1 &
+    nohup "$NPM_BIN" run dev >>"$LOG_FILE" 2>&1 &
     if pid="$(wait_for_lock_ready)"; then
       echo "[bridge-dev] Started PID $pid"
       exit 0

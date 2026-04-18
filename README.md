@@ -57,6 +57,7 @@ npm run build && npm start
 # Debug: stop other instances before dev (single-instance lock)
 # ./scripts/bridge-dev.sh
 # npm run dev:restart
+# scripts/bridge-dev.sh and service.sh now share the same TS-side env/path resolution rules for lock/log defaults.
 ```
 
 ### Backend deployment matrix
@@ -118,6 +119,8 @@ bash service.sh logs       # macOS: follow log file; Linux: journalctl -f
 | `bash service.sh logs` | Live logs |
 
 After code changes: prefer **`bash service.sh update`** so dependency + compile + restart happen in one step. It now also refreshes the plist / systemd unit first, so PATH-related changes in `.env` (for example `CONDA_ENV_NAME` / `CONDA_ROOT`) take effect immediately. Alternatively run `npm run build` then **`bash service.sh restart`**. Re-run **`bash service.sh install`** if you need to refresh the plist / systemd unit or your **Node binary path** changed.
+
+`npm test` now runs through the repo-local Node entry `scripts/run-tests.mjs` instead of shell `find | xargs`, so test discovery stays in-repo and cross-shell behavior is more stable.
 
 ### Docker dev setup
 
@@ -370,6 +373,8 @@ bash service.sh logs       # macOS：跟日志文件；Linux：journalctl -f
 | `bash service.sh logs` | 实时日志 |
 
 代码更新后优先 **`bash service.sh update`**（依赖 + 编译 + 重启一步完成）。它现在也会先刷新 plist / systemd unit，因此 `.env` 里的 PATH 相关变更（例如 `CONDA_ENV_NAME` / `CONDA_ROOT`）会立即生效。也可手动 `npm run build` 再 **`bash service.sh restart`**。需要**重写 plist / systemd unit** 或更换 **Node 路径**时再执行 **`bash service.sh install`**。
+
+`npm test` 现在通过仓库内的 Node 入口 `scripts/run-tests.mjs` 做测试发现，不再依赖 shell 的 `find | xargs`，便于后续维护并减少跨 shell 差异。
 
 ### Docker 开发联调
 
