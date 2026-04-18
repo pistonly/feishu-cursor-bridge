@@ -144,7 +144,6 @@ export class ConversationService {
     syncStatusSummary();
     const cardMessageIds: string[] = [loadingCardId];
     let lastRenderedChunks: string[] = [];
-    let aggregatedMain = "";
     let sawRenderableEvent = false;
 
     let lastFlush = 0;
@@ -167,25 +166,29 @@ export class ConversationService {
       if (!force && now - lastFlush < throttleMs) return;
       if (!state.hasContent()) return;
 
-      const chunks = state.toCardMarkdownChunks({
-        maxMarkdownLength: cardSplitMarkdownThreshold,
-        maxTools: cardSplitToolThreshold,
-      });
+      const previousChunks = lastRenderedChunks;
+      const chunks = state.toCardMarkdownChunks(
+        {
+          maxMarkdownLength: cardSplitMarkdownThreshold,
+          maxTools: cardSplitToolThreshold,
+        },
+        now,
+      );
       if (
-        !force &&
-        chunks.length === lastRenderedChunks.length &&
-        chunks.every((chunk, index) => chunk === lastRenderedChunks[index])
+        chunks.length === previousChunks.length &&
+        chunks.every((chunk, index) => chunk === previousChunks[index])
       ) {
         return;
       }
       lastFlush = now;
-      lastRenderedChunks = chunks;
+      lastRenderedChunks = [...chunks];
 
       cardPatchChain = cardPatchChain.then(async () => {
         for (let i = 0; i < chunks.length; i += 1) {
           const chunk = chunks[i]!;
           const messageId = cardMessageIds[i];
           if (messageId) {
+            if (previousChunks[i] === chunk) continue;
             try {
               await this.feishu.updateCard(messageId, chunk);
             } catch (err) {
@@ -244,9 +247,6 @@ export class ConversationService {
     };
 
     const processAcpEvent = async (ev: BridgeAcpEvent): Promise<void> => {
-      if (ev.type === "agent_message_chunk") {
-        aggregatedMain += ev.text;
-      }
       await opts?.onAcpEvent?.(ev);
 
       syncStatusSummary();
@@ -343,7 +343,7 @@ export class ConversationService {
       if (
         session.backend === "cursor-legacy" &&
         isLikelyTimeoutMisclassifiedAsAuth(
-          aggregatedMain,
+          state.getMainText(),
           elapsedMs,
           legacyCursorTimeoutMs,
         )

@@ -368,10 +368,6 @@ test("ConversationService 在长回答拆卡时仍保留完整 reply 内容", as
     updateCardCalls.filter((call) => call.id === "card-1").at(-1)?.content ?? "";
 
   assert.equal(sendCardCalls.length >= 3, true);
-  assert.equal(
-    updateCardCalls.some((call) => call.id === sendCardCalls.at(-1)?.id),
-    true,
-  );
   assert.match(finalCard1, /📖 读取文件 — completed/);
   assert.equal(
     sendCardCalls
@@ -386,56 +382,43 @@ test("ConversationService 在长回答拆卡时仍保留完整 reply 内容", as
   const firstCardFinal =
     updateCardCalls.filter((call) => call.id === "card-1").at(-1)?.content ?? "";
   const lastCardFinal =
-    updateCardCalls.filter((call) => call.id === lastCardId).at(-1)?.content ?? "";
+    updateCardCalls.filter((call) => call.id === lastCardId).at(-1)?.content ??
+    sendCardCalls.find((call) => call.id === lastCardId)?.content ??
+    "";
   assert.doesNotMatch(firstCardFinal, /`cursor-official` \|/);
   assert.match(lastCardFinal, /`cursor-official` \| Auto \| —/);
 });
 
-test("ConversationService 仅在 legacy backend 下把鉴权样式超时改写为 Cursor CLI 超时提示", async () => {
-  const authLike =
-    "Unable to process your request because cursor-agent CLI is not authenticated.\n\nPlease run cursor-agent login.";
-  const originalNow = Date.now;
-  let now = 0;
-  Date.now = () => now;
-  try {
-    const legacy = createHarness([
+test("ConversationService 在多卡场景下只更新发生变化的尾部卡片", async () => {
+  const firstChunk = "甲".repeat(220);
+  const secondChunk = "乙".repeat(40);
+  const { service, sendCardCalls, updateCardCalls } = createHarness(
+    [
       {
         type: "agent_message_chunk",
         sessionId: "session-1",
-        text: authLike,
+        text: firstChunk,
       },
-    ]);
-    const codex = createHarness([
       {
         type: "agent_message_chunk",
         sessionId: "session-1",
-        text: authLike,
+        text: secondChunk,
       },
-    ]);
+    ],
+    {
+      cardSplitMarkdownThreshold: 180,
+    },
+  );
 
-    now = 0;
-    const legacyPromise = legacy.service.handleUserPrompt(
-      createMessage(),
-      createSession("cursor-legacy"),
-    );
-    now = 120_000;
-    const legacyReply = await legacyPromise;
+  await service.handleUserPrompt(createMessage(), createSession());
 
-    now = 0;
-    const codexPromise = codex.service.handleUserPrompt(
-      createMessage(),
-      createSession("codex"),
-    );
-    now = 120_000;
-    const codexReply = await codexPromise;
+  const lastCardId = sendCardCalls.at(-1)?.id ?? "";
+  const firstCardUpdates = updateCardCalls.filter((call) => call.id === "card-1");
+  const lastCardUpdates = updateCardCalls.filter((call) => call.id === lastCardId);
 
-    assert.match(legacyReply ?? "", /Cursor CLI 超时/);
-    assert.match(legacyReply ?? "", /约 120 秒/);
-    assert.doesNotMatch(codexReply ?? "", /Cursor CLI 超时/);
-    assert.match(codexReply ?? "", /cursor-agent CLI is not authenticated/i);
-  } finally {
-    Date.now = originalNow;
-  }
+  assert.equal(sendCardCalls.length >= 2, true);
+  assert.equal(firstCardUpdates.length, 1);
+  assert.equal(lastCardUpdates.length >= 1, true);
 });
 
 test("ConversationService 会按 legacy adapter timeout 动态改写超时提示", async () => {

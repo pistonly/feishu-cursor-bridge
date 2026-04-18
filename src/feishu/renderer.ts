@@ -59,12 +59,18 @@ const DEFAULT_TOOL_ELAPSED_HINT_OPTIONS: ToolElapsedHintOptions = {
   activeToolElapsedHintIntervalMs: 10_000,
 };
 
+
+type RenderCache = {
+  renderVersion: number;
+  maxMarkdownLength: number;
+  maxTools: number;
+  activeToolElapsedBucketKey: string;
+  chunks: string[];
+};
 type RenderSection = {
   kind: "mode" | "plan" | "tool" | "thought" | "main" | "commands";
   markdown: string;
 };
-
-/** 按 ACP 通知到达顺序记录；同类型连续块合并为一条（流式追加）。 */
 type TimelineEntry =
   | { k: "thought"; text: string }
   | { k: "main"; text: string }
@@ -84,6 +90,8 @@ export class FeishuCardState {
   private timeline: TimelineEntry[] = [];
   private statusSummary = "";
   private toolTimelineIndexById = new Map<string, number>();
+  private renderVersion = 0;
+  private lastRenderCache: RenderCache | null = null;
 
   constructor(
     private readonly showAcpAvailableCommands = false,
@@ -92,7 +100,10 @@ export class FeishuCardState {
   ) {}
 
   setStatusSummary(summary: string): void {
-    this.statusSummary = summary.trim();
+    const next = summary.trim();
+    if (next === this.statusSummary) return;
+    this.statusSummary = next;
+    this.invalidateRenderCache();
   }
 
   hasStatusSummary(): boolean {
@@ -100,6 +111,7 @@ export class FeishuCardState {
   }
 
   apply(ev: BridgeAcpEvent): void {
+    let changed = false;
     switch (ev.type) {
       case "user_message_chunk":
       case "config_option_update":
@@ -108,22 +120,27 @@ export class FeishuCardState {
         break;
       case "agent_message_chunk":
         this.appendMain(ev.text);
+        changed = true;
         break;
       case "agent_thought_chunk":
         this.appendThought(ev.text);
+        changed = true;
         break;
       case "current_mode_update":
         this.timeline.push({
           k: "mode",
           markdown: `**当前模式**\n\n\`${ev.modeId}\``,
         });
+        changed = true;
         break;
       case "plan":
         this.timeline.push({ k: "plan", text: ev.summary });
+        changed = true;
         break;
       case "available_commands_update":
         if (this.showAcpAvailableCommands) {
           this.timeline.push({ k: "commands", text: ev.summary });
+          changed = true;
         }
         break;
       case "tool_call":
@@ -135,6 +152,7 @@ export class FeishuCardState {
           startedAtMs: Date.now(),
           ...(ev.kind !== undefined ? { toolKind: ev.kind } : {}),
         });
+        changed = true;
         break;
       case "tool_call_update": {
         const prev = this.lastToolState(ev.toolCallId);
@@ -157,10 +175,14 @@ export class FeishuCardState {
           startedAtMs: prev?.startedAtMs ?? Date.now(),
           ...(toolKind !== undefined ? { toolKind } : {}),
         });
+        changed = true;
         break;
       }
       default:
         break;
+    }
+    if (changed) {
+      this.invalidateRenderCache();
     }
   }
 
@@ -215,6 +237,7 @@ export class FeishuCardState {
   reset(): void {
     this.timeline = [];
     this.toolTimelineIndexById.clear();
+    this.invalidateRenderCache();
   }
 
   clone(): FeishuCardState {
@@ -225,6 +248,13 @@ export class FeishuCardState {
     next.timeline = this.timeline.map((e) => ({ ...e }));
     next.statusSummary = this.statusSummary;
     next.toolTimelineIndexById = new Map(this.toolTimelineIndexById);
+    next.renderVersion = this.renderVersion;
+    next.lastRenderCache = this.lastRenderCache
+      ? {
+          ...this.lastRenderCache,
+          chunks: [...this.lastRenderCache.chunks],
+        }
+      : null;
     return next;
   }
 
@@ -244,17 +274,26 @@ export class FeishuCardState {
    */
   extractAndStripFeishuSendFileDirectives(): string[] {
     const paths: string[] = [];
+    let changed = false;
     for (const e of this.timeline) {
       if (e.k !== "main") continue;
       const { cleaned, rawPaths } = stripFeishuSendFileDirectives(e.text);
-      e.text = cleaned;
+      if (cleaned !== e.text) {
+        e.text = cleaned;
+        changed = true;
+      }
       paths.push(...rawPaths);
+    }
+    if (changed) {
+      this.invalidateRenderCache();
     }
     return paths;
   }
 
   setMainText(text: string): void {
     this.timeline = [{ k: "main", text }];
+    this.toolTimelineIndexById.clear();
+    this.invalidateRenderCache();
   }
 
   hasMainText(): boolean {
@@ -295,6 +334,18 @@ export class FeishuCardState {
   toCardMarkdownChunks(opts: CardChunkOptions, nowMs = Date.now()): string[] {
     if (!this.hasContent()) return ["_（暂无输出）_"];
 
+    const activeToolElapsedBucketKey = this.getActiveToolElapsedBucketKey(nowMs);
+    const cached = this.lastRenderCache;
+    if (
+      cached &&
+      cached.renderVersion === this.renderVersion &&
+      cached.maxMarkdownLength === opts.maxMarkdownLength &&
+      cached.maxTools === opts.maxTools &&
+      cached.activeToolElapsedBucketKey === activeToolElapsedBucketKey
+    ) {
+      return [...cached.chunks];
+    }
+
     const sections = this.buildSections(opts, nowMs);
     const chunks: string[] = [];
     let current = "";
@@ -319,7 +370,15 @@ export class FeishuCardState {
       chunks.length > 0 ? chunks : ["_（暂无输出）_"],
       opts.maxMarkdownLength,
     );
-    return withStatus.length > 0 ? withStatus : ["_（暂无输出）_"];
+    const result = withStatus.length > 0 ? withStatus : ["_（暂无输出）_"];
+    this.lastRenderCache = {
+      renderVersion: this.renderVersion,
+      maxMarkdownLength: opts.maxMarkdownLength,
+      maxTools: opts.maxTools,
+      activeToolElapsedBucketKey,
+      chunks: [...result],
+    };
+    return result;
   }
 
   toMarkdown(nowMs = Date.now()): string {
@@ -520,6 +579,7 @@ export class FeishuCardState {
   ): RenderSection[] {
     const sections: RenderSection[] = [];
     let currentLines: string[] = [];
+    let currentLength = 0;
 
     const pushCurrent = (): void => {
       if (currentLines.length === 0) return;
@@ -528,6 +588,7 @@ export class FeishuCardState {
         markdown: currentLines.join("\n"),
       });
       currentLines = [];
+      currentLength = 0;
     };
 
     for (const line of lines) {
@@ -542,18 +603,17 @@ export class FeishuCardState {
         continue;
       }
 
-      const nextLines = [...currentLines, line];
-      const nextBody = nextLines.join("\n");
+      const nextCount = currentLines.length + 1;
+      const nextLength = currentLength === 0 ? line.length : currentLength + 1 + line.length;
       if (
         currentLines.length > 0 &&
-        (nextLines.length > maxTools || nextBody.length > maxMarkdownLength)
+        (nextCount > maxTools || nextLength > maxMarkdownLength)
       ) {
         pushCurrent();
-        currentLines = [line];
-        continue;
       }
 
-      currentLines = nextLines;
+      currentLines.push(line);
+      currentLength = currentLength === 0 ? line.length : currentLength + 1 + line.length;
     }
 
     pushCurrent();
@@ -632,6 +692,39 @@ export class FeishuCardState {
     return `${baseStatus} (${this.formatElapsed(elapsedHintMs)})`;
   }
 
+
+  private getActiveToolElapsedBucketKey(nowMs: number): string {
+    const buckets: string[] = [];
+    for (const entry of this.timeline) {
+      if (entry.k !== "tool" || !this.isToolActiveStatus(entry.status)) continue;
+      const elapsedHint = this.getToolElapsedHintMs(entry.startedAtMs, nowMs);
+      buckets.push(`${entry.toolCallId}:${elapsedHint ?? -1}`);
+    }
+    return buckets.join("|");
+  }
+
+  private getToolElapsedHintMs(
+    startedAtMs: number,
+    nowMs: number,
+  ): number | undefined {
+    const { activeToolElapsedHintDelayMs, activeToolElapsedHintIntervalMs } =
+      this.toolElapsedHintOptions;
+    if (activeToolElapsedHintDelayMs <= 0 || activeToolElapsedHintIntervalMs <= 0) {
+      return undefined;
+    }
+    const elapsedMs = Math.max(0, nowMs - startedAtMs);
+    if (elapsedMs < activeToolElapsedHintDelayMs) {
+      return undefined;
+    }
+    return (
+      activeToolElapsedHintDelayMs +
+      Math.floor(
+        (elapsedMs - activeToolElapsedHintDelayMs) / activeToolElapsedHintIntervalMs,
+      ) *
+        activeToolElapsedHintIntervalMs
+    );
+  }
+
   private formatElapsed(elapsedMs: number): string {
     const totalSeconds = Math.max(1, Math.floor(elapsedMs / 1000));
     const minutes = Math.floor(totalSeconds / 60);
@@ -643,5 +736,10 @@ export class FeishuCardState {
       return `${minutes}m`;
     }
     return `${minutes}m ${seconds}s`;
+  }
+
+  private invalidateRenderCache(): void {
+    this.renderVersion += 1;
+    this.lastRenderCache = null;
   }
 }

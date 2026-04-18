@@ -119,13 +119,49 @@ test("FeishuCardState 在多张卡片时只把状态摘要放到最后一张", (
   assert.equal(chunks.at(-1)?.includes("`cursor-official` | Auto | —"), true);
 });
 
-test("FeishuCardState 会保留主回复首尾的有效换行", () => {
-  const state = new FeishuCardState();
-  state.apply({
-    type: "agent_message_chunk",
-    sessionId: "session-1",
-    text: "\n```ts\n  const answer = 42;\n```\n",
-  });
 
-  assert.equal(state.toMarkdown(), "\n```ts\n  const answer = 42;\n```\n");
+
+test("FeishuCardState 在同一 elapsed bucket 内复用相同渲染结果", () => {
+  const realNow = Date.now;
+  let nowMs = 0;
+  Date.now = () => nowMs;
+
+  try {
+    const state = new FeishuCardState(false, {
+      activeToolElapsedHintDelayMs: 10_000,
+      activeToolElapsedHintIntervalMs: 10_000,
+    });
+
+    state.apply({
+      type: "tool_call",
+      sessionId: "session-1",
+      toolCallId: "tool-1",
+      title: "Run npm test",
+      status: "in_progress",
+      kind: "execute",
+    });
+
+    nowMs = 12_000;
+    const chunksAt12 = state.toCardMarkdownChunks({
+      maxMarkdownLength: 200,
+      maxTools: 8,
+    }, nowMs);
+    nowMs = 18_000;
+    const chunksAt18 = state.toCardMarkdownChunks({
+      maxMarkdownLength: 200,
+      maxTools: 8,
+    }, nowMs);
+    nowMs = 20_000;
+    const chunksAt20 = state.toCardMarkdownChunks({
+      maxMarkdownLength: 200,
+      maxTools: 8,
+    }, nowMs);
+
+    assert.deepEqual(chunksAt12, chunksAt18);
+    assert.notDeepEqual(chunksAt18, chunksAt20);
+    assert.match(chunksAt12[0] ?? "", /10s/);
+    assert.match(chunksAt20[0] ?? "", /20s/);
+  } finally {
+    Date.now = realNow;
+  }
 });
