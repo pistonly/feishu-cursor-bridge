@@ -53,6 +53,13 @@ test("parseNewConversationCommand 支持 /new --backend codex", () => {
 });
 
 test("parseNewConversationCommand 支持 /new -b 简写与 backend 别名", () => {
+  assert.deepEqual(parseNewConversationCommand("/new 1 -b cur"), {
+    kind: "new",
+    variant: "preset",
+    index: 1,
+    backend: "cursor-official",
+    name: undefined,
+  });
   assert.deepEqual(parseNewConversationCommand("/new 1 -b cc"), {
     kind: "new",
     variant: "preset",

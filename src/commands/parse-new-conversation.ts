@@ -3,6 +3,7 @@ import type { AcpBackend } from "../acp/runtime-contract.js";
 
 const NEW_COMMAND_BACKEND_ALIASES: Record<string, AcpBackend> = {
   official: "cursor-official",
+  cur: "cursor-official",
   "cursor-official": "cursor-official",
   legacy: "cursor-legacy",
   "cursor-legacy": "cursor-legacy",

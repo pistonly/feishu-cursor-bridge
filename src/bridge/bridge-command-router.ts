@@ -472,7 +472,7 @@ async function handleNewCommand(
     await ctx.feishuBot.sendText(
       msg.chatId,
       command.invalidBackend
-        ? `❌ 不支持的 backend：\`${command.invalidBackend}\`。可用值：\`cursor-official\` / \`cursor-legacy\` / \`claude\` / \`codex\`（简写：\`official\` / \`legacy\` / \`cc\` / \`cx\`）。`
+        ? `❌ 不支持的 backend：\`${command.invalidBackend}\`。可用值：\`cursor-official\` / \`cursor-legacy\` / \`claude\` / \`codex\`（常用简写：\`cur\` / \`legacy\` / \`cc\` / \`cx\`；也兼容 \`official\`）。`
         : "❌ `/new` 参数不正确。请先发送 `/commands` 或 `/help` 查看用法。",
       msg.messageId,
       ctx.threadReplyOpts(msg),

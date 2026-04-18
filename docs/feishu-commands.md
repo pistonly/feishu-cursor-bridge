@@ -85,7 +85,7 @@
 /new /home/you/project
 /new ~/projects/my-app
 /new "/path/with spaces/in name"
-/new /home/you/project --backend cursor-official
+/new /home/you/project -b cur
 /new ~/projects/my-app -b legacy
 /new "/path/with spaces/in name" -b claude
 ```
@@ -95,7 +95,7 @@
 ```text
 /new 1
 /new 2
-/new 1 --backend cursor-official
+/new 1 -b cur
 /new 2 -b cc
 ```
 
@@ -105,7 +105,7 @@
 /new --name backend
 /new ~/projects/api --name api
 /new 1 --name frontend
-/new 1 --backend cursor-official --name frontend
+/new 1 -b cur --name frontend
 /new ~/projects/api -b legacy --name api
 /new 2 -b cx --name review
 ```
@@ -115,14 +115,14 @@
 ```text
 /new <路径> --backend <cursor-official|cursor-legacy|claude|codex>
 /new <序号> --backend <cursor-official|cursor-legacy|claude|codex>
-/new <路径> -b <official|legacy|claude|codex|cc|cx>
-/new <序号> -b <official|legacy|claude|codex|cc|cx>
+/new <路径> -b <official|cur|legacy|claude|codex|cc|cx>
+/new <序号> -b <official|cur|legacy|claude|codex|cc|cx>
 ```
 
 说明：
 
 - `-b` 是 `--backend` 的简写。
-- backend 值支持完整名称，也支持常用简写：`cc` = `claude`、`cx` = `codex`。
+- backend 值支持完整名称，也支持常用简写：`cur` = `cursor-official`、`cc` = `claude`、`cx` = `codex`；`legacy` 继续使用全写，`official` 仍兼容。
 - `--backend` 仅对**真正创建 session** 的 `/new <路径>`、`/new <序号>` 生效。
 - `/new`、`/new list`、`/new add-list`、`/new remove-list` 不创建 session，因此不使用 `--backend`。
 - 当前服务只允许选择启动时启用的 backend；若某 backend 未启用，机器人会直接报错。

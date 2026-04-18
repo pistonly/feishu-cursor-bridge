@@ -1,6 +1,7 @@
 import type { AcpBackend } from "../acp/runtime-contract.js";
 
 const BACKEND_SHORTCUTS: Partial<Record<AcpBackend, string>> = {
+  "cursor-official": "cur",
   claude: "cc",
   codex: "cx",
 };
@@ -81,7 +82,7 @@ export function buildWorkspaceWithBackendSelectCardMarkdown(
     }
 
     lines.push("");
-    lines.push("示例: `/new 1 -b cc --name my-project`");
+    lines.push("示例: `/new 1 -b cur --name my-project`");
   }
 
   return lines.join("\n");
@@ -115,6 +116,7 @@ export function buildWelcomeCardMarkdown(): string {
     "   • `codex` - Codex ACP 后端",
     "",
     "**3. 命令示例:**",
+    "   • `/new 1 -b cur` - 使用第 1 个工作区和 Cursor 官方后端",
     "   • `/new 1 -b cc` - 使用第 1 个工作区和 Claude 后端",
     "   • `/new 1 -b cx` - 使用第 1 个工作区和 Codex 后端",
     "   • `/new /path/to/project --name my-project` - 自定义路径并命名",
