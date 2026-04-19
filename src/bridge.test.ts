@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -670,6 +671,150 @@ test("默认不会写 slot 调试日志", async () => {
 
   const logDir = path.join(tmpRoot, "slot-logs");
   await assert.rejects(fsp.access(logDir));
+});
+
+
+
+test("/resume 会跳过预探活并只执行一次 loadSession 回放", async () => {
+  const bridge = new Bridge(createTestConfig());
+  const sentTexts: string[] = [];
+  const getActiveSessionCalls: Array<{
+    chatId: string;
+    userId: string;
+    chatType: string;
+    threadId: string | undefined;
+    skipAvailabilityProbe: boolean | undefined;
+  }> = [];
+  const loadSessionCalls: Array<{ sessionId: string; workspaceRoot: string }> = [];
+
+  const bridgeClient = new EventEmitter();
+  const runtime = {
+    supportsLoadSession: true,
+    bridgeClient,
+    async loadSession(sessionId: string, workspaceRoot: string): Promise<void> {
+      loadSessionCalls.push({ sessionId, workspaceRoot });
+      bridgeClient.emit("acp", {
+        type: "agent_message_chunk",
+        sessionId,
+        text: "历史回放内容",
+      });
+    },
+  };
+
+  (bridge as any).ensureMaintenanceStateLoaded = async () => {};
+  (bridge as any).runtimeRegistry = {
+    getRuntime() {
+      return runtime;
+    },
+  };
+  (bridge as any).sessionManager = {
+    async getActiveSession(
+      chatId: string,
+      userId: string,
+      chatType: string,
+      threadId?: string,
+      options?: { skipAvailabilityProbe?: boolean },
+    ) {
+      getActiveSessionCalls.push({
+        chatId,
+        userId,
+        chatType,
+        threadId,
+        skipAvailabilityProbe: options?.skipAvailabilityProbe,
+      });
+      return {
+        backend: "cursor-official",
+        sessionId: "session-1",
+        workspaceRoot: "/tmp/project",
+        chatId: "chat-1",
+        userId: "user-1",
+        chatType: "p2p",
+        createdAt: 0,
+        lastActiveAt: 0,
+      };
+    },
+  };
+  (bridge as any).feishuBot = {
+    stripBotMentionKeepLines(content: string) {
+      return content;
+    },
+    async sendText(_chatId: string, body: string): Promise<void> {
+      sentTexts.push(body);
+    },
+  };
+  (bridge as any).flushPendingSessionNotices = async () => {};
+
+  await (bridge as any).handleFeishuMessage(createMessage("/resume"));
+
+  assert.deepEqual(getActiveSessionCalls, [
+    {
+      chatId: "chat-1",
+      userId: "user-1",
+      chatType: "p2p",
+      threadId: undefined,
+      skipAvailabilityProbe: true,
+    },
+  ]);
+  assert.deepEqual(loadSessionCalls, [
+    { sessionId: "session-1", workspaceRoot: "/tmp/project" },
+  ]);
+  assert.equal(sentTexts.length, 1);
+  assert.match(sentTexts[0] ?? "", /已对当前 session 执行 ACP `session\/load`/);
+  assert.match(sentTexts[0] ?? "", /历史回放内容/);
+});
+
+test("/resume 在 backend 不支持 loadSession 时会直接报错", async () => {
+  const bridge = new Bridge(createTestConfig());
+  const sentTexts: string[] = [];
+  const loadSessionCalls: string[] = [];
+
+  (bridge as any).ensureMaintenanceStateLoaded = async () => {};
+  (bridge as any).runtimeRegistry = {
+    getRuntime() {
+      return {
+        supportsLoadSession: false,
+        async loadSession(): Promise<void> {
+          loadSessionCalls.push("unexpected");
+        },
+      };
+    },
+  };
+  (bridge as any).sessionManager = {
+    async getActiveSession(
+      _chatId: string,
+      _userId: string,
+      _chatType: string,
+      _threadId?: string,
+      options?: { skipAvailabilityProbe?: boolean },
+    ) {
+      assert.equal(options?.skipAvailabilityProbe, true);
+      return {
+        backend: "cursor-official",
+        sessionId: "session-1",
+        workspaceRoot: "/tmp/project",
+        chatId: "chat-1",
+        userId: "user-1",
+        chatType: "p2p",
+        createdAt: 0,
+        lastActiveAt: 0,
+      };
+    },
+  };
+  (bridge as any).feishuBot = {
+    stripBotMentionKeepLines(content: string) {
+      return content;
+    },
+    async sendText(_chatId: string, body: string): Promise<void> {
+      sentTexts.push(body);
+    },
+  };
+  (bridge as any).flushPendingSessionNotices = async () => {};
+
+  await (bridge as any).handleFeishuMessage(createMessage("/resume"));
+
+  assert.deepEqual(loadSessionCalls, []);
+  assert.equal(sentTexts.length, 1);
+  assert.match(sentTexts[0] ?? "", /未宣告 `loadSession`/);
 });
 
 test("preprocessBridgeMessage 会在群消息中分别使用单行与多行内容", async () => {

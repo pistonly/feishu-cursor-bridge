@@ -138,6 +138,7 @@ async function handleResumeCommand(
     msg.senderId,
     msg.chatType,
     ctx.threadScope(msg),
+    { skipAvailabilityProbe: true },
   );
   if (!session) {
     await ctx.feishuBot.sendText(

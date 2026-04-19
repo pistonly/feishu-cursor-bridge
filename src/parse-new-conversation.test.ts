@@ -117,6 +117,15 @@ test("parseNewConversationCommand 支持 /whoami", () => {
   });
 });
 
+test("parseNewConversationCommand 支持 /resume", () => {
+  assert.deepEqual(parseNewConversationCommand("/resume"), {
+    kind: "resume",
+  });
+  assert.deepEqual(parseNewConversationCommand("/RESUME"), {
+    kind: "resume",
+  });
+});
+
 test("matchesInterruptUserCommand 识别纯文本 /stop、/cancel", () => {
   assert.equal(matchesInterruptUserCommand("/stop"), true);
   assert.equal(matchesInterruptUserCommand("/cancel"), true);

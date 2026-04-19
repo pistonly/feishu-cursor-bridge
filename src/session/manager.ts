@@ -113,6 +113,9 @@ export class SessionManager {
     userId: string,
     chatTypeRaw: string,
     threadId?: string,
+    options?: {
+      skipAvailabilityProbe?: boolean;
+    },
   ): Promise<UserSession | null> {
     const chatType = this.chatType(chatTypeRaw);
     const key = this.makeKey(chatId, userId, chatType, threadId);
@@ -137,7 +140,7 @@ export class SessionManager {
     if (!slot) return null;
 
     if (!this.isExpiredAt(slot.session.lastActiveAt, now)) {
-      if (!restoredFromStore) {
+      if (!restoredFromStore && options?.skipAvailabilityProbe !== true) {
         await this.ensureSlotSessionAvailable(slot, now, key);
       }
       slot.session.lastActiveAt = now;

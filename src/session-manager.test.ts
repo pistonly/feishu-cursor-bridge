@@ -284,6 +284,47 @@ test("活跃 slot 的 ACP session 被上游清理后会自动重建并保留 CLI
   await waitForFlushes();
 });
 
+
+test("getActiveSession 支持显式跳过 availability probe 以避免额外 loadSession", async () => {
+  const storeFile = await createEmptyStoreFile();
+
+  const loadSessionCalls: string[] = [];
+  const acp: FakeAcpRuntime = {
+    supportsLoadSession: true,
+    supportsSetSessionMode: false,
+    supportsSetSessionModel: false,
+    async newSession(): Promise<{ sessionId: string }> {
+      return { sessionId: "acp-live" };
+    },
+    async loadSession(sessionId: string): Promise<void> {
+      loadSessionCalls.push(sessionId);
+    },
+    async cancelSession(): Promise<void> {},
+    async closeSession(): Promise<void> {},
+  };
+
+  const store = new SessionStore(storeFile);
+  const waitForFlushes = trackPendingFlushes(store);
+  const manager = new SessionManager(
+    acp as BridgeAcpRuntime,
+    store,
+    60_000,
+    { defaultWorkspaceRoot: WORKSPACE_ROOT, defaultBackend: "cursor-official" },
+  );
+
+  await manager.init();
+  await manager.createNewSlot(CHAT_ID, USER_ID, "p2p", WORKSPACE_ROOT, "cursor-official");
+
+  const session = await manager.getActiveSession(CHAT_ID, USER_ID, "p2p", undefined, {
+    skipAvailabilityProbe: true,
+  });
+
+  assert.ok(session);
+  assert.equal(session.sessionId, "acp-live");
+  assert.deepEqual(loadSessionCalls, []);
+  await waitForFlushes();
+});
+
 test("runtime 关闭主动探活时不会因 loadSession 探针误判而重建活跃 session", async () => {
   const storeFile = await createEmptyStoreFile();
 
