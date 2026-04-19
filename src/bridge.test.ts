@@ -801,12 +801,67 @@ test("resolvePromptContentFromResource 会格式化飞书附件提示", async ()
   }
 });
 
-test("resolvePromptContentFromResource 会返回富文本图片下载错误", async () => {
+test("resolvePromptContentFromResource 会返回结构化的飞书附件下载错误", async () => {
   const result = await resolvePromptContentFromResource(
     {
       feishuBot: {
         async downloadIncomingResourceToWorkspace() {
-          throw new Error("download failed");
+          throw {
+            message: "Internal error",
+            code: -32603,
+            data: {
+              details: "download failed",
+              fileKey: "file-1",
+            },
+          };
+        },
+      },
+    },
+    createMessage("请查看附件", {
+      incomingResource: {
+        apiType: "file",
+        fileKey: "file-1",
+        messageKind: "file",
+        displayName: "spec.pdf",
+      } as never,
+    }),
+    {
+      backend: "cursor-official",
+      sessionId: "session-1",
+      workspaceRoot: "/tmp/project",
+      chatId: "chat-1",
+      userId: "user-1",
+      chatType: "p2p",
+      createdAt: 0,
+      lastActiveAt: 0,
+    },
+    "请查看附件",
+    false,
+  );
+
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.match(result.errorText, /❌ 无法下载飞书附件:/);
+    assert.match(result.errorText, /Internal error/);
+    assert.match(result.errorText, /JSON-RPC code: -32603/);
+    assert.match(result.errorText, /"details": "download failed"/);
+    assert.doesNotMatch(result.errorText, /\[object Object\]/);
+  }
+});
+
+test("resolvePromptContentFromResource 会返回结构化的富文本图片下载错误", async () => {
+  const result = await resolvePromptContentFromResource(
+    {
+      feishuBot: {
+        async downloadIncomingResourceToWorkspace() {
+          throw {
+            message: "Internal error",
+            code: -32603,
+            data: {
+              details: "download failed",
+              imageKey: "img-1",
+            },
+          };
         },
       },
     },
@@ -828,10 +883,14 @@ test("resolvePromptContentFromResource 会返回富文本图片下载错误", as
     true,
   );
 
-  assert.deepEqual(result, {
-    ok: false,
-    errorText: "❌ 无法下载飞书富文本内嵌图片：download failed",
-  });
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.match(result.errorText, /❌ 无法下载飞书富文本内嵌图片:/);
+    assert.match(result.errorText, /Internal error/);
+    assert.match(result.errorText, /JSON-RPC code: -32603/);
+    assert.match(result.errorText, /"details": "download failed"/);
+    assert.doesNotMatch(result.errorText, /\[object Object\]/);
+  }
 });
 
 test("appendSlotPromptLog 会把上下文透传给 store", async () => {
@@ -1038,6 +1097,79 @@ test("忙时后来的排队消息会覆盖之前的排队消息", async () => {
   await first;
 
   assert.deepEqual(handledPrompts, ["first", "third"]);
+});
+
+test("结构化 prompt 错误会在飞书里展示具体细节而不是 [object Object]", async () => {
+  const bridge = new Bridge(createTestConfig());
+  const sentTexts: string[] = [];
+
+  const slot = {
+    slotIndex: 1,
+    session: {
+      backend: "cursor-official" as const,
+      sessionId: "session-1",
+      workspaceRoot: "/tmp/project",
+      chatId: "chat-1",
+      userId: "user-1",
+      chatType: "p2p" as const,
+      createdAt: 0,
+      lastActiveAt: 0,
+    },
+  };
+
+  (bridge as any).ensureMaintenanceStateLoaded = async () => {};
+  (bridge as any).flushPendingSessionNotices = async () => {};
+  (bridge as any).sessionManager = {
+    getSessionSnapshot() {
+      return {
+        sessionKey: "dm:user-1",
+        group: { slots: [slot], activeSlotIndex: 1, nextSlotIndex: 2 },
+        activeSlot: slot,
+        idleExpiresInMs: 60_000,
+      };
+    },
+    async getSlot() {
+      return slot;
+    },
+    setSlotLastTurn() {},
+  };
+  (bridge as any).conversations = new Map([
+    [
+      "cursor-official",
+      {
+        async handleUserPrompt() {
+          throw {
+            message: "Internal error",
+            code: -32603,
+            data: {
+              details: "spawn ENOENT",
+              command: "missing-binary",
+            },
+          };
+        },
+      },
+    ],
+  ]);
+  (bridge as any).feishuBot = {
+    stripBotMentionKeepLines(content: string) {
+      return content;
+    },
+    async sendText(_chatId: string, body: string): Promise<void> {
+      sentTexts.push(body);
+    },
+    async sendCard(): Promise<string> {
+      return "card-1";
+    },
+    async updateCard(): Promise<void> {},
+  };
+
+  await (bridge as any).handleFeishuMessage(createMessage("first"));
+
+  assert.equal(sentTexts.length, 1);
+  assert.match(sentTexts[0] ?? "", /❌ 处理出错: Internal error/);
+  assert.match(sentTexts[0] ?? "", /JSON-RPC code: -32603/);
+  assert.match(sentTexts[0] ?? "", /"details": "spawn ENOENT"/);
+  assert.doesNotMatch(sentTexts[0] ?? "", /\[object Object\]/);
 });
 
 test("appendSlotErrorLog 会吞掉 store 写入失败并告警", async () => {

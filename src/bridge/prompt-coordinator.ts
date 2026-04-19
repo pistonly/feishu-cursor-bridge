@@ -3,6 +3,7 @@ import type { FeishuBot, FeishuMessage } from "../feishu/bot.js";
 import type { SessionManager, SessionSlot } from "../session/manager.js";
 import type { SlotMessageLogStore } from "./slot-message-log.js";
 import type { ConversationService } from "./conversation-service.js";
+import { formatJsonRpcLikeError } from "../utils/format-json-rpc-error.js";
 import { NO_SESSION_HINT } from "./bridge-context.js";
 import { resolvePromptContentFromResource } from "./bridge-resource-prompt.js";
 import {
@@ -233,6 +234,7 @@ export class PromptCoordinator {
         this.activePrompts.add(promptKey);
         await this.executePrompt(nextDispatch, sessionKey);
       } catch (err) {
+        const errorText = formatJsonRpcLikeError(err);
         console.error(
           `[bridge] Error processing message from ${nextDispatch.msg.senderId}:`,
           err,
@@ -256,7 +258,7 @@ export class PromptCoordinator {
               session,
               msg: nextDispatch.msg,
             },
-            err instanceof Error ? err.message : String(err),
+            errorText,
           );
         } catch {
           // ignore logging failures while already handling an error
@@ -264,7 +266,7 @@ export class PromptCoordinator {
         await this.deps.getFeishuBot()
           .sendText(
             nextDispatch.msg.chatId,
-            `❌ 处理出错: ${err instanceof Error ? err.message : String(err)}`,
+            `❌ 处理出错: ${errorText}`,
             nextDispatch.msg.messageId,
             this.deps.threadReplyOpts(nextDispatch.msg),
           )

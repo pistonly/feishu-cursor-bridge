@@ -4,6 +4,7 @@ import {
   type FeishuMessage,
 } from "../feishu/bot.js";
 import type { UserSession } from "../session/manager.js";
+import { formatJsonRpcLikeError } from "../utils/format-json-rpc-error.js";
 import type { BridgeResourcePromptDeps } from "./bridge-context.js";
 
 function formatIncomingAttachmentPrompt(
@@ -70,7 +71,7 @@ export async function resolvePromptContentFromResource(
     } catch (error) {
       return {
         ok: false,
-        errorText: `❌ 无法下载飞书附件：${error instanceof Error ? error.message : String(error)}`,
+        errorText: `❌ 无法下载飞书附件:\n${formatJsonRpcLikeError(error)}`,
       };
     }
   }
@@ -93,7 +94,7 @@ export async function resolvePromptContentFromResource(
     } catch (error) {
       return {
         ok: false,
-        errorText: `❌ 无法下载飞书富文本内嵌图片：${error instanceof Error ? error.message : String(error)}`,
+        errorText: `❌ 无法下载飞书富文本内嵌图片:\n${formatJsonRpcLikeError(error)}`,
       };
     }
   }

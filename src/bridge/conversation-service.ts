@@ -3,15 +3,14 @@ import {
   formatSessionModelLabel,
   formatSessionUsage,
 } from "../acp/session-display-format.js";
-import type { Config } from "../config/index.js";
 import { assertPathInWorkspace } from "../acp/fs-sandbox.js";
+import type { BridgeAcpRuntime } from "../acp/runtime-contract.js";
 import type { BridgeAcpEvent } from "../acp/types.js";
-import type {
-  BridgeAcpRuntime,
-} from "../acp/runtime-contract.js";
+import type { Config } from "../config/index.js";
 import { FeishuBot, type FeishuMessage } from "../feishu/bot.js";
 import { FeishuCardState, isRenderableEvent } from "../feishu/renderer.js";
 import type { UserSession } from "../session/manager.js";
+import { formatJsonRpcLikeError } from "../utils/format-json-rpc-error.js";
 
 const AUTH_HINT_PATTERNS = [
   "unable to process your request because cursor-agent cli is not authenticated",
@@ -297,6 +296,7 @@ export class ConversationService {
               replyOpts,
             );
           } catch (err) {
+            const errorText = formatJsonRpcLikeError(err);
             console.warn(
               `[conversation] FEISHU_SEND_FILE failed path=${raw} sessionId=${session.sessionId}`,
               err instanceof Error ? err.message : err,
@@ -304,9 +304,7 @@ export class ConversationService {
             try {
               await this.feishu.sendText(
                 msg.chatId,
-                `⚠️ 未能发送文件 \`${raw}\`：${
-                  err instanceof Error ? err.message : String(err)
-                }`,
+                `⚠️ 未能发送文件 \`${raw}\`:\n${errorText}`,
                 msg.messageId,
                 replyOpts,
               );
