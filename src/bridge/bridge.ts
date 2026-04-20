@@ -332,7 +332,19 @@ export class Bridge {
     }
   }
 
+  private hasExplicitUpgradeAdmins(): boolean {
+    const admins = this.config.bridge.upgradeAdmins;
+    return (
+      admins.openIds.size > 0 ||
+      admins.userIds.size > 0 ||
+      admins.unionIds.size > 0
+    );
+  }
+
   private isUpgradeAdmin(msg: FeishuMessage): boolean {
+    if (!this.hasExplicitUpgradeAdmins()) {
+      return this.isBridgeAdmin(msg.senderId);
+    }
     const admins = this.config.bridge.upgradeAdmins;
     const senderIds = msg.senderIds;
     return (
@@ -389,6 +401,18 @@ export class Bridge {
       await this.feishuBot.sendText(
         msg.chatId,
         "❌ 当前未启用聊天升级命令。",
+        msg.messageId,
+        this.threadReplyOpts(msg),
+      );
+      return;
+    }
+    if (
+      !this.hasExplicitUpgradeAdmins() &&
+      this.config.bridge.adminUserIds.length === 0
+    ) {
+      await this.feishuBot.sendText(
+        msg.chatId,
+        "❌ 当前未配置升级管理员：请设置 `BRIDGE_ADMIN_USER_IDS`，或显式配置 `BRIDGE_UPGRADE_ADMIN_OPEN_IDS` / `BRIDGE_UPGRADE_ADMIN_USER_IDS` / `BRIDGE_UPGRADE_ADMIN_UNION_IDS`。",
         msg.messageId,
         this.threadReplyOpts(msg),
       );

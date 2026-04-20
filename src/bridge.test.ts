@@ -348,10 +348,113 @@ test("/upgrade 会写入 queued 状态并启动后台 runner", async () => {
   assert.equal((attempts[0] as { id?: string }).id, launchedAttemptId);
 });
 
+test("/upgrade 在未配置专用 allowlist 时默认继承 BRIDGE_ADMIN_USER_IDS", async () => {
+  const config = createTestConfig();
+  config.bridge.enableUpgradeCommand = true;
+  config.bridge.adminUserIds = ["ou_admin_123"];
+  const bridge = new Bridge(config);
+  const sentTexts: string[] = [];
+  const attempts: unknown[] = [];
+  let flushCalls = 0;
+  let launchedAttemptId: string | undefined;
+
+  (bridge as any).ensureMaintenanceStateLoaded = async () => {};
+  (bridge as any).isManagedByService = async () => true;
+  (bridge as any).launchBackgroundUpgrade = (attemptId: string) => {
+    launchedAttemptId = attemptId;
+  };
+  (bridge as any).upgradeResultStore = {
+    getAttempt() {
+      return undefined;
+    },
+    setAttempt(attempt: unknown) {
+      attempts.push(attempt);
+    },
+    async flush(): Promise<void> {
+      flushCalls += 1;
+    },
+  };
+  (bridge as any).feishuBot = {
+    stripBotMentionKeepLines(content: string) {
+      return content;
+    },
+    async sendText(_chatId: string, body: string): Promise<void> {
+      sentTexts.push(body);
+    },
+  };
+
+  await (bridge as any).handleFeishuMessage(
+    createMessage("/upgrade", {
+      senderId: "ou_admin_123",
+    }),
+  );
+
+  assert.equal(sentTexts.length, 1);
+  assert.match(sentTexts[0] ?? "", /已接受升级请求/);
+  assert.equal(flushCalls, 1);
+  assert.equal(attempts.length, 1);
+  assert.equal(typeof launchedAttemptId, "string");
+});
+
+test("/upgrade 在未配置任何有效管理员时返回明确错误", async () => {
+  const config = createTestConfig();
+  config.bridge.enableUpgradeCommand = true;
+  config.bridge.adminUserIds = [];
+  const bridge = new Bridge(config);
+  const sentTexts: string[] = [];
+
+  (bridge as any).ensureMaintenanceStateLoaded = async () => {};
+  (bridge as any).isManagedByService = async () => true;
+  (bridge as any).feishuBot = {
+    stripBotMentionKeepLines(content: string) {
+      return content;
+    },
+    async sendText(_chatId: string, body: string): Promise<void> {
+      sentTexts.push(body);
+    },
+  };
+
+  await (bridge as any).handleFeishuMessage(createMessage("/upgrade"));
+
+  assert.equal(sentTexts.length, 1);
+  assert.match(sentTexts[0] ?? "", /未配置升级管理员/);
+  assert.match(sentTexts[0] ?? "", /BRIDGE_ADMIN_USER_IDS/);
+});
+
+test("/upgrade 显式配置专用 allowlist 时会覆盖 BRIDGE_ADMIN_USER_IDS fallback", async () => {
+  const config = createTestConfig();
+  config.bridge.enableUpgradeCommand = true;
+  config.bridge.adminUserIds = ["ou_admin_123"];
+  config.bridge.upgradeAdmins.openIds.add("ou_other_admin");
+  const bridge = new Bridge(config);
+  const sentTexts: string[] = [];
+
+  (bridge as any).ensureMaintenanceStateLoaded = async () => {};
+  (bridge as any).isManagedByService = async () => true;
+  (bridge as any).feishuBot = {
+    stripBotMentionKeepLines(content: string) {
+      return content;
+    },
+    async sendText(_chatId: string, body: string): Promise<void> {
+      sentTexts.push(body);
+    },
+  };
+
+  await (bridge as any).handleFeishuMessage(
+    createMessage("/upgrade", {
+      senderId: "ou_admin_123",
+      senderIds: { openId: "ou_admin_123" },
+    }),
+  );
+
+  assert.equal(sentTexts.length, 1);
+  assert.match(sentTexts[0] ?? "", /仅管理员可用/);
+});
+
 test("/upgrade 在 active prompt 存在时仅允许 --force", async () => {
   const config = createTestConfig();
   config.bridge.enableUpgradeCommand = true;
-  config.bridge.upgradeAdmins.openIds.add("ou_admin_123");
+  config.bridge.adminUserIds = ["ou_admin_123"];
   const bridge = new Bridge(config);
   const sentTexts: string[] = [];
   let launchCalls = 0;
@@ -381,13 +484,11 @@ test("/upgrade 在 active prompt 存在时仅允许 --force", async () => {
   await (bridge as any).handleFeishuMessage(
     createMessage("/upgrade", {
       senderId: "ou_admin_123",
-      senderIds: { openId: "ou_admin_123" },
     }),
   );
   await (bridge as any).handleFeishuMessage(
     createMessage("/upgrade --force", {
       senderId: "ou_admin_123",
-      senderIds: { openId: "ou_admin_123" },
     }),
   );
 

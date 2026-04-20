@@ -43,7 +43,7 @@ export function formatBridgeCommandsHelp(_backend: AcpBackend): string {
     "**其它**",
     "• `/restart` / `/restart --force` — 重启 bridge 服务（仅管理员私聊）",
     "• `/update` / `/update --force` — `npm install` + `npm run build` 后重启（仅管理员私聊）",
-    "• `/upgrade` / `/upgrade --force` — 从 Git 远端 fast-forward 拉取并执行 update + restart（仅升级管理员）",
+    "• `/upgrade` / `/upgrade --force` — 从 Git 远端 fast-forward 拉取并执行 update + restart（默认继承维护管理员；若配置 `BRIDGE_UPGRADE_ADMIN_*` 则仅专用管理员）",
     "• `/whoami` — 返回当前消息识别到的飞书用户 ID（可用于 `BRIDGE_ADMIN_USER_IDS`）",
     "• `/status` / `/状态` — 桥接与当前 session 统计",
     "• `/commands` / `/help` / `/帮助` / 单独 `/`（或全角 `／`）— 显示本列表（无需 session）",
