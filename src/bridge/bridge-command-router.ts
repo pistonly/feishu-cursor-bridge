@@ -117,7 +117,9 @@ ${lines.join("\n\n")}
 • \`/reply [编号或名称]\` — 重发上一轮缓存回复
 • \`/fileback <说明>\` — 向 Agent 附带「用 FEISHU_SEND_FILE 发文件」说明后再发你的任务
 • \`/stop\` / \`/cancel\` — 中断**当前活跃**槽位正在生成的回复，并撤销该槽位排队消息（不关 session）
-• \`/resume\` — 对当前 session 执行 ACP \`session/load\`（测试/恢复）
+• \`/resume\` — 列出当前 project 可恢复的历史 session
+• \`/resume 0\` — 对当前 session 执行 ACP \`session/load\`
+• \`/resume <序号或sessionId>\` — 恢复到指定历史 session
 • \`/mode <模式ID>\` — 切换当前 session 模式
 • \`/rename <新名字>\` — 重命名当前 session
 • \`/rename <编号或名称> <新名字>\` — 重命名指定 session
@@ -129,69 +131,197 @@ ${lines.join("\n\n")}
   );
 }
 
+function formatResumeHistoryLine(
+  index: number,
+  entry: {
+    backend: AcpBackend;
+    sessionId: string;
+    label?: string;
+    lastActiveAt: number;
+  },
+  formatIsoTimestamp: (ms: number) => string,
+  title = "历史 session",
+): string {
+  return [
+    `【${index}】${title}`,
+    `  Backend：\`${entry.backend}\``,
+    `  sessionId：\`${entry.sessionId}\``,
+    ...(entry.label ? [`  标签：${entry.label}`] : []),
+    `  最近活跃：${formatIsoTimestamp(entry.lastActiveAt)}`,
+  ].join("\n");
+}
+
+function buildResumeReplayMessage(headerLines: string[], replayMd: string): string {
+  const header = `${headerLines.join("\n")}\n\n---\n\n**会话历史回放（适配器推送）**\n\n`;
+  const emptyHint =
+    "_（未收到可展示的文本回放：可能历史为空、或仅有非 text 内容块；可设 `ACP_RELOAD_TRACE_LOG=true` 查看入站 `session/update`）_";
+
+  let body = replayMd.trim() ? replayMd.trim() : emptyHint;
+  const maxTotal = 28_000;
+  if (header.length + body.length > maxTotal) {
+    body =
+      body.slice(0, Math.max(0, maxTotal - header.length - 120)) +
+      "\n\n_（回放过长，已截断）_";
+  }
+  return header + body;
+}
+
 async function handleResumeCommand(
   ctx: BridgeMessageHandlerDeps,
   msg: FeishuMessage,
+  target: number | string | null,
 ): Promise<void> {
-  const session = await ctx.sessionManager.getActiveSession(
-    msg.chatId,
-    msg.senderId,
-    msg.chatType,
-    ctx.threadScope(msg),
-    { skipAvailabilityProbe: true },
-  );
-  if (!session) {
+  if (target === null) {
+    const listed = await ctx.sessionManager.listResumeHistoryForProject(
+      msg.chatId,
+      msg.senderId,
+      msg.chatType,
+      ctx.threadScope(msg),
+    );
+    await ctx.flushPendingSessionNotices(msg);
+
+    const currentEntry = listed.currentEntry ?? {
+      backend: listed.activeSlot.session.backend,
+      sessionId: listed.activeSlot.session.sessionId,
+      workspaceRoot: listed.activeSlot.session.workspaceRoot,
+      lastActiveAt: listed.activeSlot.session.lastActiveAt,
+      preferredModelId: listed.activeSlot.session.preferredModelId,
+      recovery: listed.activeSlot.session.recovery,
+      label: undefined,
+    };
+    const lines = [
+      `📚 当前 project 可恢复的历史 session（工作区：\`${listed.activeSlot.session.workspaceRoot}\`）`,
+      "",
+      formatResumeHistoryLine(0, currentEntry, ctx.formatIsoTimestamp, "当前 session"),
+      ...(listed.entries.length > 0
+        ? ["", ...listed.entries.map((entry, index) =>
+            formatResumeHistoryLine(index + 1, entry, ctx.formatIsoTimestamp),
+          )]
+        : ["", "（当前 project 暂无其它可恢复的历史 session）"]),
+      "",
+      "用法：",
+      "• `/resume 0` — 对当前 session 执行 ACP `session/load`",
+      "• `/resume <序号>` — 恢复到对应历史 session",
+      "• `/resume <sessionId>` — 直接恢复指定历史 session",
+    ];
     await ctx.feishuBot.sendText(
       msg.chatId,
-      `❌ ${NO_SESSION_HINT}`,
+      lines.join("\n"),
       msg.messageId,
       ctx.threadReplyOpts(msg),
     );
     return;
   }
-  const runtime = ctx.runtimeForSession(session);
+
+  if (target === 0) {
+    const session = await ctx.sessionManager.getActiveSession(
+      msg.chatId,
+      msg.senderId,
+      msg.chatType,
+      ctx.threadScope(msg),
+      { skipAvailabilityProbe: true },
+    );
+    if (!session) {
+      await ctx.feishuBot.sendText(
+        msg.chatId,
+        `❌ ${NO_SESSION_HINT}`,
+        msg.messageId,
+        ctx.threadReplyOpts(msg),
+      );
+      return;
+    }
+    const runtime = ctx.runtimeForSession(session);
+    await ctx.flushPendingSessionNotices(msg);
+    if (!runtime.supportsLoadSession) {
+      await ctx.feishuBot.sendText(
+        msg.chatId,
+        "❌ 当前 Agent 未宣告 `loadSession`，无法执行 `/resume 0`。",
+        msg.messageId,
+        ctx.threadReplyOpts(msg),
+      );
+      return;
+    }
+    try {
+      const replayMd = await captureAcpReplayDuring(
+        runtime.bridgeClient,
+        session.sessionId,
+        () => runtime.loadSession(session.sessionId, session.workspaceRoot),
+        {
+          showAvailableCommands: ctx.config.bridge.showAcpAvailableCommands,
+        },
+      );
+      await ctx.feishuBot.sendText(
+        msg.chatId,
+        buildResumeReplayMessage(
+          [
+            "✅ 已对当前 session 执行 ACP `session/load`。",
+            `• Backend：\`${session.backend}\``,
+            `• sessionId：\`${session.sessionId}\``,
+            `• 工作区：\`${session.workspaceRoot}\``,
+          ],
+          replayMd,
+        ),
+        msg.messageId,
+        ctx.threadReplyOpts(msg),
+      );
+    } catch (err) {
+      await ctx.feishuBot.sendText(
+        msg.chatId,
+        `❌ /resume 0 失败:\n${formatJsonRpcLikeError(err)}`,
+        msg.messageId,
+        ctx.threadReplyOpts(msg),
+      );
+    }
+    return;
+  }
+
+  const resolved = await ctx.sessionManager.resolveResumeHistoryForProject(
+    msg.chatId,
+    msg.senderId,
+    msg.chatType,
+    target,
+    ctx.threadScope(msg),
+  );
+  const runtime = ctx.runtimeForBackend(resolved.entry.backend);
   await ctx.flushPendingSessionNotices(msg);
   if (!runtime.supportsLoadSession) {
     await ctx.feishuBot.sendText(
       msg.chatId,
-      "❌ 当前 Agent 未宣告 `loadSession`，无法执行 `/resume`。",
+      `❌ 目标历史 session 的 backend \`${resolved.entry.backend}\` 未宣告 \`loadSession\`，无法恢复。`,
       msg.messageId,
       ctx.threadReplyOpts(msg),
     );
     return;
   }
+
   try {
     const replayMd = await captureAcpReplayDuring(
       runtime.bridgeClient,
-      session.sessionId,
-      () => runtime.loadSession(session.sessionId, session.workspaceRoot),
+      resolved.entry.sessionId,
+      () => runtime.loadSession(resolved.entry.sessionId, resolved.entry.workspaceRoot),
       {
         showAvailableCommands: ctx.config.bridge.showAcpAvailableCommands,
       },
     );
-
-    const header =
-      `✅ 已对当前 session 执行 ACP \`session/load\`。\n` +
-      `• sessionId：\`${session.sessionId}\`\n` +
-      `• 工作区：\`${session.workspaceRoot}\`\n\n` +
-      `---\n\n` +
-      `**会话历史回放（适配器推送）**\n\n`;
-
-    const emptyHint =
-      "_（未收到可展示的文本回放：可能历史为空、或仅有非 text 内容块；可设 `ACP_RELOAD_TRACE_LOG=true` 查看入站 `session/update`）_";
-
-    let body = replayMd.trim() ? replayMd.trim() : emptyHint;
-
-    const maxTotal = 28_000;
-    if (header.length + body.length > maxTotal) {
-      body =
-        body.slice(0, Math.max(0, maxTotal - header.length - 120)) +
-        "\n\n_（回放过长，已截断）_";
-    }
-
+    const rebound = await ctx.sessionManager.rebindActiveSlotToResumeHistory(
+      msg.chatId,
+      msg.senderId,
+      msg.chatType,
+      resolved.entry,
+      ctx.threadScope(msg),
+    );
     await ctx.feishuBot.sendText(
       msg.chatId,
-      header + body,
+      buildResumeReplayMessage(
+        [
+          `✅ 已将当前活跃槽位恢复到历史 session ${formatSessionLabel(rebound)}。`,
+          `• Backend：\`${resolved.entry.backend}\``,
+          `• sessionId：\`${resolved.entry.sessionId}\``,
+          `• 工作区：\`${resolved.entry.workspaceRoot}\``,
+          ...(resolved.entry.label ? [`• 标签：${resolved.entry.label}`] : []),
+        ],
+        replayMd,
+      ),
       msg.messageId,
       ctx.threadReplyOpts(msg),
     );
@@ -648,7 +778,7 @@ async function handleBridgeManagedCommand(
     }
 
     if (command.kind === "resume") {
-      await handleResumeCommand(ctx, msg);
+      await handleResumeCommand(ctx, msg, command.target);
       return true;
     }
 

@@ -204,7 +204,61 @@
 
 ---
 
-### 5. 中断当前回复（`/stop` / `/cancel`）
+### 5. 恢复历史 session（`/resume`）
+
+```text
+/resume
+/resume 0
+/resume <序号>
+/resume <sessionId>
+```
+
+**作用**：按当前活跃 session 的 `workspaceRoot`（project）列出并恢复该 project 下已持久化的历史 session。
+
+- `/resume`：列出当前 project 可恢复的历史 session
+- `/resume 0`：保留旧行为，对**当前 session** 执行一次 ACP `session/load`
+- `/resume <序号>`：恢复列表中的第 N 条历史 session
+- `/resume <sessionId>`：按精确 `sessionId` 恢复指定历史 session
+
+**列表内容**：
+
+- backend
+- 真实 `sessionId`
+- 最近一次问题生成的标签（若已有）
+- 最近活跃时间
+
+**持久化规则**：
+
+- 以 project（规范化后的 `workspaceRoot`）为维度保存
+- 每个 project 最多保留 10 条历史 session
+- 标签来自该 session 最近一次成功对话的用户原始问题，会做单行化与长度裁剪
+
+**恢复行为**：
+
+- 恢复时会调用目标 backend 的 ACP `session/load`
+- 成功后，当前活跃槽位会重绑到该历史 session
+- 若目标记录来自不同 backend，当前槽位也会切换到对应 backend
+- 重绑后会清空该槽位缓存的上一轮 `/reply` 内容，避免误展示旧缓存
+
+**失败场景**：
+
+- 当前没有活跃 session：会提示先创建 session
+- 目标 backend 未宣告 `loadSession`：会拒绝恢复
+- 指定序号或 `sessionId` 不存在：会提示先发送 `/resume` 查看列表
+- `loadSession` 失败：当前槽位保持不变
+
+**示例**：
+
+```text
+/resume
+/resume 0
+/resume 1
+/resume claude-session-abc123
+```
+
+---
+
+### 6. 中断当前回复（`/stop` / `/cancel`）
 
 ```text
 /stop
@@ -226,7 +280,7 @@
 
 ---
 
-### 6. 关闭 session（`/close`）
+### 7. 关闭 session（`/close`）
 
 ```text
 /close <编号或名称>
@@ -247,7 +301,7 @@
 
 ---
 
-### 7. 重命名 session（`/rename`）
+### 8. 重命名 session（`/rename`）
 
 ```text
 /rename <新名字>
@@ -271,7 +325,7 @@
 
 ---
 
-### 8. 切换模式（`/mode`）
+### 9. 切换模式（`/mode`）
 
 ```text
 /mode
@@ -301,7 +355,7 @@ backend 差异：
 
 ---
 
-### 9. 通过飞书发文件（`/fileback`）
+### 10. 通过飞书发文件（`/fileback`）
 
 ```text
 /fileback <任务说明>
@@ -318,7 +372,7 @@ backend 差异：
 
 ---
 
-### 10. 查询当前用户 ID（`/whoami`）
+### 11. 查询当前用户 ID（`/whoami`）
 
 ```text
 /whoami
@@ -332,7 +386,7 @@ backend 差异：
 
 ---
 
-### 11. 从 GitHub 升级（`/upgrade`）
+### 12. 从 GitHub 升级（`/upgrade`）
 
 ```text
 /upgrade
@@ -360,7 +414,7 @@ backend 差异：
 
 ---
 
-### 12. 状态（`/status`）
+### 13. 状态（`/status`）
 
 **等价命令**：`/status`、`/状态`
 
@@ -387,7 +441,7 @@ backend 差异：
 
 ---
 
-### 13. 切换模型（`/model`）
+### 14. 切换模型（`/model`）
 
 **格式**：
 

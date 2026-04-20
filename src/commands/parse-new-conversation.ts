@@ -75,7 +75,7 @@ export type NewConversationCommand =
   | { kind: "close"; target: number | string }
   | { kind: "whoami" }
   | { kind: "sessions" }
-  | { kind: "resume" }
+  | { kind: "resume"; target: number | string | null }
   | { kind: "restart"; force: boolean; invalidUsage?: boolean }
   | { kind: "update"; force: boolean; invalidUsage?: boolean }
   | { kind: "upgrade"; force: boolean; invalidUsage?: boolean };
@@ -111,7 +111,14 @@ export function parseNewConversationCommand(
 
   if (cmd === "whoami") return { kind: "whoami" };
   if (cmd === "sessions" || cmd === "session") return { kind: "sessions" };
-  if (cmd === "resume") return { kind: "resume" };
+  if (cmd === "resume") {
+    if (tokens.length === 1) return { kind: "resume", target: null };
+    const arg = tokens[1];
+    return {
+      kind: "resume",
+      target: /^\d+$/.test(arg) ? parseInt(arg, 10) : arg,
+    };
+  }
   if (cmd === "restart" || cmd === "update" || cmd === "upgrade") {
     return parseMaintenanceCommand(cmd, tokens.slice(1));
   }

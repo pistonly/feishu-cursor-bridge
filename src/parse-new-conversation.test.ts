@@ -120,9 +120,23 @@ test("parseNewConversationCommand 支持 /whoami", () => {
 test("parseNewConversationCommand 支持 /resume", () => {
   assert.deepEqual(parseNewConversationCommand("/resume"), {
     kind: "resume",
+    target: null,
   });
   assert.deepEqual(parseNewConversationCommand("/RESUME"), {
     kind: "resume",
+    target: null,
+  });
+  assert.deepEqual(parseNewConversationCommand("/resume 0"), {
+    kind: "resume",
+    target: 0,
+  });
+  assert.deepEqual(parseNewConversationCommand("/resume 2"), {
+    kind: "resume",
+    target: 2,
+  });
+  assert.deepEqual(parseNewConversationCommand("/resume session-abc"), {
+    kind: "resume",
+    target: "session-abc",
   });
 });
 

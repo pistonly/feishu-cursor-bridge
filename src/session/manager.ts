@@ -7,6 +7,7 @@ import type {
 } from "../acp/runtime-contract.js";
 import type {
   SessionStore,
+  PersistedResumeHistoryEntry,
   PersistedSessionGroup,
   PersistedSlotRecord,
 } from "./store.js";
@@ -44,6 +45,17 @@ export interface SessionSnapshot {
   group: UserSessionGroup;
   activeSlot: SessionSlot;
   idleExpiresInMs: number | null;
+}
+
+
+export interface ResumeHistoryEntry {
+  backend: AcpBackend;
+  sessionId: string;
+  preferredModelId?: string;
+  recovery?: SessionRecovery;
+  workspaceRoot: string;
+  lastActiveAt: number;
+  label?: string;
 }
 
 export interface SlotListItem {
@@ -409,6 +421,7 @@ export class SessionManager {
     const runtime = this.runtimeForSlot(slot);
     await runtime.cancelSession(slot.session.sessionId);
     await runtime.closeSession(slot.session.sessionId);
+    this.removeResumeHistoryForSession(slot.session);
 
     group.slots = group.slots.filter((s) => s.slotIndex !== slot.slotIndex);
 
@@ -461,6 +474,7 @@ export class SessionManager {
       const runtime = this.runtimeForSlot(slot);
       await runtime.cancelSession(slot.session.sessionId);
       await runtime.closeSession(slot.session.sessionId);
+      this.removeResumeHistoryForSession(slot.session);
     }
 
     this.groups.delete(key);
@@ -605,6 +619,131 @@ export class SessionManager {
     return { active: this.groups.size, total };
   }
 
+  async listResumeHistoryForProject(
+    chatId: string,
+    userId: string,
+    chatTypeRaw: string,
+    threadId?: string,
+  ): Promise<{
+    activeSlot: SessionSlot;
+    currentEntry?: ResumeHistoryEntry;
+    entries: ResumeHistoryEntry[];
+  }> {
+    const activeSlot = await this.getSlot(
+      chatId,
+      userId,
+      chatTypeRaw,
+      null,
+      threadId,
+    );
+    const all = this.getResumeHistoryEntriesForSession(activeSlot.session);
+    const currentEntry = all.find((entry) =>
+      this.isSameSessionEntry(entry, activeSlot.session.backend, activeSlot.session.sessionId),
+    );
+    return {
+      activeSlot,
+      currentEntry,
+      entries: all.filter(
+        (entry) =>
+          !this.isSameSessionEntry(entry, activeSlot.session.backend, activeSlot.session.sessionId),
+      ),
+    };
+  }
+
+  async resolveResumeHistoryForProject(
+    chatId: string,
+    userId: string,
+    chatTypeRaw: string,
+    target: number | string,
+    threadId?: string,
+  ): Promise<{
+    activeSlot: SessionSlot;
+    currentEntry?: ResumeHistoryEntry;
+    entries: ResumeHistoryEntry[];
+    entry: ResumeHistoryEntry;
+  }> {
+    const listed = await this.listResumeHistoryForProject(
+      chatId,
+      userId,
+      chatTypeRaw,
+      threadId,
+    );
+    if (typeof target === "number") {
+      const entry = listed.entries[target - 1];
+      if (!entry) {
+        throw new Error(
+          `找不到当前 project 下第 ${target} 条可恢复 session。请先发送 \`/resume\` 查看列表。`,
+        );
+      }
+      return { ...listed, entry };
+    }
+
+    const normalizedSessionId = target.trim();
+    const entry = listed.entries.find((item) => item.sessionId === normalizedSessionId);
+    if (!entry) {
+      throw new Error(
+        `当前 project 下找不到 sessionId 为 \`${normalizedSessionId}\` 的历史 session。请先发送 \`/resume\` 查看列表。`,
+      );
+    }
+    return { ...listed, entry };
+  }
+
+  async rebindActiveSlotToResumeHistory(
+    chatId: string,
+    userId: string,
+    chatTypeRaw: string,
+    entry: ResumeHistoryEntry,
+    threadId?: string,
+  ): Promise<SessionSlot> {
+    const chatType = this.chatType(chatTypeRaw);
+    const key = this.makeKey(chatId, userId, chatType, threadId);
+    const now = Date.now();
+
+    let group = this.groups.get(key);
+    if (!group) {
+      group = await this.restoreGroupFromStore(
+        key,
+        chatId,
+        userId,
+        chatType,
+        now,
+        threadId,
+      );
+    }
+    if (!group || group.slots.length === 0) {
+      throw new Error("当前没有任何 session。");
+    }
+
+    const activeSlot = this.findSlot(group, group.activeSlotIndex);
+    if (!activeSlot) {
+      throw new Error("当前没有可用的活跃 session。");
+    }
+
+    const preferredModelId = entry.preferredModelId?.trim();
+    activeSlot.session = {
+      ...activeSlot.session,
+      backend: entry.backend,
+      sessionId: entry.sessionId,
+      workspaceRoot: path.resolve(entry.workspaceRoot),
+      lastActiveAt: now,
+      ...(entry.recovery ? { recovery: entry.recovery } : {}),
+    };
+    if (!entry.recovery) {
+      delete activeSlot.session.recovery;
+    }
+    if (preferredModelId) {
+      activeSlot.session.preferredModelId = preferredModelId;
+    } else {
+      delete activeSlot.session.preferredModelId;
+    }
+    delete activeSlot.lastPrompt;
+    delete activeSlot.lastReply;
+
+    this.groups.set(key, group);
+    this.persistGroup(key, group);
+    return activeSlot;
+  }
+
   setSlotLastTurn(
     chatId: string,
     userId: string,
@@ -622,6 +761,24 @@ export class SessionManager {
     if (!slot) return;
     slot.lastPrompt = prompt;
     slot.lastReply = reply;
+  }
+
+  setActiveSessionResumeLabel(
+    chatId: string,
+    userId: string,
+    chatTypeRaw: string,
+    label: string | undefined,
+    threadId?: string,
+  ): void {
+    const chatType = this.chatType(chatTypeRaw);
+    const key = this.makeKey(chatId, userId, chatType, threadId);
+    const group = this.groups.get(key);
+    if (!group) return;
+    const activeSlot = this.findSlot(group, group.activeSlotIndex);
+    if (!activeSlot) return;
+    activeSlot.session.lastActiveAt = Date.now();
+    this.upsertResumeHistoryForSession(activeSlot.session, label);
+    this.persistGroup(key, group);
   }
 
   setActiveSessionPreferredModel(
@@ -671,6 +828,7 @@ export class SessionManager {
         const runtime = this.runtimeForSlot(slot);
         await runtime.cancelSession(slot.session.sessionId);
         await runtime.closeSession(slot.session.sessionId);
+        this.removeResumeHistoryForSession(slot.session);
       }
       group.slots = group.slots.filter(
         (s) => !this.isExpiredAt(s.session.lastActiveAt, now),
@@ -766,9 +924,82 @@ export class SessionManager {
     return group.slots.find((s) => s.name === target);
   }
 
+  private getResumeHistoryEntriesForSession(
+    session: UserSession,
+  ): ResumeHistoryEntry[] {
+    return this.store.getResumeHistory(session.workspaceRoot).map((entry) => ({
+      backend: entry.backend,
+      sessionId: entry.sessionId,
+      preferredModelId: entry.preferredModelId,
+      recovery: entry.recovery,
+      workspaceRoot: entry.workspaceRoot,
+      lastActiveAt: entry.lastActiveAt,
+      label: entry.label,
+    }));
+  }
+
+  private isSameSessionEntry(
+    entry: ResumeHistoryEntry | PersistedResumeHistoryEntry,
+    backend: AcpBackend,
+    sessionId: string,
+  ): boolean {
+    return entry.backend === backend && entry.sessionId === sessionId;
+  }
+
   private normalizeSlotName(name?: string): string | undefined {
     const normalized = name?.trim();
     return normalized ? normalized : undefined;
+  }
+
+  private normalizeResumeLabel(label: string | undefined): string | undefined {
+    const collapsed = label?.replace(/\s+/g, " ").trim();
+    if (!collapsed) return undefined;
+    const maxLength = 100;
+    if (collapsed.length <= maxLength) return collapsed;
+    return `${collapsed.slice(0, maxLength - 1).trimEnd()}…`;
+  }
+
+  private toPersistedResumeHistoryEntry(
+    session: UserSession,
+    label?: string,
+  ): PersistedResumeHistoryEntry {
+    const normalizedLabel = this.normalizeResumeLabel(label);
+    return {
+      backend: session.backend,
+      sessionId: session.sessionId,
+      ...(session.preferredModelId?.trim()
+        ? { preferredModelId: session.preferredModelId.trim() }
+        : {}),
+      ...(session.recovery ? { recovery: session.recovery } : {}),
+      workspaceRoot: path.resolve(session.workspaceRoot),
+      lastActiveAt: session.lastActiveAt,
+      ...(normalizedLabel ? { label: normalizedLabel } : {}),
+    };
+  }
+
+  private upsertResumeHistoryForSession(
+    session: UserSession,
+    label?: string,
+  ): void {
+    const entry = this.toPersistedResumeHistoryEntry(session, label);
+    const entries = this.store.getResumeHistory(entry.workspaceRoot);
+    entries.push(entry);
+    this.store.setResumeHistory(entry.workspaceRoot, entries);
+  }
+
+  private removeResumeHistoryForSession(session: UserSession): void {
+    const workspaceRoot = path.resolve(session.workspaceRoot);
+    const remaining = this.store
+      .getResumeHistory(workspaceRoot)
+      .filter(
+        (entry) =>
+          !this.isSameSessionEntry(entry, session.backend, session.sessionId),
+      );
+    if (remaining.length === 0) {
+      this.store.deleteResumeHistory(workspaceRoot);
+      return;
+    }
+    this.store.setResumeHistory(workspaceRoot, remaining);
   }
 
   private ensureSlotNameAvailable(
@@ -922,10 +1153,10 @@ export class SessionManager {
     },
   ): Promise<void> {
     const runtime = this.runtimeForSlot(slot);
-    const oldId = slot.session.sessionId;
+    const oldSession = { ...slot.session };
     if (runtime.supportsLoadSession && !options?.skipLoadSessionProbe) {
       try {
-        await runtime.loadSession(oldId, cwd);
+        await runtime.loadSession(oldSession.sessionId, cwd);
         await this.restorePreferredModelIfNeeded(slot, noticeKey);
         slot.session.lastActiveAt = now;
         return;
@@ -935,9 +1166,9 @@ export class SessionManager {
     }
     const { sessionId, recovery } =
       await this.createSessionWithRecovery(
-        slot.session.backend,
+        oldSession.backend,
         cwd,
-        slot.session.recovery,
+        oldSession.recovery,
         slot.slotIndex,
         noticeKey,
       );
@@ -950,6 +1181,9 @@ export class SessionManager {
     };
     if (!recovery) {
       delete slot.session.recovery;
+    }
+    if (oldSession.sessionId !== sessionId || oldSession.backend !== slot.session.backend) {
+      this.removeResumeHistoryForSession(oldSession);
     }
     await this.restorePreferredModelIfNeeded(slot, noticeKey);
   }
@@ -1020,6 +1254,9 @@ export class SessionManager {
             ps.slotIndex,
             key,
           );
+          if (fresh.sessionId !== ps.sessionId) {
+            this.removeResumeHistoryForStoredSlot(ps);
+          }
           sessionId = fresh.sessionId;
           recovery = fresh.recovery;
         }
@@ -1031,6 +1268,9 @@ export class SessionManager {
           ps.slotIndex,
           key,
         );
+        if (fresh.sessionId !== ps.sessionId) {
+          this.removeResumeHistoryForStoredSlot(ps);
+        }
         sessionId = fresh.sessionId;
         recovery = fresh.recovery;
       }
@@ -1075,6 +1315,26 @@ export class SessionManager {
     return group;
   }
 
+  private removeResumeHistoryForStoredSlot(slot: PersistedSlotRecord): void {
+    const workspaceRoot = slot.workspaceRoot?.trim();
+    if (!workspaceRoot) return;
+    const entry: UserSession = {
+      backend: slot.backend,
+      sessionId: slot.sessionId,
+      ...(slot.preferredModelId?.trim()
+        ? { preferredModelId: slot.preferredModelId.trim() }
+        : {}),
+      ...(slot.recovery ? { recovery: slot.recovery } : {}),
+      workspaceRoot,
+      chatId: "",
+      userId: "",
+      chatType: "p2p",
+      createdAt: 0,
+      lastActiveAt: slot.lastActiveAt,
+    };
+    this.removeResumeHistoryForSession(entry);
+  }
+
   private persistGroup(key: string, group: UserSessionGroup): void {
     const sample = group.slots[0]?.session;
     if (!sample) return;
@@ -1102,6 +1362,9 @@ export class SessionManager {
       slots,
     };
     this.store.set(key, persistedGroup);
+    for (const slot of group.slots) {
+      this.upsertResumeHistoryForSession(slot.session);
+    }
     void this.store.flush().catch((e) => {
       console.error("[session] flush failed:", e);
     });

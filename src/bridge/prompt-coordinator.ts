@@ -219,6 +219,13 @@ export class PromptCoordinator {
         lastReply,
         this.deps.threadScope(msg),
       );
+      sessionManager.setActiveSessionResumeLabel(
+        msg.chatId,
+        msg.senderId,
+        msg.chatType,
+        content,
+        this.deps.threadScope(msg),
+      );
     }
   }
 
