@@ -31,6 +31,8 @@ export interface UpgradeAdminIds {
   unionIds: Set<string>;
 }
 
+export type GroupSessionScope = "per-user" | "shared";
+
 export interface Config {
   feishu: {
     appId: string;
@@ -75,6 +77,8 @@ export interface Config {
   bridge: {
     /** 允许执行 `/restart`、`/update` 的飞书用户 ID（逗号分隔） */
     adminUserIds: string[];
+    /** 群聊 session 隔离粒度：`per-user` 或 `shared` */
+    groupSessionScope: GroupSessionScope;
     /**
      * 同一飞书用户存活 session（非空闲过期）总数上限；`0` 表示不限制。
      * @default 10
@@ -211,6 +215,14 @@ export function parseShellLikeArgs(raw: string): string[] {
 function parseExtraArgs(raw: string | undefined): string[] {
   if (!raw?.trim()) return [];
   return parseShellLikeArgs(raw.trim());
+}
+
+function parseGroupSessionScope(
+  raw: string | undefined,
+): GroupSessionScope {
+  const normalized = raw?.trim().toLowerCase();
+  if (normalized === "shared") return "shared";
+  return "per-user";
 }
 
 function hasCodexConfigOverride(args: string[], key: string): boolean {
@@ -552,6 +564,9 @@ export function loadConfig(): Config {
     process.env["BRIDGE_MAX_SESSIONS_PER_USER"],
   );
   const adminUserIds = parseStringList(process.env["BRIDGE_ADMIN_USER_IDS"]);
+  const groupSessionScope = parseGroupSessionScope(
+    process.env["BRIDGE_GROUP_SESSION_SCOPE"],
+  );
 
   const cardUpdateThrottleMs = Math.max(
     200,
@@ -641,6 +656,7 @@ export function loadConfig(): Config {
     },
     bridge: {
       adminUserIds,
+      groupSessionScope,
       maxSessionsPerUser,
       sessionIdleTimeoutMs,
       sessionStorePath,

@@ -10,9 +10,9 @@
 
 - Forward Feishu messages to Cursor (default path: official `agent acp`)
 - Stream replies to Feishu (interactive cards: answer, thinking, tools, plan, etc.)
-- Per-user session isolation (DM / group chat maps to ACP `sessionId` per user)
-- **Multiple sessions**: up to **5** concurrent sessions per user per chat, each with its own context and workspace; `/switch` between them; inactive sessions keep their ACP connection
-- **Max live sessions per user**: default **10** across all DMs / groups / threads (tune with `BRIDGE_MAX_SESSIONS_PER_USER`; `0` means unlimited), reducing idle ACP connection buildup when idle timeout is infinite
+- Session isolation is configurable: DMs always map by user; group chats default to per-user, and can switch to shared group/thread sessions with `BRIDGE_GROUP_SESSION_SCOPE=shared`
+- **Multiple sessions**: up to **5** concurrent sessions per chat scope, each with its own context and workspace; by default the scope is "same user in same chat", and with `BRIDGE_GROUP_SESSION_SCOPE=shared` it becomes "same group/thread"; `/switch` between them; inactive sessions keep their ACP connection
+- **Max live sessions per user**: default **10** across all DMs / per-user group / per-user thread sessions (tune with `BRIDGE_MAX_SESSIONS_PER_USER`; `0` means unlimited), reducing idle ACP connection buildup when idle timeout is infinite; shared group sessions are managed separately and do not consume the creator's per-user quota
 - Group chats: @ the bot (or no @ when “only one human + the bot”); DMs: talk directly
 - **Explicit sessions**: set **`BRIDGE_WORK_ALLOWLIST`** (compatible with `CURSOR_WORK_ALLOWLIST`); create a session with `/new list` then `/new <index or path>` before normal chat; bare `/new` lists presets
 - Built-in commands: `/new`, `/sessions`, `/switch`, `/close` (incl. `/close all`), `/rename` (incl. `/new list`, `/new <index>`, `/new <path>`), `/status`, `/mode`, `/model`; **`/topic` + text** is display-only (not sent to the Agent — see `docs/feishu-commands.md`)
@@ -209,6 +209,7 @@ Notes:
 | `BRIDGE_SESSION_STORE` | Feishu ↔ ACP mapping JSON path | `~/.feishu-cursor-bridge/.feishu-bridge-sessions.json` |
 | `SESSION_IDLE_TIMEOUT_MS` | Idle before new session; `0` / `infinity` = never | `604800000` (7 days) |
 | `BRIDGE_MAX_SESSIONS_PER_USER` | Max live sessions per user (all chats); `0` = unlimited | `10` |
+| `BRIDGE_GROUP_SESSION_SCOPE` | Group session isolation: `per-user` or `shared`; `shared` keeps group members on one shared session set per group/thread and makes session-management commands admin-only | `per-user` |
 | `BRIDGE_SINGLE_INSTANCE_LOCK` | Single-instance lock file (refuse start if PID alive) | `~/.feishu-cursor-bridge/bridge.lock` |
 | `BRIDGE_ALLOW_MULTIPLE_INSTANCES` | `true` disables single-instance lock (debug only) | `false` |
 | `FEISHU_CARD_THROTTLE_MS` | Card update throttle | `800` |
@@ -229,7 +230,7 @@ Proxy precedence: `wss_proxy` / `ws_proxy` > `https_proxy` / `http_proxy` / `all
 <!-- backend-readme-switch-en:start -->
 - **Switch backend**: use `/new <index or path> --backend <cursor-official|cursor-legacy|claude|codex>` to select the backend for a new session; `-b <official|cur|legacy|claude|codex|cc|cx>` is also supported. The backend must be included in `ACP_ENABLED_BACKENDS`, or it will not be available.
 <!-- backend-readme-switch-en:end -->
-- **Group**: @ the bot + content ( **`im:message.group_msg`** must be enabled or group events won’t arrive); in **topic** groups, each `thread_id` maps to its own ACP session (not shared with the main group chat)
+- **Group**: @ the bot + content ( **`im:message.group_msg`** must be enabled or group events won’t arrive); in **topic** groups, each `thread_id` always stays isolated from the main group chat. With `BRIDGE_GROUP_SESSION_SCOPE=shared`, members in the same group/thread share the same session set and only admins may run session-management commands.
 - **Multi-session**: `/new <index or path>` creates and switches (old session stays connected); bare `/new` lists presets; `/sessions` lists; `/switch <index or name>` switches active (no arg → last used); `/close` closes one; `/rename` helps name-based switching. Full syntax: `docs/feishu-commands.md`
 - `/status` or `/状态`: session stats, always shows ACP backend; `cursor-official` / `cursor-legacy` / `claude` / `codex` show known mode for the active session; recovery metadata is shown when available; `cursor-official` now shows the active ACP `sessionId`, `claude` stably shows the current Claude resume session id, and `codex` shows the active ACP `sessionId` by default; with `BRIDGE_DEBUG=true`, adds more paths, modes, and session details. For the `claude` backend, the Feishu context usage shown here is a fast approximate value from ACP `usage_update`; if you need a closer current-context snapshot, run `/context` in the Claude session. See [docs/claude-context-calibration-notes.md](docs/claude-context-calibration-notes.md).
 - `/mode <id>`: `cursor-official` / `cursor-legacy` / `claude` / `codex` use ACP `session/set_mode`
@@ -271,9 +272,9 @@ Proxy precedence: `wss_proxy` / `ws_proxy` > `https_proxy` / `http_proxy` / `all
 
 - 飞书消息转发至 Cursor（默认经官方 `agent acp`）
 - 回复流式推送到飞书（interactive 卡片，含回答、思考、工具、计划等区块）
-- 多用户会话隔离（私聊 / 群聊按用户维度映射 ACP `sessionId`）
-- **多 session**：同一用户在同一聊天中可同时持有多个 session（最多 5 个），各自独立上下文与工作区；可用 `/switch` 在它们之间切换，未活跃的 session 仍保持 ACP 连接
-- **每用户存活 session 上限**：同一飞书用户跨所有私聊/群/话题的存活 session 总数默认最多 **10**（可用 `BRIDGE_MAX_SESSIONS_PER_USER` 调整；`0` 表示不限制），避免将空闲过期设为无限时进程堆积过多 ACP 连接
+- 会话隔离可配置：私聊始终按用户映射；群聊默认按用户隔离，也可用 `BRIDGE_GROUP_SESSION_SCOPE=shared` 改为整群/整话题共享同一组 session
+- **多 session**：每个聊天作用域最多同时持有 5 个 session，各自独立上下文与工作区；默认作用域是“同一用户在同一聊天”，若启用 `BRIDGE_GROUP_SESSION_SCOPE=shared` 则改为“同一群/同一话题”；可用 `/switch` 在它们之间切换，未活跃的 session 仍保持 ACP 连接
+- **每用户存活 session 上限**：同一飞书用户跨所有私聊、按用户隔离的群/话题会话的存活 session 总数默认最多 **10**（可用 `BRIDGE_MAX_SESSIONS_PER_USER` 调整；`0` 表示不限制），避免将空闲过期设为无限时进程堆积过多 ACP 连接；共享群 session 不占用创建者的个人配额
 - 群聊 @ 机器人触发（或满足「仅 1 用户 + 1 机器人」时可免 @）；私聊直接对话
 - **须显式建 session**：配置必填 **`BRIDGE_WORK_ALLOWLIST`**（兼容 `CURSOR_WORK_ALLOWLIST`）；先用 `/new list` 再 `/new <序号或路径>` 才能对话；裸 `/new` 等同列表
 - 内置命令：`/new`、`/sessions`、`/switch`、`/close`（含 `/close all`）、`/rename`（含 `/new list`、`/new <序号>`、`/new <路径>` 等）、`/status`、`/mode`、`/model`；另有 **`/topic` + 话题内容** 的纯展示命令（不发给 Agent，见 `docs/feishu-commands.md`）
@@ -468,6 +469,7 @@ docker-compose -f docker/compose.yaml run --rm claude-acp-smoke
 | `BRIDGE_SESSION_STORE` | 飞书↔ACP 映射 JSON 路径 | `~/.feishu-cursor-bridge/.feishu-bridge-sessions.json` |
 | `SESSION_IDLE_TIMEOUT_MS` | 空闲多久新建会话；`0` / `infinity` 表示永不过期 | `604800000`（7 天） |
 | `BRIDGE_MAX_SESSIONS_PER_USER` | 同一用户存活 session 总数上限（跨聊天）；`0` 不限制 | `10` |
+| `BRIDGE_GROUP_SESSION_SCOPE` | 群聊 session 隔离方式：`per-user` 或 `shared`；设为 `shared` 后，同一群/同一话题成员共享一组 session，且 session 管理命令仅管理员可用 | `per-user` |
 | `BRIDGE_SINGLE_INSTANCE_LOCK` | 单实例锁文件路径（已存在且 PID 存活则拒绝启动） | `~/.feishu-cursor-bridge/bridge.lock` |
 | `BRIDGE_ALLOW_MULTIPLE_INSTANCES` | `true` 时禁用单实例锁（仅调试） | `false` |
 | `FEISHU_CARD_THROTTLE_MS` | 卡片更新节流 | `800` |
@@ -489,7 +491,7 @@ docker-compose -f docker/compose.yaml run --rm claude-acp-smoke
 - **切换 backend**：可用 `/new <序号或路径> --backend <cursor-official|cursor-legacy|claude|codex>` 为新 session 指定 backend；也支持 `-b <official|cur|legacy|claude|codex|cc|cx>`；但该 backend 必须已包含在 `ACP_ENABLED_BACKENDS` 中，否则不会被启动
 <!-- backend-readme-switch-zh:end -->
 - **飞书附件入站**：有活跃 session 时，用户直接发送的文件 / 图片 / 音频 / 视频会先下载到当前工作区的 `.feishu-incoming/`，再把相对路径说明交给 Agent；`/fileback` 则是反方向，用于让 Agent 把工作区文件回传到飞书
-- **群聊**：@机器人 + 内容（开发平台须为应用开通 **`im:message.group_msg`**，否则群消息事件不会投递到机器人）；**话题群**内不同话题（`thread_id`）会**分别**映射 ACP 会话，与群主页会话互不共享
+- **群聊**：@机器人 + 内容（开发平台须为应用开通 **`im:message.group_msg`**，否则群消息事件不会投递到机器人）；**话题群**内不同话题（`thread_id`）始终与群主页会话互不共享。若设 `BRIDGE_GROUP_SESSION_SCOPE=shared`，同一群/同一话题内所有成员共享同一组 session，且仅管理员可执行 session 管理命令
 - **多 session 切换**：`/new <序号或路径>` 新建并切到该 session（裸 `/new` 等同列表）；`/sessions` 列表；`/switch <编号或名称>` 切换活跃 session（无参数时切到上一次用过的）；`/close` 关闭指定；`/rename` 便于用名称切换。完整语法与快捷列表见 `docs/feishu-commands.md`
 - `/status` 或 `/状态`：会话统计，始终展示当前 ACP 后端；`cursor-official` / `cursor-legacy` / `claude` / `codex` 下会展示当前活跃 session 已知 mode；若是 `cursor-legacy`，会额外显示当前活跃 slot 的 CLI resume ID，若是 `cursor-official` 则默认显示当前 Official ACP `sessionId`，若是 `claude` 则稳定显示当前 Claude 恢复会话 id（新建 session 时回退为当前 ACP `sessionId`），若是 `codex` 则默认显示当前 ACP `sessionId`；`BRIDGE_DEBUG=true` 时额外含更多 ACP `sessionId`、路径、可用模式等调试信息。对于 `claude` backend，这里的飞书 context 使用量是基于 ACP `usage_update` 的快速近似值；如果你需要更接近当前上下文快照的数值，请在 Claude 会话里执行 `/context`。详见 [docs/claude-context-calibration-notes.md](docs/claude-context-calibration-notes.md)
 - `/mode <模式ID>`：`cursor-official` / `cursor-legacy` / `claude` / `codex` 下通过 ACP `session/set_mode` 切换当前活跃 session 的 mode

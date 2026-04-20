@@ -41,6 +41,7 @@ function createTestConfig(): Config {
     },
     bridge: {
       adminUserIds: ["user-1"],
+      groupSessionScope: "per-user",
       maxSessionsPerUser: 10,
       sessionIdleTimeoutMs: 60_000,
       sessionStorePath: "/tmp/sessions.json",
@@ -1732,4 +1733,199 @@ test("/cancel 在仅有排队消息时会撤销排队", async () => {
     0,
   );
   assert.match(sentTexts[0] ?? "", /已撤销当前槽位中的排队消息/);
+});
+
+test("共享群 session key 不包含发送者 userId", () => {
+  const config = createTestConfig();
+  config.bridge.groupSessionScope = "shared";
+  const bridge = new Bridge(config);
+
+  const mainKeyForUser1 = (bridge as any).feishuSessionKey(
+    createMessage("hello", { chatType: "group", senderId: "user-1" }),
+  );
+  const mainKeyForUser2 = (bridge as any).feishuSessionKey(
+    createMessage("hello", { chatType: "group", senderId: "user-2" }),
+  );
+  const threadKey = (bridge as any).feishuSessionKey(
+    createMessage("hello", {
+      chatType: "group",
+      senderId: "user-3",
+      threadId: "topic-1",
+    }),
+  );
+
+  assert.equal(mainKeyForUser1, "chat-1");
+  assert.equal(mainKeyForUser2, "chat-1");
+  assert.equal(threadKey, "chat-1:t:topic-1");
+});
+
+test("共享群 session 管理命令会拒绝非管理员 /new", async () => {
+  const config = createTestConfig();
+  config.bridge.groupSessionScope = "shared";
+  config.bridge.adminUserIds = ["admin-user"];
+  const bridge = new Bridge(config);
+  const sentTexts: string[] = [];
+  let createCalls = 0;
+
+  (bridge as any).ensureMaintenanceStateLoaded = async () => {};
+  (bridge as any).sessionManager = {
+    async createNewSlot(): Promise<void> {
+      createCalls += 1;
+      throw new Error("should not be called");
+    },
+  };
+  (bridge as any).feishuBot = {
+    stripBotMentionKeepLines(content: string) {
+      return content;
+    },
+    stripBotMention(content: string) {
+      return content;
+    },
+    isBotMentioned() {
+      return true;
+    },
+    async isPairUserBotGroup(): Promise<boolean> {
+      return false;
+    },
+    async sendText(_chatId: string, body: string): Promise<void> {
+      sentTexts.push(body);
+    },
+  };
+
+  await (bridge as any).handleFeishuMessage(
+    createMessage("/new /tmp", {
+      chatType: "group",
+      senderId: "user-2",
+    }),
+  );
+
+  assert.equal(createCalls, 0);
+  assert.match(sentTexts[0] ?? "", /仅管理员可执行 `\/new`/);
+});
+
+test("共享群 session 管理命令会拒绝非管理员 /model", async () => {
+  const config = createTestConfig();
+  config.bridge.groupSessionScope = "shared";
+  config.bridge.adminUserIds = ["admin-user"];
+  const bridge = new Bridge(config);
+  const sentTexts: string[] = [];
+  let getActiveSessionCalls = 0;
+
+  (bridge as any).ensureMaintenanceStateLoaded = async () => {};
+  (bridge as any).sessionManager = {
+    async getActiveSession(): Promise<void> {
+      getActiveSessionCalls += 1;
+      throw new Error("should not be called");
+    },
+  };
+  (bridge as any).feishuBot = {
+    stripBotMentionKeepLines(content: string) {
+      return content;
+    },
+    stripBotMention(content: string) {
+      return content;
+    },
+    isBotMentioned() {
+      return true;
+    },
+    async isPairUserBotGroup(): Promise<boolean> {
+      return false;
+    },
+    async sendText(_chatId: string, body: string): Promise<void> {
+      sentTexts.push(body);
+    },
+  };
+
+  await (bridge as any).handleFeishuMessage(
+    createMessage("/model 1", {
+      chatType: "group",
+      senderId: "user-2",
+    }),
+  );
+
+  assert.equal(getActiveSessionCalls, 0);
+  assert.match(sentTexts[0] ?? "", /仅管理员可执行 `\/model`/);
+});
+
+test("共享群 session 管理命令允许管理员 /new", async () => {
+  const config = createTestConfig();
+  config.bridge.groupSessionScope = "shared";
+  config.bridge.adminUserIds = ["admin-user"];
+  const bridge = new Bridge(config);
+  const sentTexts: string[] = [];
+  const createCalls: Array<{
+    chatId: string;
+    userId: string;
+    chatType: string;
+    workspaceRoot: string;
+    backend: string;
+    name?: string;
+    threadId?: string;
+  }> = [];
+
+  (bridge as any).ensureMaintenanceStateLoaded = async () => {};
+  (bridge as any).flushPendingSessionNotices = async () => {};
+  (bridge as any).sessionManager = {
+    async createNewSlot(
+      chatId: string,
+      userId: string,
+      chatType: string,
+      workspaceRoot: string,
+      backend: string,
+      name?: string,
+      threadId?: string,
+    ) {
+      createCalls.push({
+        chatId,
+        userId,
+        chatType,
+        workspaceRoot,
+        backend,
+        name,
+        threadId,
+      });
+      return {
+        slotIndex: 1,
+        backend: "cursor-official",
+        sessionId: "session-1",
+        workspaceRoot,
+      };
+    },
+  };
+  (bridge as any).feishuBot = {
+    stripBotMentionKeepLines(content: string) {
+      return content;
+    },
+    stripBotMention(content: string) {
+      return content;
+    },
+    isBotMentioned() {
+      return true;
+    },
+    async isPairUserBotGroup(): Promise<boolean> {
+      return false;
+    },
+    async sendText(_chatId: string, body: string): Promise<void> {
+      sentTexts.push(body);
+    },
+  };
+
+  await (bridge as any).handleFeishuMessage(
+    createMessage("/new /tmp --backend cursor-official", {
+      chatType: "group",
+      senderId: "admin-user",
+    }),
+  );
+
+  assert.equal(createCalls.length, 1);
+  assert.deepEqual(createCalls[0], {
+    chatId: "chat-1",
+    userId: "admin-user",
+    chatType: "group",
+    workspaceRoot: "/tmp",
+    backend: "cursor-official",
+    name: undefined,
+    threadId: undefined,
+  });
+  assert.match(sentTexts[0] ?? "", /已新建并切换到 session #1/);
 });

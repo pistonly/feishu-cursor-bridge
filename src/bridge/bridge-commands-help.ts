@@ -15,6 +15,7 @@ export function formatBridgeCommandsHelp(_backend: AcpBackend): string {
     "📖 **本桥接识别的命令一览**",
     "",
     "私聊直接发送即可；群聊须 @ 机器人。不以本表命令开头的文字在已有 session 时作为普通对话发给 Agent。",
+    "若设 `BRIDGE_GROUP_SESSION_SCOPE=shared`，群内共享同一组 session；此时 `/new`、`/switch`、`/close`、`/resume`、`/mode`、`/model`、`/stop` 等管理命令仅管理员可用。",
     "",
     acpNote,
     "",

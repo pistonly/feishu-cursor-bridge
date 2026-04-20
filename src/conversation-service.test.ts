@@ -38,6 +38,7 @@ function createTestConfig(): Config {
     },
     bridge: {
       adminUserIds: [],
+      groupSessionScope: "per-user",
       maxSessionsPerUser: 10,
       sessionIdleTimeoutMs: 60_000,
       sessionStorePath: "/tmp/sessions.json",
@@ -670,4 +671,3 @@ test("ConversationService 只有 metadata 更新时也会渲染状态条而不�
   assert.doesNotMatch(finalCard, /无响应内容/);
   assert.match(reply ?? "", /`codex` \| Auto \| 1\.1% \(10,633 \/ 950,000\)/);
 });
-

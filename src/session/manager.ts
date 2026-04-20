@@ -5,6 +5,7 @@ import type {
   BridgeAcpRuntime,
   SessionRecovery,
 } from "../acp/runtime-contract.js";
+import type { GroupSessionScope } from "../config/index.js";
 import type {
   SessionStore,
   PersistedResumeHistoryEntry,
@@ -74,6 +75,7 @@ export interface SessionManagerOptions {
   defaultBackend?: AcpBackend;
   maxSlotsPerKey?: number;
   maxSessionsPerUser?: number;
+  groupSessionScope?: GroupSessionScope;
 }
 
 export class SessionManager {
@@ -87,6 +89,7 @@ export class SessionManager {
   private readonly defaultBackend: AcpBackend;
   private readonly maxSlots: number;
   private readonly maxSessionsPerUser: number;
+  private readonly groupSessionScope: GroupSessionScope;
 
   constructor(
     resolver: AcpRuntimeResolver | BridgeAcpRuntime,
@@ -104,6 +107,7 @@ export class SessionManager {
     this.defaultBackend = options.defaultBackend ?? "cursor-official";
     this.maxSlots = options.maxSlotsPerKey ?? 5;
     this.maxSessionsPerUser = options.maxSessionsPerUser ?? 10;
+    this.groupSessionScope = options.groupSessionScope ?? "per-user";
   }
 
   async init(): Promise<void> {
@@ -195,7 +199,9 @@ export class SessionManager {
         threadId,
       );
     }
-    this.assertCanAddUserSession(userId, now);
+    if (!this.usesSharedGroupSessions(chatType)) {
+      this.assertCanAddUserSession(userId, now);
+    }
     if (group && group.slots.length >= this.maxSlots) {
       throw new Error(
         `已达到最多 ${this.maxSlots} 个 session 的上限，请先用 /close <编号> 关闭一个。`,
@@ -1222,6 +1228,9 @@ export class SessionManager {
     if (!persisted) return undefined;
 
     const tid = persisted.threadId ?? threadId;
+    const restoredUserId = this.usesSharedGroupSessions(chatType)
+      ? persisted.userId
+      : userId;
     const liveSlots = persisted.slots.filter(
       (s) => !this.isExpiredAt(s.lastActiveAt, now),
     );
@@ -1280,7 +1289,7 @@ export class SessionManager {
         sessionId,
         cwd,
         chatId,
-        userId,
+        restoredUserId,
         chatType,
         now,
         recovery,
@@ -1375,6 +1384,7 @@ export class SessionManager {
     for (const key of this.store.allKeys()) {
       const g = this.store.get(key);
       if (!g || g.userId !== userId) continue;
+      if (g.chatType === "group" && this.groupSessionScope === "shared") continue;
       for (const ps of g.slots) {
         if (!this.isExpiredAt(ps.lastActiveAt, now)) n++;
       }
@@ -1400,12 +1410,20 @@ export class SessionManager {
   ): string {
     if (this.chatType(chatType) === "p2p") return `dm:${userId}`;
     const t = threadId?.trim();
+    if (this.usesSharedGroupSessions(chatType)) {
+      if (t) return `${chatId}:t:${t}`;
+      return chatId;
+    }
     if (t) return `${chatId}:t:${t}:${userId}`;
     return `${chatId}:${userId}`;
   }
 
   private chatType(t: string): "p2p" | "group" {
     return t === "group" ? "group" : "p2p";
+  }
+
+  private usesSharedGroupSessions(chatType: string): boolean {
+    return this.chatType(chatType) === "group" && this.groupSessionScope === "shared";
   }
 
   private isExpiredAt(lastActiveAt: number, now: number): boolean {

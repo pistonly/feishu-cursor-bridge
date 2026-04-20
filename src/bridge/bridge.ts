@@ -194,6 +194,7 @@ export class Bridge {
         defaultWorkspaceRoot: config.acp.workspaceRoot,
         defaultBackend: config.acp.backend,
         maxSessionsPerUser: config.bridge.maxSessionsPerUser,
+        groupSessionScope: config.bridge.groupSessionScope,
       },
     );
     this.conversations = new Map();
@@ -490,6 +491,10 @@ export class Bridge {
   private feishuSessionKey(msg: FeishuMessage): string {
     if (msg.chatType === "p2p") return `dm:${msg.senderId}`;
     const t = this.threadScope(msg);
+    if (this.config.bridge.groupSessionScope === "shared") {
+      if (t) return `${msg.chatId}:t:${t}`;
+      return msg.chatId;
+    }
     if (t) return `${msg.chatId}:t:${t}:${msg.senderId}`;
     return `${msg.chatId}:${msg.senderId}`;
   }

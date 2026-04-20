@@ -15,13 +15,15 @@
 | **私聊** | 直接发送命令或消息即可。 |
 | **群聊** | 必须先 **@机器人**，再输入命令或 `@机器人 + 内容`；命令必须紧跟在 @ 之后，且整条消息以 `/` 开头才会被识别为命令（与实现一致）。 |
 | **「双人」群** | 群内仅一名普通用户且仅一名机器人时，可不 @，直接发消息（与私聊类似）。 |
-| **话题群** | 不同话题（`thread_id`）下 **session 槽位相互隔离**，与主楼消息不共享；`/sessions`、`/switch` 等仅在当前话题内生效。 |
+| **话题群** | 不同话题（`thread_id`）下 **session 槽位相互隔离**，与主楼消息不共享；`/sessions`、`/switch` 等仅在当前话题内生效。即使启用群共享 session，也只会共享到当前话题，不会跨话题合并。 |
 
 ## 多 Session 管理
 
-同一用户在同一聊天中可以同时持有**多个** session（最多 5 个），每个 session 对应一个独立的 Cursor Agent 上下文与工作区。可以在多个 session 之间自由切换，切走的 session 保持 ACP 连接，不会被关闭。
+默认情况下，同一用户在同一聊天中可以同时持有**多个** session（最多 5 个），每个 session 对应一个独立的 Cursor Agent 上下文与工作区。可以在多个 session 之间自由切换，切走的 session 保持 ACP 连接，不会被关闭。
 
-此外，同一飞书用户**跨所有私聊、群、话题**的存活 session 总数有默认上限（**10**，可用环境变量 `BRIDGE_MAX_SESSIONS_PER_USER` 调整；设为 `0` 表示不限制），与「单聊天最多 5 个」是两层独立限制。
+若设置 `BRIDGE_GROUP_SESSION_SCOPE=shared`，则群聊或话题内所有成员共享同一组 session 槽位；此时 `/new`、`/switch`、`/close`、`/rename`、`/resume`、`/mode`、`/model`、`/stop` 等 session 管理命令仅 `BRIDGE_ADMIN_USER_IDS` 中的管理员可用，普通成员仍可继续向当前共享 session 发普通消息。
+
+此外，同一飞书用户**跨所有私聊、按用户隔离的群/话题**的存活 session 总数有默认上限（**10**，可用环境变量 `BRIDGE_MAX_SESSIONS_PER_USER` 调整；设为 `0` 表示不限制），与「单聊天最多 5 个」是两层独立限制。共享群 session 不占用创建者的个人配额。
 
 ### Session 标识
 
@@ -63,6 +65,8 @@
 **等价命令**：`/new`（同 `/new list`）、`/new list`、`/new <路径>`、`/new <快捷序号>`
 
 **作用**：在当前聊天下**新建一个 session** 并自动切换到它，旧 session 保持连接。工作区须落在环境变量 **`BRIDGE_WORK_ALLOWLIST`**（兼容 `BRIDGE_WORK_ALLOWLIST`（兼容 `CURSOR_WORK_ALLOWLIST`）） 配置的允许根之下。
+
+若当前群聊启用了 `BRIDGE_GROUP_SESSION_SCOPE=shared`，则只有管理员可以执行 `/new`；一旦创建成功，该群/该话题内所有成员都会共享这组 session。
 
 每个新建 session 现在都可以显式指定 backend；**backend 一旦绑定到该 session，在该 session 生命周期内保持不变**。如果不指定，则使用服务端配置的默认 backend。
 
@@ -158,6 +162,8 @@
 - backend
 - 工作区路径
 - 若当前 backend 支持，已知的当前模式
+
+在群共享模式下，这里列出的就是当前群/当前话题所有成员共同使用的 session 槽位；普通成员也可查看。
 
 ---
 
@@ -267,6 +273,8 @@
 
 **作用**：打断**当前活跃 session（当前槽位）**正在进行中的模型回复（桥接对该 ACP session 调用 SDK `cancel`，即 **`session/cancel` 通知**）。**不会**关闭 session，之后可照常发消息继续对话。
 
+若当前群聊启用了 `BRIDGE_GROUP_SESSION_SCOPE=shared`，则 `/stop` / `/cancel` 仅管理员可执行。
+
 当同一槽位已经在生成回复时，bridge 还会为该槽位保留**最多 1 条排队消息**：
 
 - 新消息到来时，会提示“已加入排队”
@@ -287,7 +295,7 @@
 /close all
 ```
 
-关闭并移除指定的 session（发送 ACP cancel + close），释放资源。若关闭后该聊天/话题下已无任何 session，会从持久化中移除该 topic，**释放同一用户全局 session 配额**；之后在该处发消息会新建 session。多槽时仅移除指定槽；只剩一个槽时关闭即整 topic 清空（与闲置过期清理后效果类似）。
+关闭并移除指定的 session（发送 ACP cancel + close），释放资源。若关闭后该聊天/话题下已无任何 session，会从持久化中移除该 topic，**释放同一用户全局 session 配额**；之后在该处发消息会新建 session。多槽时仅移除指定槽；只剩一个槽时关闭即整 topic 清空（与闲置过期清理后效果类似）。若当前群聊启用了 `BRIDGE_GROUP_SESSION_SCOPE=shared`，则 `/close` / `/close all` 仅管理员可执行。
 
 `/close all` 会一次性关闭**当前聊天/话题组内**的全部 slot，效果等同于对该组内每个 session 逐个执行 `/close`，便于快速腾出全局配额。关键字 `all` 为保留用法；若某 slot 的显示名称恰好为 `all`，请用编号关闭（如 `/close 2`）。
 
@@ -533,6 +541,7 @@ backend 差异：
 | `BRIDGE_WORK_ALLOWLIST`（兼容 `CURSOR_WORK_ALLOWLIST`） | **必填**；逗号分隔的绝对路径，会话工作区必须落在某一允许根下；ACP 子进程 spawn 的 cwd 为列表首项。 |
 | `ACP_BACKEND` | 默认 backend；创建 session 时若未显式写 `--backend`，则使用此值。 |
 | `ACP_ENABLED_BACKENDS` | 允许通过 `/new --backend` 选择的 backend 列表（逗号分隔）。 |
+| `BRIDGE_GROUP_SESSION_SCOPE` | 设为 `shared` 时，群聊/话题内成员共享同一组 session；`/new`、`/switch`、`/close`、`/resume`、`/mode`、`/model`、`/stop` 等管理命令仅管理员可用。 |
 | `BRIDGE_WORK_PRESETS_FILE` | 可选；`/new list` 使用的快捷列表 JSON 路径。 |
 | `BRIDGE_WORK_PRESETS`（兼容 `CURSOR_WORK_PRESETS`） | 可选；列表文件为空时用于首次写入的初始路径（逗号分隔）。 |
 | `SESSION_IDLE_TIMEOUT_MS` | 可选；控制 session 空闲多久后视为过期。设为 `0` 或 `infinity` 表示永不过期。 |

@@ -33,6 +33,7 @@ function createTestConfig(
     },
     bridge: {
       adminUserIds: [],
+      groupSessionScope: "per-user",
       maxSessionsPerUser: 10,
       sessionIdleTimeoutMs: 60_000,
       sessionStorePath: "/tmp/sessions.json",

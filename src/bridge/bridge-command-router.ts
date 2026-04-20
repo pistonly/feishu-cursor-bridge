@@ -57,6 +57,44 @@ function formatSessionLabel(slot: SessionSlot): string {
   return `#${slot.slotIndex}${slot.name ? ` (${slot.name})` : ""}`;
 }
 
+function usesSharedGroupSessions(
+  ctx: BridgeMessageHandlerDeps,
+  msg: FeishuMessage,
+): boolean {
+  return (
+    msg.chatType === "group" && ctx.config.bridge.groupSessionScope === "shared"
+  );
+}
+
+async function requireSharedGroupSessionAdmin(
+  ctx: BridgeMessageHandlerDeps,
+  msg: FeishuMessage,
+  commandLabel: string,
+): Promise<boolean> {
+  if (!usesSharedGroupSessions(ctx, msg)) {
+    return true;
+  }
+  if (ctx.config.bridge.adminUserIds.length === 0) {
+    await ctx.feishuBot.sendText(
+      msg.chatId,
+      "❌ 当前群聊启用了共享 session，但未配置 `BRIDGE_ADMIN_USER_IDS`，群内 session 管理命令暂不可用。",
+      msg.messageId,
+      ctx.threadReplyOpts(msg),
+    );
+    return false;
+  }
+  if (ctx.config.bridge.adminUserIds.includes(msg.senderId)) {
+    return true;
+  }
+  await ctx.feishuBot.sendText(
+    msg.chatId,
+    `❌ 当前群聊启用了共享 session；仅管理员可执行 ${commandLabel} 等 session 管理命令。`,
+    msg.messageId,
+    ctx.threadReplyOpts(msg),
+  );
+  return false;
+}
+
 async function sendWelcomeCard(
   ctx: BridgeMessageHandlerDeps,
   msg: FeishuMessage,
@@ -340,6 +378,9 @@ async function handleModeCommand(
   msg: FeishuMessage,
   modeId: string | undefined,
 ): Promise<void> {
+  if (!(await requireSharedGroupSessionAdmin(ctx, msg, "`/mode`"))) {
+    return;
+  }
   const session = await ctx.sessionManager.getActiveSession(
     msg.chatId,
     msg.senderId,
@@ -778,6 +819,9 @@ async function handleBridgeManagedCommand(
     }
 
     if (command.kind === "resume") {
+      if (!(await requireSharedGroupSessionAdmin(ctx, msg, "`/resume`"))) {
+        return true;
+      }
       await handleResumeCommand(ctx, msg, command.target);
       return true;
     }
@@ -788,6 +832,9 @@ async function handleBridgeManagedCommand(
     }
 
     if (command.kind === "switch") {
+      if (!(await requireSharedGroupSessionAdmin(ctx, msg, "`/switch`"))) {
+        return true;
+      }
       await handleSwitchCommand(ctx, msg, command.target);
       return true;
     }
@@ -798,16 +845,25 @@ async function handleBridgeManagedCommand(
     }
 
     if (command.kind === "rename") {
+      if (!(await requireSharedGroupSessionAdmin(ctx, msg, "`/rename`"))) {
+        return true;
+      }
       await handleRenameCommand(ctx, msg, command.target, command.name);
       return true;
     }
 
     if (command.kind === "close") {
+      if (!(await requireSharedGroupSessionAdmin(ctx, msg, "`/close`"))) {
+        return true;
+      }
       await handleCloseCommand(ctx, msg, command.target);
       return true;
     }
 
     if (command.kind === "new") {
+      if (!(await requireSharedGroupSessionAdmin(ctx, msg, "`/new`"))) {
+        return true;
+      }
       await handleNewCommand(ctx, msg, command);
       return true;
     }
@@ -852,6 +908,9 @@ async function handleModelCommand(
 ): Promise<boolean> {
   const modelMatch = content.trim().match(/^\/model(?:\s+(\S+))?$/i);
   if (!modelMatch) return false;
+  if (!(await requireSharedGroupSessionAdmin(ctx, msg, "`/model`"))) {
+    return true;
+  }
 
   const activeSessionForModel = await ctx.sessionManager.getActiveSession(
     msg.chatId,
@@ -925,6 +984,9 @@ async function handleInterruptCommand(
   contentMultiline: string,
 ): Promise<boolean> {
   if (!matchesInterruptUserCommand(contentMultiline)) return false;
+  if (!(await requireSharedGroupSessionAdmin(ctx, msg, "`/stop`"))) {
+    return true;
+  }
 
   const snap = ctx.sessionManager.getSessionSnapshot(
     msg.chatId,
