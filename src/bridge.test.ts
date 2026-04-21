@@ -513,6 +513,66 @@ test("/upgrade 会写入 queued 状态并启动后台 runner", async () => {
   assert.equal((attempts[0] as { id?: string }).id, launchedAttemptId);
 });
 
+test("/upgrade runner 路径会指向 dist/bridge/upgrade-runner.js", () => {
+  const bridge = new Bridge(createTestConfig());
+
+  assert.equal(
+    (bridge as any).resolveUpgradeRunnerEntry(),
+    path.resolve(process.cwd(), "dist", "bridge", "upgrade-runner.js"),
+  );
+});
+
+test("/upgrade 在 runner 不存在时会立即失败，避免 queued 状态残留", async () => {
+  const config = createTestConfig();
+  config.bridge.enableUpgradeCommand = true;
+  const bridge = new Bridge(config);
+  const sentTexts: string[] = [];
+  const attempts: Array<{ state?: string; errorMessage?: string }> = [];
+  const missingRunner = path.join(os.tmpdir(), `missing-upgrade-runner-${Date.now()}.js`);
+  let currentAttempt: { state?: string; errorMessage?: string } | undefined;
+  let flushCalls = 0;
+  let launchCalls = 0;
+
+  (bridge as any).ensureMaintenanceStateLoaded = async () => {};
+  (bridge as any).isManagedByService = async () => true;
+  (bridge as any).resolveUpgradeRunnerEntry = () => missingRunner;
+  (bridge as any).launchBackgroundUpgrade = () => {
+    launchCalls += 1;
+  };
+  (bridge as any).upgradeResultStore = {
+    getAttempt() {
+      return currentAttempt;
+    },
+    setAttempt(attempt: { state?: string; errorMessage?: string }) {
+      currentAttempt = attempt;
+      attempts.push(attempt);
+    },
+    async flush(): Promise<void> {
+      flushCalls += 1;
+    },
+  };
+  (bridge as any).feishuBot = {
+    stripBotMentionKeepLines(content: string) {
+      return content;
+    },
+    async sendText(_chatId: string, body: string): Promise<void> {
+      sentTexts.push(body);
+    },
+  };
+
+  await (bridge as any).handleFeishuMessage(createMessage("/upgrade"));
+
+  assert.equal(launchCalls, 0);
+  assert.equal(flushCalls, 2);
+  assert.equal(attempts.length, 2);
+  assert.equal(attempts[0]?.state, "queued");
+  assert.equal(attempts[1]?.state, "failed");
+  assert.match(attempts[1]?.errorMessage ?? "", /Upgrade runner not found/);
+  assert.equal(sentTexts.length, 1);
+  assert.match(sentTexts[0] ?? "", /启动升级任务失败/);
+  assert.match(sentTexts[0] ?? "", /Upgrade runner not found/);
+});
+
 test("/upgrade 在未配置专用 allowlist 时默认继承 BRIDGE_ADMIN_USER_IDS", async () => {
   const config = createTestConfig();
   config.bridge.enableUpgradeCommand = true;

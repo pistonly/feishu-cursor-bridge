@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Config } from "../config/index.js";
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import * as path from "node:path";
 import {
   AcpRuntimeRegistry,
@@ -355,8 +356,19 @@ export class Bridge {
     );
   }
 
-  private launchBackgroundUpgrade(attemptId: string): void {
-    const runnerEntry = path.resolve(process.cwd(), "dist", "upgrade-runner.js");
+  private resolveUpgradeRunnerEntry(): string {
+    return path.resolve(process.cwd(), "dist", "bridge", "upgrade-runner.js");
+  }
+
+  private assertUpgradeRunnerAvailable(): string {
+    const runnerEntry = this.resolveUpgradeRunnerEntry();
+    if (!existsSync(runnerEntry)) {
+      throw new Error(`Upgrade runner not found: ${runnerEntry}`);
+    }
+    return runnerEntry;
+  }
+
+  private launchBackgroundUpgrade(attemptId: string, runnerEntry: string): void {
     const child = spawn(process.execPath, [runnerEntry, attemptId], {
       cwd: process.cwd(),
       detached: true,
@@ -460,13 +472,14 @@ export class Bridge {
     await this.upgradeResultStore.flush();
 
     try {
+      const runnerEntry = this.assertUpgradeRunnerAvailable();
       await this.feishuBot.sendText(
         msg.chatId,
         `✅ 已接受升级请求${command.force ? "（--force）" : ""}，正在后台执行 \`bash service.sh upgrade\`。桥接可能会短暂重启并恢复，稍后可发送 \`/status\` 验证。`,
         msg.messageId,
         this.threadReplyOpts(msg),
       );
-      this.launchBackgroundUpgrade(attemptId);
+      this.launchBackgroundUpgrade(attemptId, runnerEntry);
     } catch (err) {
       this.upgradeResultStore.setAttempt({
         ...(this.upgradeResultStore.getAttempt() ?? {
