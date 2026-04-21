@@ -55,6 +55,7 @@ function createTestConfig(): Config {
       experimentalLogFilePath: "/tmp/bridge.log",
       slotMessageLogEnabled: false,
       showAcpAvailableCommands: false,
+      enableBangCommand: false,
       enableUpgradeCommand: false,
       upgradeAdmins: {
         openIds: new Set<string>(),

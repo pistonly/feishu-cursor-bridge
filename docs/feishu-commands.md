@@ -1,6 +1,6 @@
 # 飞书端支持的命令
 
-本文说明由 **飞书-Cursor 桥接服务**（`src/bridge/bridge.ts`）直接识别并处理的命令。其它以 `/` 开头的文本若未命中下表，会作为普通对话交给 Cursor Agent（`vendor/cursor-agent-acp`），行为与 Cursor 客户端内类似。**例外**：首条非空行以 `/topic` 开头的消息会被桥接直接忽略，不交给 Agent（见下文）。
+本文说明由 **飞书-Cursor 桥接服务**（`src/bridge/bridge.ts`）直接识别并处理的命令。其它以 `/` 开头的文本若未命中下表，会作为普通对话交给 Cursor Agent（`vendor/cursor-agent-acp`），行为与 Cursor 客户端内类似。额外地，若启用了 bridge 内置终端功能，则以 `!` / `！` 开头的消息会直接在 bridge 宿主机执行本地 shell 命令。**例外**：首条非空行以 `/topic` 开头的消息会被桥接直接忽略，不交给 Agent（见下文）。
 
 补充说明：在 `codex` session 中，`/compact`、`/clear` 都**不是 bridge 内置命令**，而是未命中后按普通 prompt 透传给 Codex backend。根据 2026-04-15 的真实探针，`/compact` 是 `codex-acp` 明确宣告的命令；`/clear` 当前环境下会表现出“清空上下文”的效果，但不是 `codex-acp` 已宣告的稳定命令。详见 `docs/codex-backend-notes.md`。
 
@@ -380,7 +380,41 @@ backend 差异：
 
 ---
 
-### 11. 查询当前用户 ID（`/whoami`）
+### 11. Bridge 内置终端命令（`!<shell 命令>`）
+
+```text
+!pwd
+!git status
+！npm test
+```
+
+**作用**：由 bridge 直接在**当前活跃 session 的工作区**执行本地 shell 命令；**不会**把整条消息发给 ACP backend / Agent。
+
+**安全边界**：
+
+- 默认开启；可设置 `BRIDGE_ENABLE_BANG_COMMAND=false` 关闭
+- 启用后仍**仅 `BRIDGE_ADMIN_USER_IDS` 中的管理员可用**
+- 若未配置 `BRIDGE_ADMIN_USER_IDS`，即使开关已打开也会拒绝执行
+
+**执行行为**：
+
+- 工作目录：当前活跃 session 的 `workspaceRoot`
+- shell：bridge 进程环境中的 `SHELL`；若未设置则回退 `/bin/sh`
+- 当前实现仅支持**一次性非交互命令**
+- 单条命令最长执行 **60 秒**；超时后 bridge 会终止该进程
+- 若输出过长，仅保留 `stdout` / `stderr` 的**末尾部分**
+
+**与普通对话的关系**：
+
+- 这是 **bridge-native** 能力，不依赖 ACP `terminal/*`
+- 它绕过 ACP 权限问询，因此桥接默认要求管理员身份
+- 若当前槽位仍有 ACP 回复在进行或排队，bridge 会拒绝执行，并提示先等待完成或发送 `/stop`
+
+**前提**：必须已有活跃 session；若当前聊天/话题还没有 session，会提示先 `/new`
+
+---
+
+### 12. 查询当前用户 ID（`/whoami`）
 
 ```text
 /whoami
@@ -394,7 +428,7 @@ backend 差异：
 
 ---
 
-### 12. 从 GitHub 升级（`/upgrade`）
+### 13. 从 GitHub 升级（`/upgrade`）
 
 ```text
 /upgrade
@@ -422,7 +456,7 @@ backend 差异：
 
 ---
 
-### 13. 状态（`/status`）
+### 14. 状态（`/status`）
 
 **等价命令**：`/status`、`/状态`
 
@@ -449,7 +483,7 @@ backend 差异：
 
 ---
 
-### 14. 切换模型（`/model`）
+### 15. 切换模型（`/model`）
 
 **格式**：
 
@@ -500,7 +534,7 @@ backend 差异：
 
 ## 非命令消息
 
-不以以上**桥接内置命令**（含单独 `/` / `／` 唤起命令列表）形式匹配的文本，在**当前聊天/话题下已有活跃 session** 时进入正常对话流程（流式卡片、Cursor Agent 等）。**若无 session**，机器人会提示先用 `/new list` 与 `/new <序号或路径>` 创建，并说明可用 `/commands`、`/help` 或只发 `/`（全角 `／` 亦可）查看全部桥接命令。若适配器在 Cursor 侧注册了 `/plan` 等斜杠命令，通常需**整段消息**以 `/命令` 开头发送；具体以 `cursor-agent-acp` 与 Cursor CLI 行为为准，本桥接不对其做单独解析。
+不以以上**桥接内置命令**（含单独 `/` / `／` 唤起命令列表，以及启用时的 `!` / `！` bridge-native 终端命令）形式匹配的文本，在**当前聊天/话题下已有活跃 session** 时进入正常对话流程（流式卡片、Cursor Agent 等）。**若无 session**，机器人会提示先用 `/new list` 与 `/new <序号或路径>` 创建，并说明可用 `/commands`、`/help` 或只发 `/`（全角 `／` 亦可）查看全部桥接命令。若适配器在 Cursor 侧注册了 `/plan` 等斜杠命令，通常需**整段消息**以 `/命令` 开头发送；具体以 `cursor-agent-acp` 与 Cursor CLI 行为为准，本桥接不对其做单独解析。
 
 ### 用户直接发送附件/图片
 
@@ -546,6 +580,7 @@ backend 差异：
 | `BRIDGE_WORK_PRESETS`（兼容 `CURSOR_WORK_PRESETS`） | 可选；列表文件为空时用于首次写入的初始路径（逗号分隔）。 |
 | `SESSION_IDLE_TIMEOUT_MS` | 可选；控制 session 空闲多久后视为过期。设为 `0` 或 `infinity` 表示永不过期。 |
 | `BRIDGE_DEBUG` | 为 `true` 时：`/status` 追加调试详情；群聊「未 @ 且未命中双人群」时在**服务端日志**输出结构化对照（见上文「群聊 @ 与调试日志」）。 |
+| `BRIDGE_ENABLE_BANG_COMMAND` | bridge-native `!<shell 命令>` 开关；默认开启。设为 `false` 可关闭。即使开启，仍仅 `BRIDGE_ADMIN_USER_IDS` 命中的管理员可用。 |
 | `BRIDGE_ENABLE_UPGRADE_COMMAND` | 为 `true` 时启用 bridge-native `/upgrade` 命令；默认关闭。 |
 | `BRIDGE_UPGRADE_ADMIN_OPEN_IDS` / `BRIDGE_UPGRADE_ADMIN_USER_IDS` / `BRIDGE_UPGRADE_ADMIN_UNION_IDS` | `/upgrade` 的专用飞书管理员 ID allowlist；若显式配置任一项，则覆盖默认的 `BRIDGE_ADMIN_USER_IDS` 继承逻辑。 |
 | `BRIDGE_UPGRADE_RESULT_FILE` | 最近一次 `/upgrade` 的持久化结果 JSON；bridge 重启后仍可据此判断升级是否完成。 |

@@ -787,6 +787,22 @@ export class SessionManager {
     this.persistGroup(key, group);
   }
 
+  touchActiveSession(
+    chatId: string,
+    userId: string,
+    chatTypeRaw: string,
+    threadId?: string,
+  ): void {
+    const chatType = this.chatType(chatTypeRaw);
+    const key = this.makeKey(chatId, userId, chatType, threadId);
+    const group = this.groups.get(key);
+    if (!group) return;
+    const activeSlot = this.findSlot(group, group.activeSlotIndex);
+    if (!activeSlot) return;
+    activeSlot.session.lastActiveAt = Date.now();
+    this.persistGroup(key, group);
+  }
+
   setActiveSessionPreferredModel(
     chatId: string,
     userId: string,

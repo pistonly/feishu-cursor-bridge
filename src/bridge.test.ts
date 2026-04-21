@@ -58,6 +58,7 @@ function createTestConfig(): Config {
       experimentalLogFilePath: "/tmp/bridge.log",
       slotMessageLogEnabled: false,
       showAcpAvailableCommands: false,
+      enableBangCommand: false,
       enableUpgradeCommand: false,
       upgradeAdmins: {
         openIds: new Set<string>(),
@@ -206,6 +207,169 @@ test("/whoami 会返回当前消息识别到的飞书用户 ID", async () => {
   assert.match(sentTexts[0] ?? "", /ou_admin_123/);
   assert.match(sentTexts[0] ?? "", /BRIDGE_ADMIN_USER_IDS/);
   assert.match(sentTexts[0] ?? "", /open_id/);
+});
+
+test("bridge 在显式关闭时会拒绝 ! 终端命令", async () => {
+  const config = createTestConfig();
+  config.bridge.enableBangCommand = false;
+  const bridge = new Bridge(config);
+  const sentTexts: string[] = [];
+
+  (bridge as any).ensureMaintenanceStateLoaded = async () => {};
+  (bridge as any).feishuBot = {
+    stripBotMentionKeepLines(content: string) {
+      return content;
+    },
+    async sendText(_chatId: string, body: string): Promise<void> {
+      sentTexts.push(body);
+    },
+  };
+
+  await (bridge as any).handleFeishuMessage(createMessage("!pwd"));
+
+  assert.equal(sentTexts.length, 1);
+  assert.match(sentTexts[0] ?? "", /未启用 bridge 内置终端命令/);
+  assert.match(sentTexts[0] ?? "", /BRIDGE_ENABLE_BANG_COMMAND=true/);
+});
+
+test("bridge 会拒绝非管理员执行 ! 终端命令", async () => {
+  const config = createTestConfig();
+  config.bridge.enableBangCommand = true;
+  const bridge = new Bridge(config);
+  const sentTexts: string[] = [];
+
+  (bridge as any).ensureMaintenanceStateLoaded = async () => {};
+  (bridge as any).sessionManager = {
+    consumePendingNotices() {
+      return [];
+    },
+  };
+  (bridge as any).feishuBot = {
+    stripBotMentionKeepLines(content: string) {
+      return content;
+    },
+    async sendText(_chatId: string, body: string): Promise<void> {
+      sentTexts.push(body);
+    },
+  };
+
+  await (bridge as any).handleFeishuMessage(
+    createMessage("!pwd", { senderId: "user-2" }),
+  );
+
+  assert.equal(sentTexts.length, 1);
+  assert.match(sentTexts[0] ?? "", /仅管理员可用/);
+});
+
+test("bridge 会在当前 session 工作区执行 ! 终端命令", async () => {
+  const config = createTestConfig();
+  config.bridge.enableBangCommand = true;
+  const bridge = new Bridge(config);
+  const sentTexts: string[] = [];
+  const touchCalls: string[] = [];
+  const lastTurns: Array<{ prompt: string; reply: string }> = [];
+  const workspaceRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "bridge-bang-"));
+
+  (bridge as any).ensureMaintenanceStateLoaded = async () => {};
+  (bridge as any).sessionManager = {
+    async getSlot() {
+      return {
+        slotIndex: 1,
+        name: "demo",
+        session: {
+          backend: "codex",
+          sessionId: "session-1",
+          workspaceRoot,
+          chatId: "chat-1",
+          userId: "user-1",
+          chatType: "p2p",
+          createdAt: 0,
+          lastActiveAt: 0,
+        },
+      };
+    },
+    consumePendingNotices() {
+      return [];
+    },
+    setSlotLastTurn(
+      _chatId: string,
+      _userId: string,
+      _chatType: string,
+      _slotIndex: number,
+      prompt: string,
+      reply: string,
+    ) {
+      lastTurns.push({ prompt, reply });
+    },
+    touchActiveSession() {
+      touchCalls.push("touched");
+    },
+  };
+  (bridge as any).feishuBot = {
+    stripBotMentionKeepLines(content: string) {
+      return content;
+    },
+    async sendText(_chatId: string, body: string): Promise<void> {
+      sentTexts.push(body);
+    },
+  };
+
+  await (bridge as any).handleFeishuMessage(createMessage("！pwd"));
+
+  assert.equal(sentTexts.length, 1);
+  assert.match(sentTexts[0] ?? "", /终端命令执行完成/);
+  assert.match(sentTexts[0] ?? "", new RegExp(workspaceRoot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(sentTexts[0] ?? "", /Session：#1 \(demo\)/);
+  assert.match(sentTexts[0] ?? "", /```sh/);
+  assert.match(sentTexts[0] ?? "", /```text/);
+  assert.equal(lastTurns.length, 1);
+  assert.equal(lastTurns[0]?.prompt, "pwd");
+  assert.match(lastTurns[0]?.reply ?? "", /终端命令执行完成/);
+  assert.equal(touchCalls.length, 1);
+});
+
+test("bridge 会在当前槽位仍有回复时拒绝 ! 终端命令", async () => {
+  const config = createTestConfig();
+  config.bridge.enableBangCommand = true;
+  const bridge = new Bridge(config);
+  const sentTexts: string[] = [];
+
+  (bridge as any).ensureMaintenanceStateLoaded = async () => {};
+  (bridge as any).sessionManager = {
+    async getSlot() {
+      return {
+        slotIndex: 1,
+        session: {
+          backend: "codex",
+          sessionId: "session-1",
+          workspaceRoot: "/tmp/project",
+          chatId: "chat-1",
+          userId: "user-1",
+          chatType: "p2p",
+          createdAt: 0,
+          lastActiveAt: 0,
+        },
+      };
+    },
+    consumePendingNotices() {
+      return [];
+    },
+  };
+  ((bridge as any).promptCoordinator as any).activePrompts = new Set(["dm:user-1:1"]);
+  (bridge as any).feishuBot = {
+    stripBotMentionKeepLines(content: string) {
+      return content;
+    },
+    async sendText(_chatId: string, body: string): Promise<void> {
+      sentTexts.push(body);
+    },
+  };
+
+  await (bridge as any).handleFeishuMessage(createMessage("!pwd"));
+
+  assert.equal(sentTexts.length, 1);
+  assert.match(sentTexts[0] ?? "", /仍有 ACP 回复在进行或排队/);
+  assert.match(sentTexts[0] ?? "", /\/stop/);
 });
 
 test("/update --force 会执行构建并登记待重启状态", async () => {

@@ -111,6 +111,8 @@ export interface Config {
     slotMessageLogEnabled: boolean;
     /** 是否在卡片中显示 ACP availableCommands */
     showAcpAvailableCommands: boolean;
+    /** 是否允许 bridge 直接执行 `!cmd` 形式的本地终端命令 */
+    enableBangCommand: boolean;
     /** 是否允许在飞书里使用 `/upgrade` 触发 bridge 自升级 */
     enableUpgradeCommand: boolean;
     /** 允许触发 `/upgrade` 的管理员飞书 ID 列表 */
@@ -532,6 +534,9 @@ export function loadConfig(): Config {
   const showAcpAvailableCommands =
     (process.env["BRIDGE_SHOW_ACP_AVAILABLE_COMMANDS"] ?? "false").toLowerCase() ===
     "true";
+  const enableBangCommand =
+    (process.env["BRIDGE_ENABLE_BANG_COMMAND"] ?? "true").toLowerCase() ===
+    "true";
 
   const defaultPresetsFile = path.join(
     os.homedir(),
@@ -675,6 +680,7 @@ export function loadConfig(): Config {
         (process.env["BRIDGE_SLOT_LOG_ENABLED"] ?? "false").toLowerCase() ===
         "true",
       showAcpAvailableCommands,
+      enableBangCommand,
       enableUpgradeCommand,
       upgradeAdmins,
       serviceScriptPath,

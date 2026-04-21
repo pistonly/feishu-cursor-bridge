@@ -5,6 +5,7 @@ import {
 } from "../commands/fileback-command.js";
 import type { FeishuMessage } from "../feishu/bot.js";
 import type { MessageHandlerContext } from "./bridge-context.js";
+import { handleBangCommand } from "./bang-command.js";
 import { handleBridgeCommand } from "./bridge-command-router.js";
 import { handleStatusCommand } from "./bridge-status.js";
 import type { BridgeMessageHandlerDeps } from "./bridge-message-handler-types.js";
@@ -25,6 +26,10 @@ export async function handleBridgeMessage(
     hasPostEmbeddedImages,
   } = preprocessed;
   await ctx.ensureMaintenanceStateLoaded();
+
+  if (await handleBangCommand(ctx, msg, contentMultiline)) {
+    return;
+  }
 
   const filebackParsed = parseFilebackUserMessage(content);
   if (filebackParsed.kind === "usage") {

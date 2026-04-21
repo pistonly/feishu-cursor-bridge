@@ -15,7 +15,7 @@
 - **Max live sessions per user**: default **10** across all DMs / per-user group / per-user thread sessions (tune with `BRIDGE_MAX_SESSIONS_PER_USER`; `0` means unlimited), reducing idle ACP connection buildup when idle timeout is infinite; shared group sessions are managed separately and do not consume the creator's per-user quota
 - Group chats: @ the bot (or no @ when “only one human + the bot”); DMs: talk directly
 - **Explicit sessions**: set **`BRIDGE_WORK_ALLOWLIST`** (compatible with `CURSOR_WORK_ALLOWLIST`); create a session with `/new list` then `/new <index or path>` before normal chat; bare `/new` lists presets
-- Built-in commands: `/new`, `/sessions`, `/switch`, `/close` (incl. `/close all`), `/rename` (incl. `/new list`, `/new <index>`, `/new <path>`), `/status`, `/mode`, `/model`; **`/topic` + text** is display-only (not sent to the Agent — see `docs/feishu-commands.md`)
+- Built-in commands: `/new`, `/sessions`, `/switch`, `/close` (incl. `/close all`), `/rename` (incl. `/new list`, `/new <index>`, `/new <path>`), `/status`, `/mode`, `/model`; bridge-native `!<shell command>` is enabled by default, executes in the active session workspace, and is still restricted to admins unless `BRIDGE_ENABLE_BANG_COMMAND=false`; **`/topic` + text** is display-only (not sent to the Agent — see `docs/feishu-commands.md`)
 - Persistent Feishu ↔ ACP mapping: after restart, if the Agent reports `loadSession`, `session/load` can recover
 - **Recovery metadata**: `/status` shows Cursor legacy CLI resume ID or Claude resume session id when the backend exposes one
 
@@ -277,7 +277,7 @@ Proxy precedence: `wss_proxy` / `ws_proxy` > `https_proxy` / `http_proxy` / `all
 - **每用户存活 session 上限**：同一飞书用户跨所有私聊、按用户隔离的群/话题会话的存活 session 总数默认最多 **10**（可用 `BRIDGE_MAX_SESSIONS_PER_USER` 调整；`0` 表示不限制），避免将空闲过期设为无限时进程堆积过多 ACP 连接；共享群 session 不占用创建者的个人配额
 - 群聊 @ 机器人触发（或满足「仅 1 用户 + 1 机器人」时可免 @）；私聊直接对话
 - **须显式建 session**：配置必填 **`BRIDGE_WORK_ALLOWLIST`**（兼容 `CURSOR_WORK_ALLOWLIST`）；先用 `/new list` 再 `/new <序号或路径>` 才能对话；裸 `/new` 等同列表
-- 内置命令：`/new`、`/sessions`、`/switch`、`/close`（含 `/close all`）、`/rename`（含 `/new list`、`/new <序号>`、`/new <路径>` 等）、`/status`、`/mode`、`/model`；另有 **`/topic` + 话题内容** 的纯展示命令（不发给 Agent，见 `docs/feishu-commands.md`）
+- 内置命令：`/new`、`/sessions`、`/switch`、`/close`（含 `/close all`）、`/rename`（含 `/new list`、`/new <序号>`、`/new <路径>` 等）、`/status`、`/mode`、`/model`；bridge-native `!<shell 命令>` 默认开启，在发送者命中管理员时会直接在当前活跃 session 工作区执行，也可通过 `BRIDGE_ENABLE_BANG_COMMAND=false` 关闭；另有 **`/topic` + 话题内容** 的纯展示命令（不发给 Agent，见 `docs/feishu-commands.md`）
 - 会话映射持久化：进程重启后若 Agent 声明 `loadSession`，可 `session/load` 恢复
 - **恢复元信息**：`/status` 会在 `cursor-legacy` 显示 CLI resume ID，在 `claude` 显示 Claude 恢复会话 id；官方 ACP 当前未暴露等价字段
 
