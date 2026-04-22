@@ -34,6 +34,7 @@ export function formatBridgeCommandsHelp(_backend: AcpBackend): string {
     "• `/resume` — 列出当前 project 可恢复的历史 session",
     "• `/resume 0` — 对当前 session 执行 ACP `session/load`",
     "• `/resume <序号或sessionId>` — 恢复到指定历史 session",
+    "• `/resume -b <backend> <id>` — 直接按 backend 指定的恢复 ID 绑定当前槽位",
     "• `/stop` / `/cancel` — 中断当前活跃槽位正在生成的回复；若该槽位有排队消息，也会一并撤销",
     "• `/fileback <说明>` — 向 Agent 附带「用 `FEISHU_SEND_FILE` 发文件」说明后再发你的任务",
     "• `!<shell 命令>` — bridge 直接在当前 session 工作区执行本地终端命令（默认开启；仅管理员可用；可设 `BRIDGE_ENABLE_BANG_COMMAND=false` 关闭）",

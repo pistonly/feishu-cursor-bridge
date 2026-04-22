@@ -16,6 +16,7 @@ test("formatBridgeCommandsHelp 含核心命令且随后端区分说明", () => {
   assert.match(official, /\/whoami/);
   assert.match(official, /\/resume 0/);
   assert.match(official, /\/resume <序号或sessionId>/);
+  assert.match(official, /\/resume -b <backend> <id>/);
   assert.match(official, /!<shell 命令>/);
   assert.match(official, new RegExp(`--backend <${formatSupportedBackendValuePattern()}>`));
   assert.match(official, new RegExp(`-b ${getBackendShortcut("cursor-official")}`));

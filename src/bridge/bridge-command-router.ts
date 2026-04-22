@@ -4,7 +4,7 @@ import {
   formatSupportedBackendValues,
 } from "../acp/backend-metadata.js";
 import { captureAcpReplayDuring } from "../acp/replay-capture.js";
-import type { AcpBackend } from "../acp/runtime-contract.js";
+import type { AcpBackend, SessionRecovery } from "../acp/runtime-contract.js";
 import {
   matchesBridgeHelpCommand,
   matchesBridgeStartCommand,
@@ -158,6 +158,7 @@ ${lines.join("\n\n")}
 • \`/resume\` — 列出当前 project 可恢复的历史 session
 • \`/resume 0\` — 对当前 session 执行 ACP \`session/load\`
 • \`/resume <序号或sessionId>\` — 恢复到指定历史 session
+• \`/resume -b <backend> <id>\` — 直接按 backend 指定的恢复 ID 绑定当前槽位
 • \`/mode <模式ID>\` — 切换当前 session 模式
 • \`/rename <新名字>\` — 重命名当前 session
 • \`/rename <编号或名称> <新名字>\` — 重命名指定 session
@@ -189,6 +190,17 @@ function formatResumeHistoryLine(
   ].join("\n");
 }
 
+function buildResumeUsageLines(): string[] {
+  return [
+    "用法：",
+    "• `/resume 0` — 对当前 session 执行 ACP `session/load`",
+    "• `/resume <序号>` — 恢复到对应历史 session",
+    "• `/resume <sessionId>` — 按历史列表中的 sessionId 恢复",
+    "• `/resume -b <backend> <id>` — 直接按 backend 指定的恢复 ID 绑定当前槽位",
+    "• `<id>` 含义：`cursor-legacy` = CLI resume ID，`claude` = Claude resume session，`codex` / `cursor-official` = ACP sessionId",
+  ];
+}
+
 function buildResumeReplayMessage(headerLines: string[], replayMd: string): string {
   const header = `${headerLines.join("\n")}\n\n---\n\n**会话历史回放（适配器推送）**\n\n`;
   const emptyHint =
@@ -204,11 +216,208 @@ function buildResumeReplayMessage(headerLines: string[], replayMd: string): stri
   return header + body;
 }
 
+function formatDirectResumeInputLabel(backend: AcpBackend): string {
+  if (backend === "cursor-legacy") return "CLI resume ID";
+  if (backend === "claude") return "Claude resume session";
+  return "sessionId";
+}
+
+function buildDirectResumeRecoveryLines(recovery: SessionRecovery | undefined): string[] {
+  if (recovery?.kind === "cursor-cli") {
+    return [`• 实际 CLI resume ID：\`${recovery.cursorCliChatId}\``];
+  }
+  if (recovery?.kind === "claude-session") {
+    return [`• 实际 Claude 恢复会话：\`${recovery.resumeSessionId}\``];
+  }
+  return [];
+}
+
+async function handleDirectResumeCommand(
+  ctx: BridgeMessageHandlerDeps,
+  msg: FeishuMessage,
+  backend: AcpBackend,
+  rawId: string,
+): Promise<void> {
+  if (!ctx.config.acp.enabledBackends.includes(backend)) {
+    await ctx.feishuBot.sendText(
+      msg.chatId,
+      `❌ backend \`${backend}\` 当前未启用。已启用：${ctx.config.acp.enabledBackends.map((item) => `\`${item}\``).join(" / ")}。`,
+      msg.messageId,
+      ctx.threadReplyOpts(msg),
+    );
+    return;
+  }
+
+  const requestedId = rawId.trim();
+  if (!requestedId) {
+    await ctx.feishuBot.sendText(
+      msg.chatId,
+      `❌ \`/resume\` 参数不正确。\n\n${buildResumeUsageLines().join("\n")}`,
+      msg.messageId,
+      ctx.threadReplyOpts(msg),
+    );
+    return;
+  }
+
+  const snap = await ctx.sessionManager.getSessionSnapshotLoaded(
+    msg.chatId,
+    msg.senderId,
+    msg.chatType,
+    ctx.threadScope(msg),
+  );
+  if (!snap) {
+    await ctx.feishuBot.sendText(
+      msg.chatId,
+      `❌ ${NO_SESSION_HINT}\n\n直接恢复外部 ID 需要先有一个活跃 session 来确定工作区。`,
+      msg.messageId,
+      ctx.threadReplyOpts(msg),
+    );
+    return;
+  }
+
+  const promptState = ctx.promptCoordinator.getSlotPromptState(
+    snap.sessionKey,
+    snap.activeSlot.slotIndex,
+  );
+  if (promptState.hasActivePrompt || promptState.hasQueuedPrompt) {
+    await ctx.feishuBot.sendText(
+      msg.chatId,
+      "⏳ 当前活跃 session 仍有 ACP 回复在进行或排队。请等待完成，或先发送 `/stop` / `/cancel` 后再执行 `/resume -b ...`。",
+      msg.messageId,
+      ctx.threadReplyOpts(msg),
+    );
+    return;
+  }
+
+  const runtime = ctx.runtimeForBackend(backend);
+  const workspaceRoot = snap.activeSlot.session.workspaceRoot;
+  await ctx.flushPendingSessionNotices(msg);
+
+  try {
+    if (backend === "cursor-legacy" || backend === "claude") {
+      const requestedRecovery =
+        backend === "cursor-legacy"
+          ? { kind: "cursor-cli" as const, cursorCliChatId: requestedId }
+          : { kind: "claude-session" as const, resumeSessionId: requestedId };
+      const created = await runtime.newSession(workspaceRoot, {
+        recovery: requestedRecovery,
+      });
+      const rebound = await ctx.sessionManager.rebindActiveSlotToResumeHistory(
+        msg.chatId,
+        msg.senderId,
+        msg.chatType,
+        {
+          backend,
+          sessionId: created.sessionId,
+          recovery: created.recovery ?? requestedRecovery,
+          workspaceRoot,
+          lastActiveAt: Date.now(),
+        },
+        ctx.threadScope(msg),
+      );
+      await ctx.feishuBot.sendText(
+        msg.chatId,
+        [
+          `✅ 已将当前活跃槽位直接绑定到外部恢复会话 ${formatSessionLabel(rebound)}。`,
+          `• Backend：\`${backend}\``,
+          `• 工作区：\`${workspaceRoot}\``,
+          `• 输入的 ${formatDirectResumeInputLabel(backend)}：\`${requestedId}\``,
+          `• 新 ACP sessionId：\`${created.sessionId}\``,
+          ...buildDirectResumeRecoveryLines(created.recovery ?? requestedRecovery),
+          "",
+          "说明：该 backend 通过 `session/new` + recovery 继续旧会话，通常不会立即回放历史文本；后续消息会继续写入该会话。",
+        ].join("\n"),
+        msg.messageId,
+        ctx.threadReplyOpts(msg),
+      );
+      return;
+    }
+
+    if (!runtime.supportsLoadSession) {
+      await ctx.feishuBot.sendText(
+        msg.chatId,
+        `❌ backend \`${backend}\` 未宣告 \`loadSession\`，无法直接按 sessionId 恢复。`,
+        msg.messageId,
+        ctx.threadReplyOpts(msg),
+      );
+      return;
+    }
+
+    const replayMd = await captureAcpReplayDuring(
+      runtime.bridgeClient,
+      requestedId,
+      () => runtime.loadSession(requestedId, workspaceRoot),
+      {
+        showAvailableCommands: ctx.config.bridge.showAcpAvailableCommands,
+      },
+    );
+    const rebound = await ctx.sessionManager.rebindActiveSlotToResumeHistory(
+      msg.chatId,
+      msg.senderId,
+      msg.chatType,
+      {
+        backend,
+        sessionId: requestedId,
+        workspaceRoot,
+        lastActiveAt: Date.now(),
+      },
+      ctx.threadScope(msg),
+    );
+    await ctx.feishuBot.sendText(
+      msg.chatId,
+      buildResumeReplayMessage(
+        [
+          `✅ 已将当前活跃槽位直接恢复到外部 session ${formatSessionLabel(rebound)}。`,
+          `• Backend：\`${backend}\``,
+          `• sessionId：\`${requestedId}\``,
+          `• 工作区：\`${workspaceRoot}\``,
+        ],
+        replayMd,
+      ),
+      msg.messageId,
+      ctx.threadReplyOpts(msg),
+    );
+  } catch (err) {
+    await ctx.feishuBot.sendText(
+      msg.chatId,
+      `❌ /resume -b ${backend} 失败:\n${formatJsonRpcLikeError(err)}`,
+      msg.messageId,
+      ctx.threadReplyOpts(msg),
+    );
+  }
+}
+
 async function handleResumeCommand(
   ctx: BridgeMessageHandlerDeps,
   msg: FeishuMessage,
-  target: number | string | null,
+  command: Extract<ReturnType<typeof parseNewConversationCommand>, { kind: "resume" }>,
 ): Promise<void> {
+  if (command.invalidUsage) {
+    const backendValues = formatSupportedBackendValues();
+    const shortcuts = formatPreferredBackendShortcuts();
+    const compatibleAliases = formatCompatibleBackendAliases();
+    await ctx.feishuBot.sendText(
+      msg.chatId,
+      command.invalidBackend
+        ? `❌ 不支持的 backend：\`${command.invalidBackend}\`。可用值：${backendValues}（常用简写：${shortcuts}${compatibleAliases ? `；也兼容 ${compatibleAliases}` : ""}）。`
+        : `❌ \`/resume\` 参数不正确。\n\n${buildResumeUsageLines().join("\n")}`,
+      msg.messageId,
+      ctx.threadReplyOpts(msg),
+    );
+    return;
+  }
+
+  if (command.backend && typeof command.target === "string") {
+    await handleDirectResumeCommand(
+      ctx,
+      msg,
+      command.backend,
+      command.target,
+    );
+    return;
+  }
+
+  const target = command.target;
   if (target === null) {
     const listed = await ctx.sessionManager.listResumeHistoryForProject(
       msg.chatId,
@@ -237,10 +446,7 @@ async function handleResumeCommand(
           )]
         : ["", "（当前 project 暂无其它可恢复的历史 session）"]),
       "",
-      "用法：",
-      "• `/resume 0` — 对当前 session 执行 ACP `session/load`",
-      "• `/resume <序号>` — 恢复到对应历史 session",
-      "• `/resume <sessionId>` — 直接恢复指定历史 session",
+      ...buildResumeUsageLines(),
     ];
     await ctx.feishuBot.sendText(
       msg.chatId,
@@ -822,7 +1028,7 @@ async function handleBridgeManagedCommand(
       if (!(await requireSharedGroupSessionAdmin(ctx, msg, "`/resume`"))) {
         return true;
       }
-      await handleResumeCommand(ctx, msg, command.target);
+      await handleResumeCommand(ctx, msg, command);
       return true;
     }
 

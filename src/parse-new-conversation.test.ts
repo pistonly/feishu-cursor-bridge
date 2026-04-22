@@ -138,6 +138,28 @@ test("parseNewConversationCommand 支持 /resume", () => {
     kind: "resume",
     target: "session-abc",
   });
+  assert.deepEqual(parseNewConversationCommand("/resume -b codex session-abc"), {
+    kind: "resume",
+    target: "session-abc",
+    backend: "codex",
+  });
+  assert.deepEqual(parseNewConversationCommand("/resume session-abc --backend cc"), {
+    kind: "resume",
+    target: "session-abc",
+    backend: "claude",
+  });
+  assert.deepEqual(parseNewConversationCommand("/resume -b codex"), {
+    kind: "resume",
+    target: null,
+    backend: "codex",
+    invalidUsage: true,
+  });
+  assert.deepEqual(parseNewConversationCommand("/resume -b tmux session-abc"), {
+    kind: "resume",
+    target: "session-abc",
+    invalidUsage: true,
+    invalidBackend: "tmux",
+  });
 });
 
 test("matchesInterruptUserCommand 识别纯文本 /stop、/cancel", () => {

@@ -75,7 +75,7 @@ export type NewConversationCommand =
   | { kind: "close"; target: number | string }
   | { kind: "whoami" }
   | { kind: "sessions" }
-  | { kind: "resume"; target: number | string | null }
+  | ({ kind: "resume"; target: number | string | null } & NewCommandCommon)
   | { kind: "restart"; force: boolean; invalidUsage?: boolean }
   | { kind: "update"; force: boolean; invalidUsage?: boolean }
   | { kind: "upgrade"; force: boolean; invalidUsage?: boolean };
@@ -112,11 +112,35 @@ export function parseNewConversationCommand(
   if (cmd === "whoami") return { kind: "whoami" };
   if (cmd === "sessions" || cmd === "session") return { kind: "sessions" };
   if (cmd === "resume") {
-    if (tokens.length === 1) return { kind: "resume", target: null };
-    const arg = tokens[1];
+    const extracted = extractResumeFlags(tokens.slice(1));
+    const resumeCommandMeta = extracted.invalidBackend
+      ? { invalidUsage: true as const, invalidBackend: extracted.invalidBackend }
+      : {};
+    if (extracted.backend) {
+      if (extracted.remainingTokens.length !== 1) {
+        return {
+          kind: "resume",
+          target: extracted.remainingTokens[0] ?? null,
+          backend: extracted.backend,
+          invalidUsage: true,
+          ...resumeCommandMeta,
+        };
+      }
+      return {
+        kind: "resume",
+        target: extracted.remainingTokens[0] ?? null,
+        backend: extracted.backend,
+        ...resumeCommandMeta,
+      };
+    }
+    if (extracted.remainingTokens.length === 0) {
+      return { kind: "resume", target: null, ...resumeCommandMeta };
+    }
+    const arg = extracted.remainingTokens[0];
     return {
       kind: "resume",
       target: /^\d+$/.test(arg) ? parseInt(arg, 10) : arg,
+      ...resumeCommandMeta,
     };
   }
   if (cmd === "restart" || cmd === "update" || cmd === "upgrade") {
@@ -282,6 +306,44 @@ function extractNewFlags(tokens: string[]): {
     }
   }
   return { name, backend, invalidBackend, remainingTokens: remaining };
+}
+
+function extractResumeFlags(tokens: string[]): {
+  backend: AcpBackend | undefined;
+  invalidBackend: string | undefined;
+  remainingTokens: string[];
+} {
+  const remaining: string[] = [];
+  let backend: AcpBackend | undefined;
+  let invalidBackend: string | undefined;
+  let i = 0;
+  while (i < tokens.length) {
+    const tok = tokens[i];
+    const tokLc = tok.toLowerCase();
+    if ((tokLc === "--backend" || tokLc === "-b") && i + 1 < tokens.length) {
+      const next = tokens[i + 1];
+      const normalized = normalizeBackend(next);
+      if (normalized) {
+        backend = normalized;
+      } else {
+        invalidBackend ??= next;
+      }
+      i += 2;
+    } else if (tokLc.startsWith("--backend=") || tokLc.startsWith("-b=")) {
+      const value = tokLc.startsWith("-b=") ? tok.slice(3) : tok.slice("--backend=".length);
+      const normalized = normalizeBackend(value);
+      if (normalized) {
+        backend = normalized;
+      } else {
+        invalidBackend ??= value;
+      }
+      i += 1;
+    } else {
+      remaining.push(tok);
+      i += 1;
+    }
+  }
+  return { backend, invalidBackend, remainingTokens: remaining };
 }
 
 function parseMaintenanceCommand(

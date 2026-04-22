@@ -1314,6 +1314,283 @@ test("/resume 1 会恢复指定历史 session 并重绑当前槽位", async () =
   assert.match(sentTexts[0] ?? "", /历史回放内容/);
 });
 
+test("/resume -b codex <sessionId> 会直接 load 外部 session 并重绑当前槽位", async () => {
+  const bridge = new Bridge(createTestConfig());
+  const sentTexts: string[] = [];
+  const loadSessionCalls: Array<{ sessionId: string; workspaceRoot: string }> = [];
+  const rebindCalls: Array<{ backend: string; sessionId: string; workspaceRoot: string }> = [];
+
+  const bridgeClient = new EventEmitter();
+  const runtime = {
+    supportsLoadSession: true,
+    bridgeClient,
+    async loadSession(sessionId: string, workspaceRoot: string): Promise<void> {
+      loadSessionCalls.push({ sessionId, workspaceRoot });
+      bridgeClient.emit("acp", {
+        type: "agent_message_chunk",
+        sessionId,
+        text: "外部回放内容",
+      });
+    },
+  };
+
+  (bridge as any).ensureMaintenanceStateLoaded = async () => {};
+  (bridge as any).runtimeRegistry = {
+    getRuntime() {
+      return runtime;
+    },
+  };
+  (bridge as any).sessionManager = {
+    async getSessionSnapshotLoaded() {
+      return {
+        sessionKey: "dm:user-1",
+        group: { slots: [], activeSlotIndex: 1, nextSlotIndex: 2 },
+        activeSlot: {
+          slotIndex: 1,
+          name: "main",
+          session: {
+            backend: "cursor-official",
+            sessionId: "current-session",
+            workspaceRoot: "/tmp/project",
+            chatId: "chat-1",
+            userId: "user-1",
+            chatType: "p2p",
+            createdAt: 0,
+            lastActiveAt: 0,
+          },
+        },
+        idleExpiresInMs: 60_000,
+      };
+    },
+    async rebindActiveSlotToResumeHistory(
+      _chatId: string,
+      _userId: string,
+      _chatType: string,
+      entry: { backend: string; sessionId: string; workspaceRoot: string },
+    ) {
+      rebindCalls.push(entry);
+      return {
+        slotIndex: 1,
+        name: "main",
+        session: {
+          backend: "codex",
+          sessionId: entry.sessionId,
+          workspaceRoot: entry.workspaceRoot,
+          chatId: "chat-1",
+          userId: "user-1",
+          chatType: "p2p",
+          createdAt: 0,
+          lastActiveAt: 0,
+        },
+      };
+    },
+  };
+  (bridge as any).feishuBot = {
+    stripBotMentionKeepLines(content: string) {
+      return content;
+    },
+    async sendText(_chatId: string, body: string): Promise<void> {
+      sentTexts.push(body);
+    },
+  };
+  (bridge as any).flushPendingSessionNotices = async () => {};
+
+  await (bridge as any).handleFeishuMessage(createMessage("/resume -b codex external-1"));
+
+  assert.deepEqual(loadSessionCalls, [
+    { sessionId: "external-1", workspaceRoot: "/tmp/project" },
+  ]);
+  assert.equal(rebindCalls.length, 1);
+  assert.equal(rebindCalls[0]?.backend, "codex");
+  assert.equal(rebindCalls[0]?.sessionId, "external-1");
+  assert.equal(rebindCalls[0]?.workspaceRoot, "/tmp/project");
+  assert.equal(typeof (rebindCalls[0] as { lastActiveAt?: unknown })?.lastActiveAt, "number");
+  assert.equal(sentTexts.length, 1);
+  assert.match(sentTexts[0] ?? "", /已将当前活跃槽位直接恢复到外部 session #1 \(main\)/);
+  assert.match(sentTexts[0] ?? "", /external-1/);
+  assert.match(sentTexts[0] ?? "", /外部回放内容/);
+});
+
+test("/resume -b claude <id> 会用 newSession recovery 绑定外部会话", async () => {
+  const config = createTestConfig();
+  config.acp.enabledBackends = ["cursor-official", "codex", "claude"];
+  const bridge = new Bridge(config);
+  const sentTexts: string[] = [];
+  const newSessionCalls: Array<{
+    workspaceRoot: string | undefined;
+    resumeSessionId: string | undefined;
+  }> = [];
+  const rebindCalls: Array<{
+    backend: string;
+    sessionId: string;
+    workspaceRoot: string;
+    recovery?: { kind: string; resumeSessionId?: string };
+  }> = [];
+
+  const runtime = {
+    bridgeClient: new EventEmitter(),
+    async newSession(
+      workspaceRoot?: string,
+      options?: { recovery?: { kind: "claude-session"; resumeSessionId: string } },
+    ): Promise<{ sessionId: string; recovery?: { kind: "claude-session"; resumeSessionId: string } }> {
+      newSessionCalls.push({
+        workspaceRoot,
+        resumeSessionId: options?.recovery?.resumeSessionId,
+      });
+      return {
+        sessionId: "claude-acp-1",
+        recovery: options?.recovery,
+      };
+    },
+  };
+
+  (bridge as any).ensureMaintenanceStateLoaded = async () => {};
+  (bridge as any).runtimeRegistry = {
+    getRuntime() {
+      return runtime;
+    },
+  };
+  (bridge as any).sessionManager = {
+    async getSessionSnapshotLoaded() {
+      return {
+        sessionKey: "dm:user-1",
+        group: { slots: [], activeSlotIndex: 2, nextSlotIndex: 3 },
+        activeSlot: {
+          slotIndex: 2,
+          name: "main",
+          session: {
+            backend: "cursor-official",
+            sessionId: "current-session",
+            workspaceRoot: "/tmp/project",
+            chatId: "chat-1",
+            userId: "user-1",
+            chatType: "p2p",
+            createdAt: 0,
+            lastActiveAt: 0,
+          },
+        },
+        idleExpiresInMs: 60_000,
+      };
+    },
+    async rebindActiveSlotToResumeHistory(
+      _chatId: string,
+      _userId: string,
+      _chatType: string,
+      entry: {
+        backend: string;
+        sessionId: string;
+        workspaceRoot: string;
+        recovery?: { kind: string; resumeSessionId?: string };
+      },
+    ) {
+      rebindCalls.push(entry);
+      return {
+        slotIndex: 2,
+        name: "main",
+        session: {
+          backend: "claude",
+          sessionId: entry.sessionId,
+          workspaceRoot: entry.workspaceRoot,
+          chatId: "chat-1",
+          userId: "user-1",
+          chatType: "p2p",
+          createdAt: 0,
+          lastActiveAt: 0,
+        },
+      };
+    },
+  };
+  (bridge as any).feishuBot = {
+    stripBotMentionKeepLines(content: string) {
+      return content;
+    },
+    async sendText(_chatId: string, body: string): Promise<void> {
+      sentTexts.push(body);
+    },
+  };
+  (bridge as any).flushPendingSessionNotices = async () => {};
+
+  await (bridge as any).handleFeishuMessage(createMessage("/resume -b claude resume-ext-1"));
+
+  assert.deepEqual(newSessionCalls, [
+    {
+      workspaceRoot: "/tmp/project",
+      resumeSessionId: "resume-ext-1",
+    },
+  ]);
+  assert.equal(rebindCalls.length, 1);
+  assert.equal(rebindCalls[0]?.backend, "claude");
+  assert.equal(rebindCalls[0]?.sessionId, "claude-acp-1");
+  assert.equal(rebindCalls[0]?.workspaceRoot, "/tmp/project");
+  assert.deepEqual(rebindCalls[0]?.recovery, {
+    kind: "claude-session",
+    resumeSessionId: "resume-ext-1",
+  });
+  assert.equal(typeof (rebindCalls[0] as { lastActiveAt?: unknown })?.lastActiveAt, "number");
+  assert.equal(sentTexts.length, 1);
+  assert.match(sentTexts[0] ?? "", /已将当前活跃槽位直接绑定到外部恢复会话 #2 \(main\)/);
+  assert.match(sentTexts[0] ?? "", /输入的 Claude resume session：`resume-ext-1`/);
+  assert.match(sentTexts[0] ?? "", /新 ACP sessionId：`claude-acp-1`/);
+});
+
+test("/resume -b <backend> 在当前槽位仍有回复时会拒绝执行", async () => {
+  const bridge = new Bridge(createTestConfig());
+  const sentTexts: string[] = [];
+  const loadSessionCalls: string[] = [];
+
+  (bridge as any).ensureMaintenanceStateLoaded = async () => {};
+  (bridge as any).runtimeRegistry = {
+    getRuntime() {
+      return {
+        supportsLoadSession: true,
+        bridgeClient: new EventEmitter(),
+        async loadSession(sessionId: string): Promise<void> {
+          loadSessionCalls.push(sessionId);
+        },
+      };
+    },
+  };
+  (bridge as any).sessionManager = {
+    async getSessionSnapshotLoaded() {
+      return {
+        sessionKey: "dm:user-1",
+        group: { slots: [], activeSlotIndex: 1, nextSlotIndex: 2 },
+        activeSlot: {
+          slotIndex: 1,
+          session: {
+            backend: "cursor-official",
+            sessionId: "current-session",
+            workspaceRoot: "/tmp/project",
+            chatId: "chat-1",
+            userId: "user-1",
+            chatType: "p2p",
+            createdAt: 0,
+            lastActiveAt: 0,
+          },
+        },
+        idleExpiresInMs: 60_000,
+      };
+    },
+  };
+  ((bridge as any).promptCoordinator as any).activePrompts = new Set(["dm:user-1:1"]);
+  (bridge as any).feishuBot = {
+    stripBotMentionKeepLines(content: string) {
+      return content;
+    },
+    async sendText(_chatId: string, body: string): Promise<void> {
+      sentTexts.push(body);
+    },
+  };
+  (bridge as any).flushPendingSessionNotices = async () => {};
+
+  await (bridge as any).handleFeishuMessage(createMessage("/resume -b codex external-1"));
+
+  assert.deepEqual(loadSessionCalls, []);
+  assert.equal(sentTexts.length, 1);
+  assert.match(sentTexts[0] ?? "", /仍有 ACP 回复在进行或排队/);
+  assert.match(sentTexts[0] ?? "", /\/stop/);
+});
+
 test("成功回复后会写入 resume label", async () => {
   const bridge = new Bridge(createTestConfig());
   const labelCalls: string[] = [];
