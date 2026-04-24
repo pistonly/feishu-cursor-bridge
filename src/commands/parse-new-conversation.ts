@@ -75,6 +75,7 @@ export type NewConversationCommand =
   | { kind: "close"; target: number | string }
   | { kind: "whoami" }
   | { kind: "sessions" }
+  | { kind: "history"; count?: number; invalidUsage?: boolean }
   | ({ kind: "resume"; target: number | string | null } & NewCommandCommon)
   | { kind: "restart"; force: boolean; invalidUsage?: boolean }
   | { kind: "update"; force: boolean; invalidUsage?: boolean }
@@ -101,6 +102,7 @@ export function parseNewConversationCommand(
     cmd !== "mode" &&
     cmd !== "sessions" &&
     cmd !== "session" &&
+    cmd !== "history" &&
     cmd !== "resume" &&
     cmd !== "restart" &&
     cmd !== "update" &&
@@ -111,6 +113,16 @@ export function parseNewConversationCommand(
 
   if (cmd === "whoami") return { kind: "whoami" };
   if (cmd === "sessions" || cmd === "session") return { kind: "sessions" };
+  if (cmd === "history") {
+    if (tokens.length === 1) return { kind: "history" };
+    if (tokens.length === 2 && /^\d+$/.test(tokens[1]!)) {
+      const count = parseInt(tokens[1]!, 10);
+      return count >= 1
+        ? { kind: "history", count }
+        : { kind: "history", count, invalidUsage: true };
+    }
+    return { kind: "history", invalidUsage: true };
+  }
   if (cmd === "resume") {
     const extracted = extractResumeFlags(tokens.slice(1));
     const resumeCommandMeta = extracted.invalidBackend

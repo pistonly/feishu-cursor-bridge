@@ -200,6 +200,7 @@ export class Bridge {
       getFeishuBot: () => this.feishuBot,
       getSessionManager: () => this.sessionManager,
       getSlotMessageLog: () => this.slotMessageLog,
+      isSessionHistoryEnabled: () => this.config.bridge.sessionHistoryEnabled,
       flushPendingSessionNotices: (msg) => this.flushPendingSessionNotices(msg),
       threadReplyOpts: (msg) => this.threadReplyOpts(msg),
       threadScope: (msg) => this.threadScope(msg),

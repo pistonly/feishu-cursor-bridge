@@ -31,6 +31,7 @@ export function formatBridgeCommandsHelp(_backend: AcpBackend): string {
     "",
     "**对话与控制**",
     "• `/reply` — 重发当前槽位缓存的上一轮；`/reply <编号或名称>` — 指定槽位",
+    "• `/history` — 查看当前槽位最近几轮历史；`/history <条数>` — 指定显示条数（最多 20）",
     "• `/resume` — 列出当前 project 可恢复的历史 session",
     "• `/resume 0` — 对当前 session 执行 ACP `session/load`",
     "• `/resume <序号或sessionId>` — 恢复到指定历史 session",

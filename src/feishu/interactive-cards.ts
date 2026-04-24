@@ -144,6 +144,7 @@ export function buildQuickActionsHelp(): string {
     "**对话控制:**",
     "• `/stop` - 中断当前生成",
     "• `/reply` - 重发上一轮",
+    "• `/history` - 查看最近几轮",
     "• `/model` - 查看/切换模型",
     "• `/mode` - 查看/切换模式",
     "",

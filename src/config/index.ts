@@ -109,6 +109,8 @@ export interface Config {
     experimentalLogFilePath: string;
     /** 是否按 session/slot 落盘 prompt/chunk/reply/error 调试日志 */
     slotMessageLogEnabled: boolean;
+    /** 是否记录并持久化 slot 最近几轮 prompt/reply/error 历史 */
+    sessionHistoryEnabled: boolean;
     /** 是否在卡片中显示 ACP availableCommands */
     showAcpAvailableCommands: boolean;
     /** prompt 无进展多久后给飞书发“等待较久”提示 */
@@ -540,6 +542,9 @@ export function loadConfig(): Config {
   const showAcpAvailableCommands =
     (process.env["BRIDGE_SHOW_ACP_AVAILABLE_COMMANDS"] ?? "false").toLowerCase() ===
     "true";
+  const sessionHistoryEnabled =
+    (process.env["BRIDGE_SESSION_HISTORY_ENABLED"] ?? "true").toLowerCase() ===
+    "true";
   const enableBangCommand =
     (process.env["BRIDGE_ENABLE_BANG_COMMAND"] ?? "true").toLowerCase() ===
     "true";
@@ -685,6 +690,7 @@ export function loadConfig(): Config {
       slotMessageLogEnabled:
         (process.env["BRIDGE_SLOT_LOG_ENABLED"] ?? "false").toLowerCase() ===
         "true",
+      sessionHistoryEnabled,
       showAcpAvailableCommands,
       enableBangCommand,
       enableUpgradeCommand,

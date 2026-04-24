@@ -521,6 +521,86 @@ test("listKnownSessionsForShutdown 会返回 store 中当前已知 sessions", as
   await waitForFlushes();
 });
 
+test("recordSlotTurn 会持久化并在重新加载后恢复 slot history", async () => {
+  const storeFile = await createEmptyStoreFile();
+
+  let createCount = 0;
+  const acp: FakeAcpRuntime = {
+    supportsLoadSession: false,
+    supportsSetSessionMode: false,
+    supportsSetSessionModel: false,
+    async newSession(): Promise<{ sessionId: string }> {
+      createCount += 1;
+      return { sessionId: `session-${createCount}` };
+    },
+    async loadSession(): Promise<void> {},
+    async cancelSession(): Promise<void> {},
+    async closeSession(): Promise<void> {},
+  };
+
+  const store = new SessionStore(storeFile);
+  const waitForFlushes = trackPendingFlushes(store);
+  const manager = new SessionManager(
+    acp as BridgeAcpRuntime,
+    store,
+    60_000,
+    { defaultWorkspaceRoot: WORKSPACE_ROOT, defaultBackend: "cursor-official" },
+  );
+
+  await manager.init();
+  await manager.createNewSlot(CHAT_ID, USER_ID, "p2p", WORKSPACE_ROOT, "cursor-official");
+  manager.recordSlotTurn(CHAT_ID, USER_ID, "p2p", 1, {
+    startedAt: 100,
+    finishedAt: 120,
+    prompt: "first prompt",
+    status: "succeeded",
+    reply: "first reply",
+  });
+  manager.recordSlotTurn(CHAT_ID, USER_ID, "p2p", 1, {
+    startedAt: 130,
+    finishedAt: 150,
+    prompt: "second prompt",
+    status: "error",
+    error: "failed",
+  });
+  await waitForFlushes();
+
+  const raw = JSON.parse(await fs.readFile(storeFile, "utf8")) as {
+    sessions?: Record<string, { slots?: Array<{ history?: Array<{ prompt?: string; status?: string }> }> }>;
+  };
+  assert.equal(raw.sessions?.[SESSION_KEY]?.slots?.[0]?.history?.length, 2);
+  assert.equal(raw.sessions?.[SESSION_KEY]?.slots?.[0]?.history?.[1]?.status, "error");
+
+  const storeReloaded = new SessionStore(storeFile);
+  const waitForReloadedFlushes = trackPendingFlushes(storeReloaded);
+  const managerReloaded = new SessionManager(
+    acp as BridgeAcpRuntime,
+    storeReloaded,
+    60_000,
+    { defaultWorkspaceRoot: WORKSPACE_ROOT, defaultBackend: "cursor-official" },
+  );
+  await managerReloaded.init();
+  const slot = await managerReloaded.getSlot(CHAT_ID, USER_ID, "p2p", null);
+
+  assert.deepEqual(slot.history, [
+    {
+      startedAt: 100,
+      finishedAt: 120,
+      prompt: "first prompt",
+      status: "succeeded",
+      reply: "first reply",
+    },
+    {
+      startedAt: 130,
+      finishedAt: 150,
+      prompt: "second prompt",
+      status: "error",
+      error: "failed",
+    },
+  ]);
+  await waitForReloadedFlushes();
+});
+
 test("setActiveSessionPreferredModel 会把 codex 模型选择持久化到 store", async () => {
   const storeFile = await createEmptyStoreFile();
 

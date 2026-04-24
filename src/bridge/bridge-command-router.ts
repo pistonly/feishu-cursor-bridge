@@ -53,6 +53,42 @@ function buildSlotLastTurnCardContent(slot: SessionSlot): string | null {
   return body + (truncated ? "\n\n_（内容过长，已截断）_" : "");
 }
 
+const DEFAULT_HISTORY_COUNT = 5;
+const MAX_HISTORY_COUNT = 20;
+const MAX_HISTORY_BLOCK_CHARS = 1_500;
+
+function truncateHistoryBlock(text: string | undefined): string {
+  const normalized = text?.replace(/\r\n?/g, "\n").trim();
+  if (!normalized) return "（空）";
+  if (normalized.length <= MAX_HISTORY_BLOCK_CHARS) {
+    return normalized;
+  }
+  return `${normalized.slice(0, MAX_HISTORY_BLOCK_CHARS).trimEnd()}…\n\n（内容过长，已截断）`;
+}
+
+function buildSlotHistoryText(
+  slot: SessionSlot,
+  count: number,
+  formatIsoTimestamp: (ms: number) => string,
+): string | null {
+  const history = [...(slot.history ?? [])];
+  if (history.length === 0) return null;
+
+  const visible = history.slice(-count).reverse();
+  const label = slot.name ? ` (${slot.name})` : "";
+  return [
+    `📜 session #${slot.slotIndex}${label} 最近 ${visible.length} 轮历史（新到旧；最多显示 ${count} 轮）`,
+    "",
+    ...visible.map((turn, index) => [
+      `【${index + 1}】${turn.status === "error" ? "失败" : "完成"} · ${formatIsoTimestamp(turn.finishedAt)}`,
+      `Prompt：\n${truncateHistoryBlock(turn.prompt)}`,
+      turn.status === "error"
+        ? `Error：\n${truncateHistoryBlock(turn.error)}`
+        : `Reply：\n${truncateHistoryBlock(turn.reply ?? "（无响应内容）")}`,
+    ].join("\n\n")),
+  ].join("\n\n");
+}
+
 function formatSessionLabel(slot: SessionSlot): string {
   return `#${slot.slotIndex}${slot.name ? ` (${slot.name})` : ""}`;
 }
@@ -153,6 +189,7 @@ ${lines.join("\n\n")}
 • \`/new list\` / \`/new <序号>\` / \`/new <路径>\` — 新建 session
 • \`/switch <编号或名称>\` — 切换
 • \`/reply [编号或名称]\` — 重发上一轮缓存回复
+• \`/history [条数]\` — 查看当前槽位最近几轮历史
 • \`/fileback <说明>\` — 向 Agent 附带「用 FEISHU_SEND_FILE 发文件」说明后再发你的任务
 • \`/stop\` / \`/cancel\` — 中断**当前活跃**槽位正在生成的回复，并撤销该槽位排队消息（不关 session）
 • \`/resume\` — 列出当前 project 可恢复的历史 session
@@ -735,6 +772,62 @@ async function handleReplyCommand(
   );
 }
 
+async function handleHistoryCommand(
+  ctx: BridgeMessageHandlerDeps,
+  msg: FeishuMessage,
+  count: number | undefined,
+  invalidUsage: boolean | undefined,
+): Promise<void> {
+  if (!ctx.config.bridge.sessionHistoryEnabled) {
+    await ctx.feishuBot.sendText(
+      msg.chatId,
+      "ℹ️ 当前未启用 session 历史记录。可在环境变量中设置 `BRIDGE_SESSION_HISTORY_ENABLED=true` 后重启 bridge。",
+      msg.messageId,
+      ctx.threadReplyOpts(msg),
+    );
+    return;
+  }
+  if (invalidUsage) {
+    await ctx.feishuBot.sendText(
+      msg.chatId,
+      "用法：`/history` 或 `/history <条数>`\n\n示例：`/history`、`/history 10`（最多 20 条）",
+      msg.messageId,
+      ctx.threadReplyOpts(msg),
+    );
+    return;
+  }
+
+  const slot = await ctx.sessionManager.getSlot(
+    msg.chatId,
+    msg.senderId,
+    msg.chatType,
+    null,
+    ctx.threadScope(msg),
+  );
+  await ctx.flushPendingSessionNotices(msg);
+  const limit = Math.min(
+    MAX_HISTORY_COUNT,
+    Math.max(1, count ?? DEFAULT_HISTORY_COUNT),
+  );
+  const body = buildSlotHistoryText(slot, limit, ctx.formatIsoTimestamp);
+  if (!body) {
+    const label = slot.name ? ` (${slot.name})` : "";
+    await ctx.feishuBot.sendText(
+      msg.chatId,
+      `ℹ️ session #${slot.slotIndex}${label} 暂无可显示的历史。\n\n只有在该槽位真正向 Agent 发出过请求并完成返回后，\`/history\` 才会显示记录。`,
+      msg.messageId,
+      ctx.threadReplyOpts(msg),
+    );
+    return;
+  }
+  await ctx.feishuBot.sendText(
+    msg.chatId,
+    body,
+    msg.messageId,
+    ctx.threadReplyOpts(msg),
+  );
+}
+
 async function handleRenameCommand(
   ctx: BridgeMessageHandlerDeps,
   msg: FeishuMessage,
@@ -1047,6 +1140,11 @@ async function handleBridgeManagedCommand(
 
     if (command.kind === "reply") {
       await handleReplyCommand(ctx, msg, command.target);
+      return true;
+    }
+
+    if (command.kind === "history") {
+      await handleHistoryCommand(ctx, msg, command.count, command.invalidUsage);
       return true;
     }
 

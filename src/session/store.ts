@@ -2,6 +2,15 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AcpBackend, SessionRecovery } from "../acp/runtime-contract.js";
 
+export interface PersistedSessionTurnRecord {
+  startedAt: number;
+  finishedAt: number;
+  prompt: string;
+  status: "succeeded" | "error";
+  reply?: string;
+  error?: string;
+}
+
 export interface PersistedSlotRecord {
   slotIndex: number;
   name?: string;
@@ -9,6 +18,7 @@ export interface PersistedSlotRecord {
   sessionId: string;
   preferredModelId?: string;
   recovery?: SessionRecovery;
+  history?: PersistedSessionTurnRecord[];
   /** 兼容旧版 legacy store */
   cursorCliChatId?: string;
   workspaceRoot?: string;
@@ -130,6 +140,47 @@ function normalizeRecovery(
 function normalizeWorkspaceRoot(workspaceRoot: string | undefined): string | undefined {
   const trimmed = workspaceRoot?.trim();
   return trimmed ? path.resolve(trimmed) : undefined;
+}
+
+function normalizeTurnText(text: string | undefined): string | undefined {
+  const normalized = text?.replace(/\r\n?/g, "\n").trim();
+  return normalized ? normalized : undefined;
+}
+
+function normalizeSessionTurnRecord(
+  entry: PersistedSessionTurnRecord,
+): PersistedSessionTurnRecord | undefined {
+  const prompt = normalizeTurnText(entry.prompt) ?? "（空）";
+  const status = entry.status === "error" ? "error" : "succeeded";
+  const reply = normalizeTurnText(entry.reply);
+  const error = normalizeTurnText(entry.error);
+  const startedAt =
+    Number.isFinite(entry.startedAt) && entry.startedAt > 0
+      ? entry.startedAt
+      : Date.now();
+  const finishedAt =
+    Number.isFinite(entry.finishedAt) && entry.finishedAt >= startedAt
+      ? entry.finishedAt
+      : startedAt;
+  return {
+    startedAt,
+    finishedAt,
+    prompt,
+    status,
+    ...(reply ? { reply } : {}),
+    ...(error ? { error } : {}),
+  };
+}
+
+function normalizeSessionTurnHistory(
+  entries: PersistedSessionTurnRecord[] | undefined,
+  maxEntries = 20,
+): PersistedSessionTurnRecord[] | undefined {
+  const normalized = (entries ?? [])
+    .map((entry) => normalizeSessionTurnRecord(entry))
+    .filter((entry): entry is PersistedSessionTurnRecord => entry != null)
+    .slice(-maxEntries);
+  return normalized.length > 0 ? normalized : undefined;
 }
 
 function mergeResumeHistoryEntry(
@@ -473,6 +524,7 @@ function migrateV3ToLatest(v3: StoreFileV3, defaultBackend: AcpBackend): StoreFi
               ? slot.preferredModelId.trim()
               : undefined,
           recovery: normalizeRecovery(backend, slot.recovery, slot.cursorCliChatId, slot.sessionId),
+          history: normalizeSessionTurnHistory(slot.history),
           workspaceRoot: normalizeWorkspaceRoot(slot.workspaceRoot),
         };
       }),

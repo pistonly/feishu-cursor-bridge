@@ -31,6 +31,7 @@ export interface PromptCoordinatorDeps {
   getFeishuBot(): FeishuBot;
   getSessionManager(): SessionManager;
   getSlotMessageLog(): SlotMessageLogStore | null;
+  isSessionHistoryEnabled(): boolean;
   flushPendingSessionNotices(msg: FeishuMessage): Promise<void>;
   threadReplyOpts(msg: FeishuMessage): { replyInThread: true } | undefined;
   threadScope(msg: FeishuMessage): string | undefined;
@@ -184,6 +185,28 @@ export class PromptCoordinator {
       return;
     }
     const promptContent = resourcePrompt.promptContent;
+    const turnStartedAt = Date.now();
+    const recordSlotTurn =
+      this.deps.isSessionHistoryEnabled() &&
+      typeof (sessionManager as { recordSlotTurn?: unknown }).recordSlotTurn ===
+      "function"
+        ? (turn: {
+            startedAt: number;
+            finishedAt: number;
+            prompt: string;
+            status: "succeeded" | "error";
+            reply?: string;
+            error?: string;
+          }) =>
+            sessionManager.recordSlotTurn(
+              msg.chatId,
+              msg.senderId,
+              msg.chatType,
+              slotIndex,
+              turn,
+              this.deps.threadScope(msg),
+            )
+        : undefined;
 
     const msgForPrompt: FeishuMessage = {
       ...msg,
@@ -201,23 +224,35 @@ export class PromptCoordinator {
       promptContent,
     );
 
-    const lastReply = await this.deps
-      .conversationForBackend(session.backend)
-      .handleUserPrompt(msgForPrompt, session, {
-        onAcpEvent: async (ev) => {
-          if (ev.type !== "agent_message_chunk") return;
-          await appendSlotAcpChunkLog(
-            {
-              slotMessageLog,
-              sessionKey,
-              slot: activeSlot,
-              session,
-              msg: msgForPrompt,
-            },
-            ev.text,
-          );
-        },
+    let lastReply: string | undefined;
+    try {
+      lastReply = await this.deps
+        .conversationForBackend(session.backend)
+        .handleUserPrompt(msgForPrompt, session, {
+          onAcpEvent: async (ev) => {
+            if (ev.type !== "agent_message_chunk") return;
+            await appendSlotAcpChunkLog(
+              {
+                slotMessageLog,
+                sessionKey,
+                slot: activeSlot,
+                session,
+                msg: msgForPrompt,
+              },
+              ev.text,
+            );
+          },
+        });
+    } catch (error) {
+      recordSlotTurn?.({
+        startedAt: turnStartedAt,
+        finishedAt: Date.now(),
+        prompt: promptContent,
+        status: "error",
+        error: formatJsonRpcLikeError(error),
       });
+      throw error;
+    }
     await appendSlotReplyLog(
       {
         slotMessageLog,
@@ -228,6 +263,13 @@ export class PromptCoordinator {
       },
       lastReply ?? "（无响应内容）",
     );
+    recordSlotTurn?.({
+      startedAt: turnStartedAt,
+      finishedAt: Date.now(),
+      prompt: promptContent,
+      status: "succeeded",
+      ...(lastReply ? { reply: lastReply } : {}),
+    });
     if (lastReply) {
       sessionManager.setSlotLastTurn(
         msg.chatId,

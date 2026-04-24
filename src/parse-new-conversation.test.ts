@@ -29,6 +29,20 @@ test("parseNewConversationCommand 支持 /reply 指定编号或名称", () => {
   });
 });
 
+test("parseNewConversationCommand 支持 /history", () => {
+  assert.deepEqual(parseNewConversationCommand("/history"), {
+    kind: "history",
+  });
+  assert.deepEqual(parseNewConversationCommand("/history 10"), {
+    kind: "history",
+    count: 10,
+  });
+  assert.deepEqual(parseNewConversationCommand("/history x"), {
+    kind: "history",
+    invalidUsage: true,
+  });
+});
+
 test("parseNewConversationCommand 支持 /mode 查询或切换模式", () => {
   assert.deepEqual(parseNewConversationCommand("/mode"), {
     kind: "mode",

@@ -49,6 +49,7 @@ function createTestConfig(
       experimentalLogToFile: false,
       experimentalLogFilePath: "/tmp/bridge.log",
       slotMessageLogEnabled: false,
+      sessionHistoryEnabled: true,
       showAcpAvailableCommands: false,
       enableBangCommand: false,
       enableUpgradeCommand: false,

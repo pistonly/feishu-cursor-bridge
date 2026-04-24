@@ -7,11 +7,15 @@ import type {
 } from "../acp/runtime-contract.js";
 import type { GroupSessionScope } from "../config/index.js";
 import type {
+  PersistedSessionTurnRecord,
   SessionStore,
   PersistedResumeHistoryEntry,
   PersistedSessionGroup,
   PersistedSlotRecord,
 } from "./store.js";
+
+const MAX_SLOT_HISTORY_TURNS = 20;
+const MAX_SLOT_HISTORY_TEXT_CHARS = 4_000;
 
 export interface UserSession {
   backend: AcpBackend;
@@ -33,6 +37,7 @@ export interface SessionSlot {
   session: UserSession;
   lastPrompt?: string;
   lastReply?: string;
+  history?: SessionTurnRecord[];
 }
 
 export interface UserSessionGroup {
@@ -57,6 +62,15 @@ export interface ResumeHistoryEntry {
   workspaceRoot: string;
   lastActiveAt: number;
   label?: string;
+}
+
+export interface SessionTurnRecord {
+  startedAt: number;
+  finishedAt: number;
+  prompt: string;
+  status: "succeeded" | "error";
+  reply?: string;
+  error?: string;
 }
 
 export interface SlotListItem {
@@ -766,6 +780,7 @@ export class SessionManager {
     }
     delete activeSlot.lastPrompt;
     delete activeSlot.lastReply;
+    delete activeSlot.history;
 
     this.groups.set(key, group);
     this.persistGroup(key, group);
@@ -789,6 +804,25 @@ export class SessionManager {
     if (!slot) return;
     slot.lastPrompt = prompt;
     slot.lastReply = reply;
+  }
+
+  recordSlotTurn(
+    chatId: string,
+    userId: string,
+    chatTypeRaw: string,
+    slotIndex: number,
+    turn: SessionTurnRecord,
+    threadId?: string,
+  ): void {
+    const chatType = this.chatType(chatTypeRaw);
+    const key = this.makeKey(chatId, userId, chatType, threadId);
+    const group = this.groups.get(key);
+    if (!group) return;
+    const slot = this.findSlot(group, slotIndex);
+    if (!slot) return;
+    const normalized = this.normalizeSessionTurnRecord(turn);
+    slot.history = [...(slot.history ?? []), normalized].slice(-MAX_SLOT_HISTORY_TURNS);
+    this.persistGroup(key, group);
   }
 
   setActiveSessionResumeLabel(
@@ -993,6 +1027,49 @@ export class SessionManager {
   private normalizeSlotName(name?: string): string | undefined {
     const normalized = name?.trim();
     return normalized ? normalized : undefined;
+  }
+
+  private normalizeSessionTurnText(text: string | undefined): string | undefined {
+    const normalized = text?.replace(/\r\n?/g, "\n").trim();
+    if (!normalized) return undefined;
+    if (normalized.length <= MAX_SLOT_HISTORY_TEXT_CHARS) {
+      return normalized;
+    }
+    return `${normalized.slice(0, MAX_SLOT_HISTORY_TEXT_CHARS).trimEnd()}…`;
+  }
+
+  private normalizeSessionTurnRecord(
+    turn: SessionTurnRecord | PersistedSessionTurnRecord,
+  ): SessionTurnRecord {
+    const prompt = this.normalizeSessionTurnText(turn.prompt) ?? "（空）";
+    const status = turn.status === "error" ? "error" : "succeeded";
+    const reply = this.normalizeSessionTurnText(turn.reply);
+    const error = this.normalizeSessionTurnText(turn.error);
+    const startedAt =
+      Number.isFinite(turn.startedAt) && turn.startedAt > 0
+        ? turn.startedAt
+        : Date.now();
+    const finishedAt =
+      Number.isFinite(turn.finishedAt) && turn.finishedAt >= startedAt
+        ? turn.finishedAt
+        : startedAt;
+    return {
+      startedAt,
+      finishedAt,
+      prompt,
+      status,
+      ...(reply ? { reply } : {}),
+      ...(error ? { error } : {}),
+    };
+  }
+
+  private normalizeSessionTurnHistory(
+    entries: PersistedSessionTurnRecord[] | SessionTurnRecord[] | undefined,
+  ): SessionTurnRecord[] | undefined {
+    const normalized = (entries ?? [])
+      .map((entry) => this.normalizeSessionTurnRecord(entry))
+      .slice(-MAX_SLOT_HISTORY_TURNS);
+    return normalized.length > 0 ? normalized : undefined;
   }
 
   private normalizeResumeLabel(label: string | undefined): string | undefined {
@@ -1353,10 +1430,12 @@ export class SessionManager {
       if (ps.preferredModelId?.trim()) {
         session.preferredModelId = ps.preferredModelId.trim();
       }
+      const history = this.normalizeSessionTurnHistory(ps.history);
       const restoredSlot: SessionSlot = {
         slotIndex: ps.slotIndex,
         name: ps.name,
         session,
+        ...(history ? { history } : {}),
       };
       await this.restorePreferredModelIfNeeded(restoredSlot, key);
       restoredSlots.push(restoredSlot);
@@ -1403,18 +1482,22 @@ export class SessionManager {
     const sample = group.slots[0]?.session;
     if (!sample) return;
 
-    const slots: PersistedSlotRecord[] = group.slots.map((s) => ({
-      slotIndex: s.slotIndex,
-      name: s.name,
-      backend: s.session.backend,
-      sessionId: s.session.sessionId,
-      ...(s.session.preferredModelId
-        ? { preferredModelId: s.session.preferredModelId }
-        : {}),
-      ...(s.session.recovery ? { recovery: s.session.recovery } : {}),
-      workspaceRoot: s.session.workspaceRoot,
-      lastActiveAt: s.session.lastActiveAt,
-    }));
+    const slots: PersistedSlotRecord[] = group.slots.map((s) => {
+      const history = this.normalizeSessionTurnHistory(s.history);
+      return {
+        slotIndex: s.slotIndex,
+        name: s.name,
+        backend: s.session.backend,
+        sessionId: s.session.sessionId,
+        ...(s.session.preferredModelId
+          ? { preferredModelId: s.session.preferredModelId }
+          : {}),
+        ...(s.session.recovery ? { recovery: s.session.recovery } : {}),
+        ...(history ? { history } : {}),
+        workspaceRoot: s.session.workspaceRoot,
+        lastActiveAt: s.session.lastActiveAt,
+      };
+    });
 
     const persistedGroup: PersistedSessionGroup = {
       chatId: sample.chatId,

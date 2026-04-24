@@ -57,6 +57,7 @@ function createTestConfig(): Config {
       experimentalLogToFile: false,
       experimentalLogFilePath: "/tmp/bridge.log",
       slotMessageLogEnabled: false,
+      sessionHistoryEnabled: true,
       showAcpAvailableCommands: false,
       enableBangCommand: false,
       enableUpgradeCommand: false,
@@ -988,6 +989,176 @@ test("/model 成功后提示会回显运行时确认的当前模型", async () =
 
   assert.equal(sentTexts.length, 1);
   assert.match(sentTexts[0] ?? "", /已切换模型为 `claude-opus-4-6`/);
+});
+
+test("/history 会显示当前 slot 最近几轮历史", async () => {
+  const bridge = new Bridge(createTestConfig());
+  const sentTexts: string[] = [];
+  const slot = {
+    slotIndex: 2,
+    name: "backend",
+    session: {
+      backend: "codex" as const,
+      sessionId: "session-2",
+      workspaceRoot: "/tmp/project",
+      chatId: "chat-1",
+      userId: "user-1",
+      chatType: "p2p" as const,
+      createdAt: 0,
+      lastActiveAt: 0,
+    },
+    history: [
+      {
+        startedAt: 100,
+        finishedAt: 200,
+        prompt: "older prompt",
+        status: "succeeded" as const,
+        reply: "older reply",
+      },
+      {
+        startedAt: 300,
+        finishedAt: 400,
+        prompt: "latest prompt",
+        status: "error" as const,
+        error: "latest error",
+      },
+    ],
+  };
+
+  (bridge as any).ensureMaintenanceStateLoaded = async () => {};
+  (bridge as any).flushPendingSessionNotices = async () => {};
+  (bridge as any).sessionManager = {
+    async getSlot() {
+      return slot;
+    },
+  };
+  (bridge as any).feishuBot = {
+    stripBotMentionKeepLines(content: string) {
+      return content;
+    },
+    async sendText(_chatId: string, body: string): Promise<void> {
+      sentTexts.push(body);
+    },
+  };
+  (bridge as any).formatIsoTimestamp = (ms: number) =>
+    new Date(ms).toISOString().replace(".000Z", "Z");
+
+  await (bridge as any).handleFeishuMessage(createMessage("/history 1"));
+
+  assert.equal(sentTexts.length, 1);
+  assert.match(sentTexts[0] ?? "", /session #2 \(backend\) 最近 1 轮历史/);
+  assert.match(sentTexts[0] ?? "", /latest prompt/);
+  assert.match(sentTexts[0] ?? "", /latest error/);
+  assert.doesNotMatch(sentTexts[0] ?? "", /older prompt/);
+});
+
+test("/history 在当前 slot 无历史时返回提示", async () => {
+  const bridge = new Bridge(createTestConfig());
+  const sentTexts: string[] = [];
+  const slot = {
+    slotIndex: 1,
+    session: {
+      backend: "cursor-official" as const,
+      sessionId: "session-1",
+      workspaceRoot: "/tmp/project",
+      chatId: "chat-1",
+      userId: "user-1",
+      chatType: "p2p" as const,
+      createdAt: 0,
+      lastActiveAt: 0,
+    },
+  };
+
+  (bridge as any).ensureMaintenanceStateLoaded = async () => {};
+  (bridge as any).flushPendingSessionNotices = async () => {};
+  (bridge as any).sessionManager = {
+    async getSlot() {
+      return slot;
+    },
+  };
+  (bridge as any).feishuBot = {
+    stripBotMentionKeepLines(content: string) {
+      return content;
+    },
+    async sendText(_chatId: string, body: string): Promise<void> {
+      sentTexts.push(body);
+    },
+  };
+
+  await (bridge as any).handleFeishuMessage(createMessage("/history"));
+
+  assert.equal(sentTexts.length, 1);
+  assert.match(sentTexts[0] ?? "", /暂无可显示的历史/);
+});
+
+test("普通对话会把 turn 记入 slot history", async () => {
+  const bridge = new Bridge(createTestConfig());
+  const recordedTurns: Array<{ slotIndex: number; turn: Record<string, unknown> }> = [];
+
+  const slot = {
+    slotIndex: 1,
+    session: {
+      backend: "cursor-official" as const,
+      sessionId: "session-1",
+      workspaceRoot: "/tmp/project",
+      chatId: "chat-1",
+      userId: "user-1",
+      chatType: "p2p" as const,
+      createdAt: 0,
+      lastActiveAt: 0,
+    },
+  };
+
+  (bridge as any).ensureMaintenanceStateLoaded = async () => {};
+  (bridge as any).flushPendingSessionNotices = async () => {};
+  (bridge as any).sessionManager = {
+    getSessionSnapshot() {
+      return {
+        sessionKey: "dm:user-1",
+        group: { slots: [slot], activeSlotIndex: 1, nextSlotIndex: 2 },
+        activeSlot: slot,
+        idleExpiresInMs: 60_000,
+      };
+    },
+    async getSlot() {
+      return slot;
+    },
+    recordSlotTurn(
+      _chatId: string,
+      _userId: string,
+      _chatType: string,
+      slotIndex: number,
+      turn: Record<string, unknown>,
+    ) {
+      recordedTurns.push({ slotIndex, turn });
+    },
+    setSlotLastTurn() {},
+    setActiveSessionResumeLabel() {},
+  };
+  (bridge as any).conversations = new Map([
+    [
+      "cursor-official",
+      {
+        async handleUserPrompt() {
+          return "reply body";
+        },
+      },
+    ],
+  ]);
+  (bridge as any).feishuBot = {
+    stripBotMentionKeepLines(content: string) {
+      return content;
+    },
+    async sendText(): Promise<void> {},
+  };
+
+  await (bridge as any).handleFeishuMessage(createMessage("hello history"));
+
+  assert.equal(recordedTurns.length, 1);
+  assert.equal(recordedTurns[0]?.slotIndex, 1);
+  assert.equal(recordedTurns[0]?.turn.prompt, "hello history");
+  assert.equal(recordedTurns[0]?.turn.status, "succeeded");
+  assert.equal(recordedTurns[0]?.turn.reply, "reply body");
 });
 
 test("普通对话会为当前 slot 追加用户问题与回复日志", async () => {

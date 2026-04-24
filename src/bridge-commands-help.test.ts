@@ -14,6 +14,7 @@ test("formatBridgeCommandsHelp 含核心命令且随后端区分说明", () => {
   assert.match(official, /\/restart/);
   assert.match(official, /\/update/);
   assert.match(official, /\/whoami/);
+  assert.match(official, /\/history/);
   assert.match(official, /\/resume 0/);
   assert.match(official, /\/resume <序号或sessionId>/);
   assert.match(official, /\/resume -b <backend> <id>/);
