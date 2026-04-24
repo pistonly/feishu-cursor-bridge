@@ -263,6 +263,35 @@ test("ConversationService 会在长时间无进展时发送等待提示", async 
   assert.match(sendTextCalls[1]?.content ?? "", /长时间没有任何进展/);
 });
 
+test("ConversationService 在正文已显示且无活跃工具时不再发送等待提示", async () => {
+  const { service, sendTextCalls } = createHarness(
+    [],
+    {
+      promptProgressPollMs: 5,
+      promptSlowNoticeMs: 10,
+      promptStuckNoticeMs: 25,
+    },
+    undefined,
+    {
+      async prompt(): Promise<{ stopReason: string }> {
+        const bridgeClient = this.bridgeClient as EventEmitter;
+        bridgeClient.emit("acp", {
+          type: "agent_message_chunk",
+          sessionId: "session-1",
+          text: "已经给出最终答复。",
+        } satisfies BridgeAcpEvent);
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        return { stopReason: "end_turn" };
+      },
+    },
+  );
+
+  const reply = await service.handleUserPrompt(createMessage(), createSession());
+
+  assert.equal(sendTextCalls.length, 0);
+  assert.match(reply ?? "", /已经给出最终答复/);
+});
+
 test("ConversationService 会把交错的工具事件持续合并到同一张卡片", async () => {
   const { service, sendCardCalls, updateCardCalls } = createHarness([
     {

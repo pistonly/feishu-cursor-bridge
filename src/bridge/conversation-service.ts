@@ -159,6 +159,9 @@ export class ConversationService {
       }
     };
 
+    const shouldSuppressIdleNotice = (): boolean =>
+      state.hasMainText() && !state.hasActiveTool();
+
     const markProgress = (): void => {
       lastProgressAt = Date.now();
     };
@@ -167,6 +170,7 @@ export class ConversationService {
       clearProgressMonitorTimer();
       progressMonitorTimer = setInterval(() => {
         if (promptFinished) return;
+        if (shouldSuppressIdleNotice()) return;
         const idleMs = Date.now() - lastProgressAt;
         if (!sentSlowNotice && idleMs >= promptSlowNoticeMs) {
           sentSlowNotice = true;
