@@ -113,6 +113,9 @@ test("bridge.start 会先启动 Feishu bot，再后台启动 runtimes", async ()
     async init() {
       callOrder.push("session-init");
     },
+    listKnownSessionsForShutdown() {
+      return [];
+    },
   };
   (bridge as any).presetsStore = {
     async load() {
@@ -160,6 +163,63 @@ test("bridge.start 会先启动 Feishu bot，再后台启动 runtimes", async ()
     "get-runtime",
     "feishu-start",
     "runtime-background-start",
+  ]);
+});
+
+test("bridge.stop 会在 stopAll 前 best-effort cancel 已知 sessions", async () => {
+  const bridge = new Bridge(createTestConfig());
+  const callOrder: string[] = [];
+
+  (bridge as any).sessionManager = {
+    listKnownSessionsForShutdown() {
+      return [
+        { backend: "codex", sessionId: "session-1" },
+        { backend: "codex", sessionId: "session-1" },
+        { backend: "cursor-official", sessionId: "session-2" },
+      ];
+    },
+  };
+
+  const runtimeByBackend = new Map([
+    [
+      "codex",
+      {
+        async cancelSession(sessionId: string) {
+          callOrder.push(`cancel:codex:${sessionId}`);
+        },
+      },
+    ],
+    [
+      "cursor-official",
+      {
+        async cancelSession(sessionId: string) {
+          callOrder.push(`cancel:cursor-official:${sessionId}`);
+        },
+      },
+    ],
+  ]);
+
+  (bridge as any).runtimeRegistry = {
+    getRuntime(backend: string) {
+      return runtimeByBackend.get(backend);
+    },
+    async stopAll() {
+      callOrder.push("runtime-stop-all");
+    },
+  };
+  (bridge as any).feishuBot = {
+    async stop() {
+      callOrder.push("feishu-stop");
+    },
+  };
+
+  await bridge.stop();
+
+  assert.deepEqual(callOrder, [
+    "feishu-stop",
+    "cancel:codex:session-1",
+    "cancel:cursor-official:session-2",
+    "runtime-stop-all",
   ]);
 });
 
@@ -2047,7 +2107,9 @@ test("忙时新消息会进入排队并提示可撤销", async () => {
   };
 
   const first = (bridge as any).handleFeishuMessage(createMessage("first"));
-  await Promise.resolve();
+  for (let i = 0; i < 20 && !releaseFirstPrompt; i += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
   await (bridge as any).handleFeishuMessage(createMessage("second", { messageId: "msg-2" }));
 
   assert.match(sentTexts[sentTexts.length - 1] ?? "", /已加入排队/);
@@ -2127,7 +2189,9 @@ test("忙时后来的排队消息会覆盖之前的排队消息", async () => {
   };
 
   const first = (bridge as any).handleFeishuMessage(createMessage("first"));
-  await Promise.resolve();
+  for (let i = 0; i < 20 && !releaseFirstPrompt; i += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
   await (bridge as any).handleFeishuMessage(createMessage("second", { messageId: "msg-2" }));
   await (bridge as any).handleFeishuMessage(createMessage("third", { messageId: "msg-3" }));
 
@@ -2137,6 +2201,96 @@ test("忙时后来的排队消息会覆盖之前的排队消息", async () => {
   await first;
 
   assert.deepEqual(handledPrompts, ["first", "third"]);
+});
+
+test("重启后从 store 恢复的首条消息也会复用正确 slot prompt key", async () => {
+  const bridge = new Bridge(createTestConfig());
+  const sentTexts: string[] = [];
+  let releaseFirstPrompt: (() => void) | undefined;
+  const handledPrompts: string[] = [];
+
+  const slot = {
+    slotIndex: 1,
+    session: {
+      backend: "cursor-official" as const,
+      sessionId: "session-1",
+      workspaceRoot: "/tmp/project",
+      chatId: "chat-1",
+      userId: "user-1",
+      chatType: "p2p" as const,
+      createdAt: 0,
+      lastActiveAt: 0,
+    },
+  };
+  const snapshot = {
+    sessionKey: "dm:user-1",
+    group: { slots: [slot], activeSlotIndex: 1, nextSlotIndex: 2 },
+    activeSlot: slot,
+    idleExpiresInMs: 60_000,
+  };
+
+  let snapshotChecks = 0;
+  (bridge as any).ensureMaintenanceStateLoaded = async () => {};
+  (bridge as any).flushPendingSessionNotices = async () => {};
+  (bridge as any).sessionManager = {
+    getSessionSnapshot() {
+      snapshotChecks += 1;
+      return snapshotChecks === 1 ? null : snapshot;
+    },
+    async getSessionSnapshotLoaded() {
+      return snapshot;
+    },
+    async getSlot(_chatId: string, _userId: string, _chatType: string, target: number | null) {
+      assert.equal(target, 1);
+      return slot;
+    },
+    setSlotLastTurn() {},
+    setActiveSessionResumeLabel() {},
+  };
+  (bridge as any).conversations = new Map([
+    [
+      "cursor-official",
+      {
+        async handleUserPrompt(msg: FeishuMessage) {
+          handledPrompts.push(msg.content);
+          if (handledPrompts.length === 1) {
+            await new Promise<void>((resolve) => {
+              releaseFirstPrompt = resolve;
+            });
+          }
+          return `reply:${msg.content}`;
+        },
+      },
+    ],
+  ]);
+  (bridge as any).feishuBot = {
+    stripBotMentionKeepLines(content: string) {
+      return content;
+    },
+    async sendText(_chatId: string, body: string): Promise<void> {
+      sentTexts.push(body);
+    },
+    async sendCard(): Promise<string> {
+      return "card-1";
+    },
+    async updateCard(): Promise<void> {},
+  };
+
+  const first = (bridge as any).handleFeishuMessage(createMessage("first"));
+  for (let i = 0; i < 20 && !releaseFirstPrompt; i += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  await (bridge as any).handleFeishuMessage(
+    createMessage("second", { messageId: "msg-2" }),
+  );
+
+  assert.deepEqual(handledPrompts, ["first"]);
+  assert.match(sentTexts[sentTexts.length - 1] ?? "", /已加入排队/);
+
+  releaseFirstPrompt?.();
+  await first;
+
+  assert.deepEqual(handledPrompts, ["first", "second"]);
 });
 
 test("结构化 prompt 错误会在飞书里展示具体细节而不是 [object Object]", async () => {

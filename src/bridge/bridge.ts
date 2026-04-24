@@ -34,6 +34,7 @@ import {
 import { preprocessBridgeMessage } from "./bridge-message-preprocess.js";
 
 const MAINTENANCE_OUTPUT_LIMIT = 12_000;
+const SHUTDOWN_CANCEL_TIMEOUT_MS = 3_000;
 
 type RunningMaintenanceTask = {
   kind: BridgeMaintenanceCommandKind;
@@ -829,6 +830,58 @@ export class Bridge {
     await handleBridgeMessage(this.messageHandlerDeps(), msg, preprocessed);
   }
 
+  private async cancelKnownSessionsForShutdown(): Promise<void> {
+    const listKnownSessions =
+      (this.sessionManager as { listKnownSessionsForShutdown?: unknown })
+        .listKnownSessionsForShutdown;
+    if (typeof listKnownSessions !== "function") {
+      return;
+    }
+
+    const sessions = this.sessionManager.listKnownSessionsForShutdown();
+    const seen = new Set<string>();
+    const uniqueSessions = sessions.filter((session) => {
+      const key = `${session.backend}\u0000${session.sessionId}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    if (uniqueSessions.length === 0) {
+      return;
+    }
+
+    console.log(
+      `[bridge] Shutdown: best-effort cancel ${uniqueSessions.length} known session(s) before stopping runtimes`,
+    );
+    for (const session of uniqueSessions) {
+      const runtime = this.runtimeForBackend(session.backend);
+      let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          runtime.cancelSession(session.sessionId),
+          new Promise<never>((_, reject) => {
+            timeoutHandle = setTimeout(() => {
+              reject(
+                new Error(
+                  `cancel timeout after ${SHUTDOWN_CANCEL_TIMEOUT_MS}ms`,
+                ),
+              );
+            }, SHUTDOWN_CANCEL_TIMEOUT_MS);
+          }),
+        ]);
+      } catch (error) {
+        console.warn(
+          `[bridge] Shutdown cancel failed backend=${session.backend} sessionId=${session.sessionId}:`,
+          error instanceof Error ? error.message : error,
+        );
+      } finally {
+        if (timeoutHandle) {
+          clearTimeout(timeoutHandle);
+        }
+      }
+    }
+  }
+
   async stop(): Promise<void> {
     if (this.restartTimer) {
       clearTimeout(this.restartTimer);
@@ -839,6 +892,7 @@ export class Bridge {
       this.cleanupInterval = null;
     }
     await this.feishuBot.stop();
+    await this.cancelKnownSessionsForShutdown();
     await this.runtimeRegistry.stopAll();
     console.log("[bridge] Service stopped");
   }

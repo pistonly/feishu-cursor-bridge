@@ -68,7 +68,7 @@ export class PromptCoordinator {
     content: string,
     hasPostEmbeddedImages: boolean,
   ): Promise<void> {
-    const { sessionKey, promptKey, slotIndex } = this.getPromptKey(msg);
+    const { sessionKey, promptKey, slotIndex } = await this.getPromptKey(msg);
 
     if (this.activePrompts.has(promptKey)) {
       const hadQueuedPrompt = this.queuedPrompts.has(promptKey);
@@ -102,16 +102,35 @@ export class PromptCoordinator {
     return `${sessionKey}:${slotIndex}`;
   }
 
-  private getPromptKey(
+  private async getPromptKey(
     msg: FeishuMessage,
-  ): { sessionKey: string; promptKey: string; slotIndex: number } {
+  ): Promise<{ sessionKey: string; promptKey: string; slotIndex: number }> {
+    const sessionManager = this.deps.getSessionManager();
     const sessionKey = this.deps.feishuSessionKey(msg);
-    const snap = this.deps.getSessionManager().getSessionSnapshot(
+    let snap = sessionManager.getSessionSnapshot(
       msg.chatId,
       msg.senderId,
       msg.chatType,
       this.deps.threadScope(msg),
     );
+    const loadSnapshot =
+      (sessionManager as { getSessionSnapshotLoaded?: unknown })
+        .getSessionSnapshotLoaded;
+    if (
+      !snap &&
+      typeof loadSnapshot === "function"
+    ) {
+      try {
+        snap = await sessionManager.getSessionSnapshotLoaded(
+          msg.chatId,
+          msg.senderId,
+          msg.chatType,
+          this.deps.threadScope(msg),
+        );
+      } catch {
+        // Best-effort only: prompt execution itself will surface real session errors.
+      }
+    }
     const slotIndex = snap?.activeSlot.slotIndex ?? 1;
     const promptKey = snap ? this.promptKeyForSlot(sessionKey, slotIndex) : sessionKey;
     return { sessionKey, promptKey, slotIndex };

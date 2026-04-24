@@ -69,6 +69,11 @@ export interface SlotListItem {
   isActive: boolean;
 }
 
+export interface ShutdownSessionRef {
+  backend: AcpBackend;
+  sessionId: string;
+}
+
 export interface SessionManagerOptions {
   debug?: boolean;
   defaultWorkspaceRoot: string;
@@ -625,6 +630,23 @@ export class SessionManager {
     return { active: this.groups.size, total };
   }
 
+  listKnownSessionsForShutdown(): ShutdownSessionRef[] {
+    const sessions: ShutdownSessionRef[] = [];
+    for (const key of this.store.allKeys()) {
+      const group = this.store.get(key);
+      if (!group) continue;
+      for (const slot of group.slots) {
+        const sessionId = slot.sessionId?.trim();
+        if (!sessionId) continue;
+        sessions.push({
+          backend: slot.backend ?? this.defaultBackend,
+          sessionId,
+        });
+      }
+    }
+    return sessions;
+  }
+
   async listResumeHistoryForProject(
     chatId: string,
     userId: string,
@@ -1165,6 +1187,22 @@ export class SessionManager {
     }
   }
 
+  private async bestEffortCancelRestoredSession(
+    runtime: BridgeAcpRuntime,
+    sessionId: string,
+  ): Promise<void> {
+    try {
+      await runtime.cancelSession(sessionId);
+    } catch (error) {
+      if (this.debug) {
+        console.warn(
+          `[session] ignore cancel failure for restored sessionId=${sessionId}:`,
+          error instanceof Error ? error.message : error,
+        );
+      }
+    }
+  }
+
   private async renewSlotSession(
     slot: SessionSlot,
     cwd: string,
@@ -1271,6 +1309,7 @@ export class SessionManager {
         recovery = ps.recovery;
         try {
           await runtime.loadSession(ps.sessionId, cwd);
+          await this.bestEffortCancelRestoredSession(runtime, ps.sessionId);
         } catch {
           const fresh = await this.createSessionWithRecovery(
             backend,

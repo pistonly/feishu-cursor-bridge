@@ -442,6 +442,7 @@ test("getSessionSnapshotLoaded 会在内存为空时从 store 恢复当前快照
   const storeFile = await createStoreFile(createPersistedGroup("cli-old"));
 
   const loadSessionCalls: string[] = [];
+  const cancelSessionCalls: string[] = [];
   const acp: FakeAcpRuntime = {
     supportsLoadSession: true,
     supportsSetSessionMode: false,
@@ -452,7 +453,9 @@ test("getSessionSnapshotLoaded 会在内存为空时从 store 恢复当前快照
     async loadSession(sessionId: string): Promise<void> {
       loadSessionCalls.push(sessionId);
     },
-    async cancelSession(): Promise<void> {},
+    async cancelSession(sessionId: string): Promise<void> {
+      cancelSessionCalls.push(sessionId);
+    },
     async closeSession(): Promise<void> {},
   };
 
@@ -476,7 +479,45 @@ test("getSessionSnapshotLoaded 会在内存为空时从 store 恢复当前快照
   assert.equal(snapshot.activeSlot.session.sessionId, "acp-old");
   assert.equal(snapshot.activeSlot.session.workspaceRoot, WORKSPACE_ROOT);
   assert.deepEqual(loadSessionCalls, ["acp-old"]);
+  assert.deepEqual(cancelSessionCalls, ["acp-old"]);
   assert.deepEqual(manager.getStats(), { active: 1, total: 1 });
+  await waitForFlushes();
+});
+
+test("listKnownSessionsForShutdown 会返回 store 中当前已知 sessions", async () => {
+  const storeFile = await createEmptyStoreFile();
+
+  let createCount = 0;
+  const acp: FakeAcpRuntime = {
+    supportsLoadSession: false,
+    supportsSetSessionMode: false,
+    supportsSetSessionModel: false,
+    async newSession(): Promise<{ sessionId: string }> {
+      createCount += 1;
+      return { sessionId: `session-${createCount}` };
+    },
+    async loadSession(): Promise<void> {},
+    async cancelSession(): Promise<void> {},
+    async closeSession(): Promise<void> {},
+  };
+
+  const store = new SessionStore(storeFile);
+  const waitForFlushes = trackPendingFlushes(store);
+  const manager = new SessionManager(
+    acp as BridgeAcpRuntime,
+    store,
+    60_000,
+    { defaultWorkspaceRoot: WORKSPACE_ROOT, defaultBackend: "cursor-official" },
+  );
+
+  await manager.init();
+  await manager.createNewSlot(CHAT_ID, USER_ID, "p2p", WORKSPACE_ROOT, "cursor-official");
+  await manager.createNewSlot(CHAT_ID, USER_ID, "p2p", WORKSPACE_ROOT, "codex");
+
+  assert.deepEqual(manager.listKnownSessionsForShutdown(), [
+    { backend: "cursor-official", sessionId: "session-1" },
+    { backend: "codex", sessionId: "session-2" },
+  ]);
   await waitForFlushes();
 });
 
