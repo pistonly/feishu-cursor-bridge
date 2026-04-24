@@ -3,11 +3,7 @@ import type { Config } from "../config/index.js";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import * as path from "node:path";
-import {
-  AcpRuntimeRegistry,
-  formatAcpBackendLabel,
-  resolveAdapterSessionTimeoutMs,
-} from "../acp/runtime.js";
+import { AcpRuntimeRegistry } from "../acp/runtime.js";
 import type {
   AcpBackend,
   AcpSessionModelState,
@@ -229,11 +225,8 @@ export class Bridge {
     await this.sessionManager.init();
     await this.presetsStore.load(this.config.bridge.workspacePresetsSeed);
 
-    const startedRuntimes = await this.runtimeRegistry.startEnabledRuntimes();
-    for (const runtime of startedRuntimes) {
-      console.log(
-        `[bridge] ${formatAcpBackendLabel(runtime.backend)} 已连接 protocolVersion=${runtime.initializeResult?.protocolVersion} loadSession=${runtime.supportsLoadSession}`,
-      );
+    for (const backend of this.runtimeRegistry.getEnabledBackends()) {
+      const runtime = this.runtimeForBackend(backend);
       this.conversations.set(
         runtime.backend,
         new ConversationService(this.config, runtime, this.feishuBot),
@@ -256,6 +249,7 @@ export class Bridge {
     });
 
     await this.feishuBot.start();
+    this.runtimeRegistry.startEnabledRuntimesInBackground();
 
     this.cleanupInterval = setInterval(() => {
       void this.sessionManager
@@ -795,6 +789,11 @@ export class Bridge {
       threadScope: (msg) => this.threadScope(msg),
       runtimeForBackend: (backend) => this.runtimeForBackend(backend),
       runtimeForSession: (session) => this.runtimeForSession(session),
+      getBackendRuntimeStatuses:
+        typeof (this.runtimeRegistry as { getEnabledRuntimeStatuses?: unknown })
+          .getEnabledRuntimeStatuses === "function"
+          ? () => this.runtimeRegistry.getEnabledRuntimeStatuses()
+          : undefined,
       conversationForBackend: (backend) =>
         this.conversationForBackend(backend),
       feishuSessionKey: (msg) => this.feishuSessionKey(msg),

@@ -91,6 +91,78 @@ function createMessage(content: string, overrides: Partial<FeishuMessage> = {}):
   } as unknown as FeishuMessage;
 }
 
+test("bridge.start 会先启动 Feishu bot，再后台启动 runtimes", async () => {
+  const bridge = new Bridge(createTestConfig());
+  const callOrder: string[] = [];
+
+  (bridge as any).ensureMaintenanceStateLoaded = async () => {
+    callOrder.push("maintenance");
+  };
+  (bridge as any).upgradeResultStore = {
+    async load() {
+      callOrder.push("upgrade-load");
+    },
+    getAttempt() {
+      return undefined;
+    },
+  };
+  (bridge as any).reconcileUpgradeAttempt = async () => {
+    callOrder.push("upgrade-reconcile");
+  };
+  (bridge as any).sessionManager = {
+    async init() {
+      callOrder.push("session-init");
+    },
+  };
+  (bridge as any).presetsStore = {
+    async load() {
+      callOrder.push("presets-load");
+    },
+  };
+  const runtime = {
+    backend: "cursor-official",
+    bridgeClient: new EventEmitter(),
+  };
+  (bridge as any).runtimeRegistry = {
+    getEnabledBackends() {
+      return ["cursor-official"];
+    },
+    getRuntime() {
+      callOrder.push("get-runtime");
+      return runtime;
+    },
+    startEnabledRuntimesInBackground() {
+      callOrder.push("runtime-background-start");
+    },
+    async stopAll() {},
+  };
+
+  const feishuBot = new EventEmitter() as EventEmitter & {
+    start: () => Promise<void>;
+    stop: () => Promise<void>;
+  };
+  feishuBot.start = async () => {
+    callOrder.push("feishu-start");
+    feishuBot.emit("ready");
+  };
+  feishuBot.stop = async () => {};
+  (bridge as any).feishuBot = feishuBot;
+
+  await bridge.start();
+  await bridge.stop();
+
+  assert.deepEqual(callOrder, [
+    "maintenance",
+    "upgrade-load",
+    "upgrade-reconcile",
+    "session-init",
+    "presets-load",
+    "get-runtime",
+    "feishu-start",
+    "runtime-background-start",
+  ]);
+});
+
 test("/status 会显示当前模型与 context 用量", async () => {
   const bridge = new Bridge(createTestConfig());
   const sentTexts: string[] = [];
@@ -120,6 +192,20 @@ test("/status 会显示当前模型与 context 用量", async () => {
   (bridge as any).runtimeRegistry = {
     getRuntime() {
       return runtime;
+    },
+    getEnabledRuntimeStatuses() {
+      return [
+        {
+          backend: "cursor-official",
+          state: "ready",
+          readyAt: 1_710_000_030_000,
+        },
+        {
+          backend: "codex",
+          state: "starting",
+          startedAt: 1_710_000_050_000,
+        },
+      ];
     },
   };
   (bridge as any).ensureMaintenanceStateLoaded = async () => {};
@@ -178,6 +264,8 @@ test("/status 会显示当前模型与 context 用量", async () => {
 
   assert.equal(sentTexts.length, 1);
   assert.match(sentTexts[0] ?? "", /当前 session backend：codex/);
+  assert.match(sentTexts[0] ?? "", /Backend 连接：cursor-official: 已连接/);
+  assert.match(sentTexts[0] ?? "", /codex: 启动中/);
   assert.match(sentTexts[0] ?? "", /维护命令：已启用/);
   assert.match(sentTexts[0] ?? "", /上次维护：\/restart 成功/);
   assert.match(sentTexts[0] ?? "", /当前模式：`auto`/);

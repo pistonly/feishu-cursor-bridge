@@ -117,6 +117,7 @@ function createHarness(
       replyOpts?: unknown,
     ) => Promise<void>;
   }>,
+  runtimeOverrides?: Partial<BridgeAcpRuntime>,
 ) {
   const bridgeClient = new EventEmitter() as EventEmitter & {
     setFeishuPromptContext: (_sessionId: string, _ctx: unknown) => void;
@@ -215,6 +216,7 @@ function createHarness(
       return false;
     },
     async stop(): Promise<void> {},
+    ...runtimeOverrides,
   } satisfies BridgeAcpRuntime;
 
   const config = createTestConfig();
@@ -235,6 +237,30 @@ function createHarness(
     feishu,
   };
 }
+
+test("ConversationService 会在长时间无进展时发送等待提示", async () => {
+  const { service, sendTextCalls } = createHarness(
+    [],
+    {
+      promptProgressPollMs: 5,
+      promptSlowNoticeMs: 10,
+      promptStuckNoticeMs: 25,
+    },
+    undefined,
+    {
+      async prompt(): Promise<{ stopReason: string }> {
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        return { stopReason: "end_turn" };
+      },
+    },
+  );
+
+  await service.handleUserPrompt(createMessage(), createSession());
+
+  assert.equal(sendTextCalls.length, 2);
+  assert.match(sendTextCalls[0]?.content ?? "", /等待较久/);
+  assert.match(sendTextCalls[1]?.content ?? "", /长时间没有任何进展/);
+});
 
 test("ConversationService 会把交错的工具事件持续合并到同一张卡片", async () => {
   const { service, sendCardCalls, updateCardCalls } = createHarness([

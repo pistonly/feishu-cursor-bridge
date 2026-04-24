@@ -111,6 +111,12 @@ export interface Config {
     slotMessageLogEnabled: boolean;
     /** 是否在卡片中显示 ACP availableCommands */
     showAcpAvailableCommands: boolean;
+    /** prompt 无进展多久后给飞书发“等待较久”提示 */
+    promptSlowNoticeMs?: number;
+    /** prompt 无进展多久后给飞书发“疑似卡住”提示 */
+    promptStuckNoticeMs?: number;
+    /** prompt 无进展监测轮询间隔 */
+    promptProgressPollMs?: number;
     /** 是否允许 bridge 直接执行 `!cmd` 形式的本地终端命令 */
     enableBangCommand: boolean;
     /** 是否允许在飞书里使用 `/upgrade` 触发 bridge 自升级 */

@@ -95,12 +95,29 @@
 - `official` / `legacy`：不可用
 - `claude` / `codex`：可用
 
-### 2.5 `session/cancel` 必须看真实探针，不能只看 bridge UI
+### 2.6 Claude `/stop` 当前建议用手工 probe 复测
 
-- bridge 层的 `/stop` 只是调用 ACP `session/cancel`
-- 若 runtime 吞掉 `cancel` 异常，飞书侧可能误报“已发送中断请求”
-- 当前项目已修正为不再吞掉 `cancel` 失败
-- `codex` 已在真实 prompt 上验证 `session/cancel -> stopReason=cancelled`
+- Claude backend 的 `/stop` 同样是 bridge 调用 ACP `session/cancel`
+- 当前仓库保留了手工探针：`poc/claude-stop-probe.ts`
+- 在当前机器上，直接运行该 probe 曾观察到：
+  - `stopReason: cancelled`
+  - `closeSession: ok`
+- 但把该 probe 再包进 `node:test` 或其它父进程包装脚本后，出现过不稳定超时：
+  - stdout 停在已发送 `session/cancel`
+  - stderr 出现 `Error handling notification ... invalid_union`
+  - 最终未稳定收敛到 `cancelled`
+- 因此当前对 Claude `/stop` 的建议验证方式是**直接手工运行 probe**，不要把它当作稳定自动化门禁
+
+推荐命令：
+
+```bash
+npx tsx "<repo>/poc/claude-stop-probe.ts" --cwd "<repo>" --cancel-after-ms 1200 --quiet true
+```
+
+通过标准：
+
+- 输出包含 `stopReason: cancelled`
+- 输出包含 `closeSession: ok`
 
 ### 3. mode/model 值完全是 backend-specific
 

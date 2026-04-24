@@ -1,6 +1,29 @@
 import * as path from "node:path";
 import type { FeishuMessage } from "../feishu/bot.js";
 import type { BridgeMessageHandlerDeps } from "./bridge-message-handler-types.js";
+import type { AcpRuntimeStatus } from "../acp/runtime.js";
+
+function formatBackendRuntimeStatus(
+  status: AcpRuntimeStatus,
+  formatIsoTimestamp: (ms: number) => string,
+): string {
+  if (status.state === "ready") {
+    const readyAt = status.readyAt ? `，就绪于 ${formatIsoTimestamp(status.readyAt)}` : "";
+    return `${status.backend}: 已连接${readyAt}`;
+  }
+  if (status.state === "starting") {
+    const startedAt = status.startedAt
+      ? `（开始于 ${formatIsoTimestamp(status.startedAt)}）`
+      : "";
+    return `${status.backend}: 启动中${startedAt}`;
+  }
+  if (status.state === "error") {
+    const failedAt = status.errorAt ? `（失败于 ${formatIsoTimestamp(status.errorAt)}）` : "";
+    const reason = status.errorMessage?.trim() ? `：${status.errorMessage.trim()}` : "";
+    return `${status.backend}: 启动失败${failedAt}${reason}`;
+  }
+  return `${status.backend}: 未启动`;
+}
 
 export async function handleStatusCommand(
   ctx: BridgeMessageHandlerDeps,
@@ -40,6 +63,7 @@ export async function handleStatusCommand(
   const maintenanceEnabled =
     ctx.config.bridge.adminUserIds.length > 0 &&
     (await ctx.isManagedByService());
+  const backendStatuses = ctx.getBackendRuntimeStatuses?.() ?? [];
   const lastMaintenanceTask = ctx.maintenanceStateStore.getLastTask();
   const lastUpgradeAttempt = ctx.upgradeResultStore.getAttempt();
   let body = `📊 活跃/内存 slot: ${stats.active}/${stats.total}`;
@@ -49,6 +73,12 @@ export async function handleStatusCommand(
 • 已启用 backend：${ctx.config.acp.enabledBackends.join(", ")}`;
   body += `
 • 当前 session backend：${activeSession?.backend ?? "（尚无）"}`;
+  if (backendStatuses.length > 0) {
+    body += `
+• Backend 连接：${backendStatuses
+      .map((status) => formatBackendRuntimeStatus(status, ctx.formatIsoTimestamp))
+      .join("；")}`;
+  }
   body += `
 • 维护命令：${
     ctx.config.bridge.adminUserIds.length === 0

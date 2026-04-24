@@ -123,6 +123,7 @@ test("Non-Claude runtimes do not overwrite model state with an unknown selector 
   (runtime as any).connection = {
     async unstable_setSessionModel(): Promise<void> {},
   };
+  (runtime as any).initResult = {};
   (runtime as any).sessionModelStates.set("session-1", {
     currentModelId: "claude-opus-4-6",
     availableModels: [{ modelId: "claude-opus-4-6", name: "Claude Opus 4.6" }],
@@ -143,6 +144,7 @@ test("Non-Claude runtimes keep updating model state when setSessionModel uses a 
   (runtime as any).connection = {
     async unstable_setSessionModel(): Promise<void> {},
   };
+  (runtime as any).initResult = {};
   (runtime as any).sessionModelStates.set("session-1", {
     currentModelId: "claude-opus-4-6",
     availableModels: [

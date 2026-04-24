@@ -179,39 +179,140 @@ export function createAcpRuntime(
   return new AcpRuntime(config, handler);
 }
 
+export type AcpRuntimeStatusState = "idle" | "starting" | "ready" | "error";
+
+export interface AcpRuntimeStatus {
+  backend: AcpBackend;
+  state: AcpRuntimeStatusState;
+  startedAt?: number;
+  readyAt?: number;
+  errorAt?: number;
+  errorMessage?: string;
+}
+
+type RuntimeEntry = {
+  runtime: BridgeAcpRuntime;
+  state: AcpRuntimeStatusState;
+  startedAt?: number;
+  readyAt?: number;
+  errorAt?: number;
+  errorMessage?: string;
+  startPromise?: Promise<BridgeAcpRuntime>;
+};
+
 export class AcpRuntimeRegistry {
-  private readonly runtimes = new Map<AcpBackend, BridgeAcpRuntime>();
+  private readonly runtimes = new Map<AcpBackend, RuntimeEntry>();
 
   constructor(private readonly config: Config) {}
 
-  getRuntime(backend: AcpBackend): BridgeAcpRuntime {
+  private getEntry(backend: AcpBackend): RuntimeEntry {
     const existing = this.runtimes.get(backend);
     if (existing) return existing;
     const runtimeConfig = cloneConfigForBackend(this.config, backend);
     const bridgeClient = new FeishuBridgeClient(runtimeConfig);
     const runtime = createAcpRuntime(runtimeConfig, bridgeClient);
-    this.runtimes.set(backend, runtime);
-    return runtime;
+    const entry: RuntimeEntry = {
+      runtime,
+      state: "idle",
+    };
+    this.runtimes.set(backend, entry);
+    return entry;
+  }
+
+  getRuntime(backend: AcpBackend): BridgeAcpRuntime {
+    return this.getEntry(backend).runtime;
   }
 
   getEnabledBackends(): AcpBackend[] {
     return [...this.config.acp.enabledBackends];
   }
 
+  getRuntimeStatus(backend: AcpBackend): AcpRuntimeStatus {
+    const entry = this.getEntry(backend);
+    return {
+      backend,
+      state: entry.state,
+      startedAt: entry.startedAt,
+      readyAt: entry.readyAt,
+      errorAt: entry.errorAt,
+      errorMessage: entry.errorMessage,
+    };
+  }
+
+  getEnabledRuntimeStatuses(): AcpRuntimeStatus[] {
+    return this.getEnabledBackends().map((backend) => this.getRuntimeStatus(backend));
+  }
+
   async startEnabledRuntimes(): Promise<BridgeAcpRuntime[]> {
     const started: BridgeAcpRuntime[] = [];
     for (const backend of this.config.acp.enabledBackends) {
-      const runtime = this.getRuntime(backend);
-      await runtime.start();
-      await runtime.initializeAndAuth();
+      const runtime = await this.startRuntime(backend);
       started.push(runtime);
     }
     return started;
   }
 
+  startEnabledRuntimesInBackground(): void {
+    for (const backend of this.config.acp.enabledBackends) {
+      void this.startRuntime(backend).catch(() => {});
+    }
+  }
+
+  private async startRuntime(backend: AcpBackend): Promise<BridgeAcpRuntime> {
+    const entry = this.getEntry(backend);
+    if (entry.state === "ready") {
+      return entry.runtime;
+    }
+    if (entry.startPromise) {
+      return entry.startPromise;
+    }
+
+    entry.state = "starting";
+    entry.startedAt = Date.now();
+    delete entry.errorAt;
+    delete entry.errorMessage;
+
+    entry.startPromise = (async () => {
+      try {
+        await entry.runtime.start();
+        await entry.runtime.initializeAndAuth();
+        entry.state = "ready";
+        entry.readyAt = Date.now();
+        console.log(
+          `[bridge] ${formatAcpBackendLabel(backend)} 已连接 protocolVersion=${entry.runtime.initializeResult?.protocolVersion} loadSession=${entry.runtime.supportsLoadSession}`,
+        );
+        return entry.runtime;
+      } catch (error) {
+        entry.state = "error";
+        entry.errorAt = Date.now();
+        entry.errorMessage = error instanceof Error ? error.message : String(error);
+        console.error(
+          `[bridge] ${formatAcpBackendLabel(backend)} 启动失败:`,
+          error,
+        );
+        try {
+          await entry.runtime.stop();
+        } catch {
+          // ignore secondary stop errors while already recording startup failure
+        }
+        throw error;
+      } finally {
+        entry.startPromise = undefined;
+      }
+    })();
+
+    return entry.startPromise;
+  }
+
   async stopAll(): Promise<void> {
-    for (const runtime of this.runtimes.values()) {
-      await runtime.stop();
+    for (const entry of this.runtimes.values()) {
+      await entry.runtime.stop();
+      entry.state = "idle";
+      delete entry.startedAt;
+      delete entry.readyAt;
+      delete entry.errorAt;
+      delete entry.errorMessage;
+      entry.startPromise = undefined;
     }
   }
 }

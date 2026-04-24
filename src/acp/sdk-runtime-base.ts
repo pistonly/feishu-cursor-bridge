@@ -302,6 +302,21 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
     };
   }
 
+  private formatBackendReadyError(): string {
+    if (this.connection && !this.initResult) {
+      return `backend ${this.backend} 正在启动或等待认证，暂未就绪。请稍后重试，或发送 /status 查看 backend 状态。`;
+    }
+    return `backend ${this.backend} 当前未连接。请稍后重试；若持续失败，请联系管理员检查服务状态或执行 /restart。`;
+  }
+
+  protected requireReadyConnection(): ClientSideConnection {
+    const conn = this.connection;
+    if (!conn || !this.initResult) {
+      throw new Error(this.formatBackendReadyError());
+    }
+    return conn;
+  }
+
   protected updateSessionModelState(
     sessionId: string,
     rawModels: unknown,
@@ -638,8 +653,7 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
     cwd?: string,
     options?: AcpNewSessionOptions,
   ): Promise<AcpNewSessionResult> {
-    const conn = this.connection;
-    if (!conn) throw new Error("ACP not started");
+    const conn = this.requireReadyConnection();
     const dir = path.resolve(cwd ?? this.config.acp.workspaceRoot);
     const res = await conn.newSession(this.buildNewSessionParams(dir, options));
     this.updateSessionModeState(res.sessionId, (res as { modes?: unknown }).modes);
@@ -652,8 +666,7 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
   }
 
   async loadSession(sessionId: string, cwd: string): Promise<void> {
-    const conn = this.connection;
-    if (!conn) throw new Error("ACP not started");
+    const conn = this.requireReadyConnection();
     if (!this.supportsLoadSession) {
       throw new Error("Agent does not advertise loadSession");
     }
@@ -689,8 +702,7 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
   }
 
   async prompt(sessionId: string, text: string): Promise<AcpPromptResult> {
-    const conn = this.connection;
-    if (!conn) throw new Error("ACP not started");
+    const conn = this.requireReadyConnection();
     this.logOfficialModelTrace("prompt_begin", sessionId, {
       cached: this.summarizeModelStateForTrace(this.sessionModelStates.get(sessionId)),
     });
@@ -720,8 +732,7 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
   }
 
   async setSessionMode(sessionId: string, modeId: string): Promise<void> {
-    const conn = this.connection;
-    if (!conn) throw new Error("ACP not started");
+    const conn = this.requireReadyConnection();
     await conn.setSessionMode({ sessionId, modeId });
     const current = this.sessionModeStates.get(sessionId);
     this.sessionModeStates.set(sessionId, {
@@ -731,8 +742,7 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
   }
 
   async setSessionModel(sessionId: string, modelId: string): Promise<void> {
-    const conn = this.connection;
-    if (!conn) throw new Error("ACP not started");
+    const conn = this.requireReadyConnection();
     this.logOfficialModelTrace("set_model_begin", sessionId, {
       requestedModelId: modelId,
       cached: this.summarizeModelStateForTrace(this.sessionModelStates.get(sessionId)),

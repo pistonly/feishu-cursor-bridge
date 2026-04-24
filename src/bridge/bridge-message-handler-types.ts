@@ -4,6 +4,7 @@ import type {
   AcpSessionUsageState,
   BridgeAcpRuntime,
 } from "../acp/runtime-contract.js";
+import type { AcpRuntimeStatus } from "../acp/runtime.js";
 import type { Config } from "../config/index.js";
 import type { FeishuBot, FeishuMessage } from "../feishu/bot.js";
 import type { SessionManager } from "../session/manager.js";
@@ -55,6 +56,7 @@ export interface BridgeMessageHandlerDeps {
   threadScope(msg: FeishuMessage): string | undefined;
   runtimeForBackend(backend: AcpBackend): BridgeAcpRuntime;
   runtimeForSession(session: { backend: AcpBackend }): BridgeAcpRuntime;
+  getBackendRuntimeStatuses?(): AcpRuntimeStatus[];
   conversationForBackend(backend: AcpBackend): ConversationService;
   feishuSessionKey(msg: FeishuMessage): string;
   isManagedByService(): Promise<boolean>;
