@@ -81,6 +81,10 @@ export type NewConversationCommand =
   | { kind: "update"; force: boolean; invalidUsage?: boolean }
   | { kind: "upgrade"; force: boolean; invalidUsage?: boolean };
 
+function parseSlotTargetToken(arg: string): number | string {
+  return /^\d+$/.test(arg) ? parseInt(arg, 10) : arg;
+}
+
 export function parseNewConversationCommand(
   content: string,
 ): NewConversationCommand | null {
@@ -166,7 +170,7 @@ export function parseNewConversationCommand(
   if (cmd === "switch" || cmd === "reply") {
     if (tokens.length === 1) return { kind: cmd, target: null };
     const arg = tokens[1];
-    return { kind: cmd, target: /^\d+$/.test(arg) ? parseInt(arg, 10) : arg };
+    return { kind: cmd, target: parseSlotTargetToken(arg) };
   }
 
   if (cmd === "rename") {
@@ -177,10 +181,9 @@ export function parseNewConversationCommand(
       return { kind: "rename", target: null, name: tokens[1] };
     }
     const arg = tokens[1];
-    const num = parseInt(arg, 10);
     return {
       kind: "rename",
-      target: isNaN(num) ? arg : num,
+      target: parseSlotTargetToken(arg),
       name: tokens.slice(2).join(" ").trim(),
     };
   }
@@ -191,8 +194,7 @@ export function parseNewConversationCommand(
     }
     const arg = tokens[1];
     if (arg.toLowerCase() === "all") return { kind: "close", target: "all" };
-    const num = parseInt(arg, 10);
-    return { kind: "close", target: isNaN(num) ? arg : num };
+    return { kind: "close", target: parseSlotTargetToken(arg) };
   }
 
   if (tokens.length === 1) return { kind: "new", variant: "list" };

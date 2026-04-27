@@ -29,6 +29,18 @@ test("parseNewConversationCommand 支持 /reply 指定编号或名称", () => {
   });
 });
 
+test("parseNewConversationCommand 仅把纯数字目标解析为槽位编号", () => {
+  assert.deepEqual(parseNewConversationCommand("/rename 1abc new-name"), {
+    kind: "rename",
+    target: "1abc",
+    name: "new-name",
+  });
+  assert.deepEqual(parseNewConversationCommand("/close 1abc"), {
+    kind: "close",
+    target: "1abc",
+  });
+});
+
 test("parseNewConversationCommand 支持 /history", () => {
   assert.deepEqual(parseNewConversationCommand("/history"), {
     kind: "history",

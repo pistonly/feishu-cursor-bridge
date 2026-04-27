@@ -46,12 +46,6 @@ function shouldIgnoreTopicMessage(
     }
   }
 
-  if (raw.length <= 120 && /\/topic\b/i.test(raw)) {
-    console.log(
-      "[bridge] /topic ignored (short message, contains /topic) — no session, no ACP prompt",
-    );
-    return true;
-  }
   return false;
 }
 
