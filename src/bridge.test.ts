@@ -991,7 +991,7 @@ test("/model 成功后提示会回显运行时确认的当前模型", async () =
   assert.match(sentTexts[0] ?? "", /已切换模型为 `claude-opus-4-6`/);
 });
 
-test("/history 会显示当前 slot 最近几轮历史", async () => {
+test("/history 会像终端 history 一样只显示 prompt", async () => {
   const bridge = new Bridge(createTestConfig());
   const sentTexts: string[] = [];
   const slot = {
@@ -1013,14 +1013,12 @@ test("/history 会显示当前 slot 最近几轮历史", async () => {
         finishedAt: 200,
         prompt: "older prompt",
         status: "succeeded" as const,
-        reply: "older reply",
       },
       {
         startedAt: 300,
         finishedAt: 400,
         prompt: "latest prompt",
         status: "error" as const,
-        error: "latest error",
       },
     ],
   };
@@ -1040,16 +1038,15 @@ test("/history 会显示当前 slot 最近几轮历史", async () => {
       sentTexts.push(body);
     },
   };
-  (bridge as any).formatIsoTimestamp = (ms: number) =>
-    new Date(ms).toISOString().replace(".000Z", "Z");
 
   await (bridge as any).handleFeishuMessage(createMessage("/history 1"));
 
   assert.equal(sentTexts.length, 1);
-  assert.match(sentTexts[0] ?? "", /session #2 \(backend\) 最近 1 轮历史/);
+  assert.match(sentTexts[0] ?? "", /session #2 \(backend\) 最近 1 条 prompt 历史/);
   assert.match(sentTexts[0] ?? "", /latest prompt/);
-  assert.match(sentTexts[0] ?? "", /latest error/);
+  assert.match(sentTexts[0] ?? "", /\b2\s+latest prompt/);
   assert.doesNotMatch(sentTexts[0] ?? "", /older prompt/);
+  assert.doesNotMatch(sentTexts[0] ?? "", /Reply：|Error：|完成|失败/);
 });
 
 test("/history 在当前 slot 无历史时返回提示", async () => {
@@ -1158,7 +1155,7 @@ test("普通对话会把 turn 记入 slot history", async () => {
   assert.equal(recordedTurns[0]?.slotIndex, 1);
   assert.equal(recordedTurns[0]?.turn.prompt, "hello history");
   assert.equal(recordedTurns[0]?.turn.status, "succeeded");
-  assert.equal(recordedTurns[0]?.turn.reply, "reply body");
+  assert.equal(recordedTurns[0]?.turn.reply, undefined);
 });
 
 test("普通对话会为当前 slot 追加用户问题与回复日志", async () => {
@@ -2722,6 +2719,59 @@ test("/cancel 在仅有排队消息时会撤销排队", async () => {
     0,
   );
   assert.match(sentTexts[0] ?? "", /已撤销当前槽位中的排队消息/);
+});
+
+test("/close 会拒绝关闭仍在回复中的 slot", async () => {
+  const bridge = new Bridge(createTestConfig());
+  const sentTexts: string[] = [];
+  let closeCalled = false;
+
+  const slot = {
+    slotIndex: 1,
+    name: "main",
+    session: {
+      backend: "cursor-official" as const,
+      sessionId: "session-1",
+      workspaceRoot: "/tmp/project",
+      chatId: "chat-1",
+      userId: "user-1",
+      chatType: "p2p" as const,
+      createdAt: 0,
+      lastActiveAt: 0,
+    },
+  };
+
+  (bridge as any).ensureMaintenanceStateLoaded = async () => {};
+  (bridge as any).sessionManager = {
+    getSessionSnapshot() {
+      return {
+        sessionKey: "dm:user-1",
+        group: { slots: [slot], activeSlotIndex: 1, nextSlotIndex: 2 },
+        activeSlot: slot,
+        idleExpiresInMs: 60_000,
+      };
+    },
+    async closeSlot() {
+      closeCalled = true;
+      return { closed: slot, removedEntireGroup: true };
+    },
+  };
+  ((bridge as any).promptCoordinator as any).activePrompts = new Set([
+    "dm:user-1:1",
+  ]);
+  (bridge as any).feishuBot = {
+    stripBotMentionKeepLines(content: string) {
+      return content;
+    },
+    async sendText(_chatId: string, body: string): Promise<void> {
+      sentTexts.push(body);
+    },
+  };
+
+  await (bridge as any).handleFeishuMessage(createMessage("/close 1"));
+
+  assert.equal(closeCalled, false);
+  assert.match(sentTexts[0] ?? "", /仍有 ACP 回复在进行/);
 });
 
 test("共享群 session key 不包含发送者 userId", () => {

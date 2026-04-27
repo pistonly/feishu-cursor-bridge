@@ -152,8 +152,6 @@ function normalizeSessionTurnRecord(
 ): PersistedSessionTurnRecord | undefined {
   const prompt = normalizeTurnText(entry.prompt) ?? "（空）";
   const status = entry.status === "error" ? "error" : "succeeded";
-  const reply = normalizeTurnText(entry.reply);
-  const error = normalizeTurnText(entry.error);
   const startedAt =
     Number.isFinite(entry.startedAt) && entry.startedAt > 0
       ? entry.startedAt
@@ -167,8 +165,6 @@ function normalizeSessionTurnRecord(
     finishedAt,
     prompt,
     status,
-    ...(reply ? { reply } : {}),
-    ...(error ? { error } : {}),
   };
 }
 
@@ -333,6 +329,7 @@ export class SessionStore {
   private readonly defaultBackend: AcpBackend;
   private data: StoreFileV4;
   private flushSeq = 0;
+  private flushQueue: Promise<void> = Promise.resolve();
 
   constructor(filePath: string, defaultBackend: AcpBackend = "cursor-official") {
     this.filePath = path.resolve(filePath);
@@ -406,6 +403,12 @@ export class SessionStore {
   }
 
   async flush(): Promise<void> {
+    const task = this.flushQueue.then(() => this.flushNow());
+    this.flushQueue = task.catch(() => {});
+    return task;
+  }
+
+  private async flushNow(): Promise<void> {
     const dir = path.dirname(this.filePath);
     await fs.mkdir(dir, { recursive: true });
     const tmp = `${this.filePath}.${process.pid}.${++this.flushSeq}.tmp`;

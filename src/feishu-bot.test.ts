@@ -53,6 +53,31 @@ test("parsePostEmbeddedImageKeys 提取并去重内嵌图片", () => {
   assert.deepEqual(parsePostEmbeddedImageKeys(raw), ["img_a", "img_b"]);
 });
 
+test("stripBotMentionKeepLines 只移除机器人 @，保留其它用户 @", () => {
+  const bot = new FeishuBot({
+    appId: "app-id",
+    appSecret: "app-secret",
+    domain: "feishu",
+  });
+  (bot as any).botOpenId = "ou_bot";
+
+  assert.equal(
+    bot.stripBotMentionKeepLines("@Bot 请通知 @Alice", [
+      { key: "@_user_1", name: "Bot", id: { open_id: "ou_bot" } },
+      { key: "@_user_2", name: "Alice", id: { open_id: "ou_alice" } },
+    ]),
+    "请通知 @Alice",
+  );
+
+  const stripped = bot.stripBotMentionKeepLines(
+    '<at user_id="ou_bot">Bot</at> 请通知 <at user_id="ou_alice">Alice</at>',
+  );
+  assert.equal(
+    stripped,
+    '请通知 <at user_id="ou_alice">Alice</at>',
+  );
+});
+
 test("sendText 在线程回复分片时所有分片都走 reply_in_thread", async () => {
   const bot = new FeishuBot({
     appId: "app-id",

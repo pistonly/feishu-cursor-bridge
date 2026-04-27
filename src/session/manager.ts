@@ -1043,8 +1043,6 @@ export class SessionManager {
   ): SessionTurnRecord {
     const prompt = this.normalizeSessionTurnText(turn.prompt) ?? "（空）";
     const status = turn.status === "error" ? "error" : "succeeded";
-    const reply = this.normalizeSessionTurnText(turn.reply);
-    const error = this.normalizeSessionTurnText(turn.error);
     const startedAt =
       Number.isFinite(turn.startedAt) && turn.startedAt > 0
         ? turn.startedAt
@@ -1058,8 +1056,6 @@ export class SessionManager {
       finishedAt,
       prompt,
       status,
-      ...(reply ? { reply } : {}),
-      ...(error ? { error } : {}),
     };
   }
 

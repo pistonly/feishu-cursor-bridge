@@ -195,8 +195,6 @@ export class PromptCoordinator {
             finishedAt: number;
             prompt: string;
             status: "succeeded" | "error";
-            reply?: string;
-            error?: string;
           }) =>
             sessionManager.recordSlotTurn(
               msg.chatId,
@@ -249,7 +247,6 @@ export class PromptCoordinator {
         finishedAt: Date.now(),
         prompt: promptContent,
         status: "error",
-        error: formatJsonRpcLikeError(error),
       });
       throw error;
     }
@@ -268,7 +265,6 @@ export class PromptCoordinator {
       finishedAt: Date.now(),
       prompt: promptContent,
       status: "succeeded",
-      ...(lastReply ? { reply: lastReply } : {}),
     });
     if (lastReply) {
       sessionManager.setSlotLastTurn(

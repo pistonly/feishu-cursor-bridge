@@ -566,10 +566,15 @@ test("recordSlotTurn 会持久化并在重新加载后恢复 slot history", asyn
   await waitForFlushes();
 
   const raw = JSON.parse(await fs.readFile(storeFile, "utf8")) as {
-    sessions?: Record<string, { slots?: Array<{ history?: Array<{ prompt?: string; status?: string }> }> }>;
+    sessions?: Record<
+      string,
+      { slots?: Array<{ history?: Array<{ prompt?: string; status?: string; reply?: string; error?: string }> }> }
+    >;
   };
   assert.equal(raw.sessions?.[SESSION_KEY]?.slots?.[0]?.history?.length, 2);
   assert.equal(raw.sessions?.[SESSION_KEY]?.slots?.[0]?.history?.[1]?.status, "error");
+  assert.equal(raw.sessions?.[SESSION_KEY]?.slots?.[0]?.history?.[0]?.reply, undefined);
+  assert.equal(raw.sessions?.[SESSION_KEY]?.slots?.[0]?.history?.[1]?.error, undefined);
 
   const storeReloaded = new SessionStore(storeFile);
   const waitForReloadedFlushes = trackPendingFlushes(storeReloaded);
@@ -588,14 +593,12 @@ test("recordSlotTurn 会持久化并在重新加载后恢复 slot history", asyn
       finishedAt: 120,
       prompt: "first prompt",
       status: "succeeded",
-      reply: "first reply",
     },
     {
       startedAt: 130,
       finishedAt: 150,
       prompt: "second prompt",
       status: "error",
-      error: "failed",
     },
   ]);
   await waitForReloadedFlushes();

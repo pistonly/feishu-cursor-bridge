@@ -55,37 +55,33 @@ function buildSlotLastTurnCardContent(slot: SessionSlot): string | null {
 
 const DEFAULT_HISTORY_COUNT = 5;
 const MAX_HISTORY_COUNT = 20;
-const MAX_HISTORY_BLOCK_CHARS = 1_500;
+const MAX_HISTORY_PROMPT_CHARS = 240;
 
-function truncateHistoryBlock(text: string | undefined): string {
-  const normalized = text?.replace(/\r\n?/g, "\n").trim();
+function formatHistoryPromptLine(text: string | undefined): string {
+  const normalized = text?.replace(/\s+/g, " ").trim();
   if (!normalized) return "（空）";
-  if (normalized.length <= MAX_HISTORY_BLOCK_CHARS) {
+  if (normalized.length <= MAX_HISTORY_PROMPT_CHARS) {
     return normalized;
   }
-  return `${normalized.slice(0, MAX_HISTORY_BLOCK_CHARS).trimEnd()}…\n\n（内容过长，已截断）`;
+  return `${normalized.slice(0, MAX_HISTORY_PROMPT_CHARS).trimEnd()}…`;
 }
 
 function buildSlotHistoryText(
   slot: SessionSlot,
   count: number,
-  formatIsoTimestamp: (ms: number) => string,
 ): string | null {
   const history = [...(slot.history ?? [])];
   if (history.length === 0) return null;
 
-  const visible = history.slice(-count).reverse();
+  const visible = history.slice(-count);
+  const startIndex = history.length - visible.length + 1;
+  const lineNumberWidth = String(history.length).length;
   const label = slot.name ? ` (${slot.name})` : "";
   return [
-    `📜 session #${slot.slotIndex}${label} 最近 ${visible.length} 轮历史（新到旧；最多显示 ${count} 轮）`,
+    `📜 session #${slot.slotIndex}${label} 最近 ${visible.length} 条 prompt 历史（旧到新；最多显示 ${count} 条）`,
     "",
-    ...visible.map((turn, index) => [
-      `【${index + 1}】${turn.status === "error" ? "失败" : "完成"} · ${formatIsoTimestamp(turn.finishedAt)}`,
-      `Prompt：\n${truncateHistoryBlock(turn.prompt)}`,
-      turn.status === "error"
-        ? `Error：\n${truncateHistoryBlock(turn.error)}`
-        : `Reply：\n${truncateHistoryBlock(turn.reply ?? "（无响应内容）")}`,
-    ].join("\n\n")),
+    ...visible.map((turn, index) =>
+      `${String(startIndex + index).padStart(lineNumberWidth, " ")}  ${formatHistoryPromptLine(turn.prompt)}`),
   ].join("\n\n");
 }
 
@@ -189,7 +185,7 @@ ${lines.join("\n\n")}
 • \`/new list\` / \`/new <序号>\` / \`/new <路径>\` — 新建 session
 • \`/switch <编号或名称>\` — 切换
 • \`/reply [编号或名称]\` — 重发上一轮缓存回复
-• \`/history [条数]\` — 查看当前槽位最近几轮历史
+• \`/history [条数]\` — 查看当前槽位最近几条 prompt
 • \`/fileback <说明>\` — 向 Agent 附带「用 FEISHU_SEND_FILE 发文件」说明后再发你的任务
 • \`/stop\` / \`/cancel\` — 中断**当前活跃**槽位正在生成的回复，并撤销该槽位排队消息（不关 session）
 • \`/resume\` — 列出当前 project 可恢复的历史 session
@@ -809,12 +805,12 @@ async function handleHistoryCommand(
     MAX_HISTORY_COUNT,
     Math.max(1, count ?? DEFAULT_HISTORY_COUNT),
   );
-  const body = buildSlotHistoryText(slot, limit, ctx.formatIsoTimestamp);
+  const body = buildSlotHistoryText(slot, limit);
   if (!body) {
     const label = slot.name ? ` (${slot.name})` : "";
     await ctx.feishuBot.sendText(
       msg.chatId,
-      `ℹ️ session #${slot.slotIndex}${label} 暂无可显示的历史。\n\n只有在该槽位真正向 Agent 发出过请求并完成返回后，\`/history\` 才会显示记录。`,
+      `ℹ️ session #${slot.slotIndex}${label} 暂无可显示的历史。\n\n只有在该槽位真正向 Agent 发出过 prompt 后，\`/history\` 才会显示记录。`,
       msg.messageId,
       ctx.threadReplyOpts(msg),
     );
@@ -882,6 +878,15 @@ async function handleCloseCommand(
   );
   const sessionKey = snapshot?.sessionKey;
   if (target === "all") {
+    const activeSlot = findActivePromptSlot(
+      ctx,
+      snapshot?.sessionKey,
+      snapshot?.group.slots ?? [],
+    );
+    if (activeSlot) {
+      await sendCloseRejectedForActivePrompt(ctx, msg, activeSlot);
+      return;
+    }
     const { closed } = await ctx.sessionManager.closeAllSlots(
       msg.chatId,
       msg.senderId,
@@ -908,6 +913,20 @@ async function handleCloseCommand(
     );
     return;
   }
+  const snapshotSlot = snapshot
+    ? resolveSnapshotSlot(snapshot.group.slots, target)
+    : undefined;
+  if (
+    snapshotSlot &&
+    snapshot &&
+    ctx.promptCoordinator.getSlotPromptState(
+      snapshot.sessionKey,
+      snapshotSlot.slotIndex,
+    ).hasActivePrompt
+  ) {
+    await sendCloseRejectedForActivePrompt(ctx, msg, snapshotSlot);
+    return;
+  }
   const { closed, removedEntireGroup } = await ctx.sessionManager.closeSlot(
     msg.chatId,
     msg.senderId,
@@ -926,6 +945,43 @@ async function handleCloseCommand(
   await ctx.feishuBot.sendText(
     msg.chatId,
     `✅ 已关闭 session #${closed.slotIndex}${label}${tail}`,
+    msg.messageId,
+    ctx.threadReplyOpts(msg),
+  );
+}
+
+function resolveSnapshotSlot(
+  slots: SessionSlot[],
+  target: number | string,
+): SessionSlot | undefined {
+  if (typeof target === "number") {
+    return slots.find((slot) => slot.slotIndex === target);
+  }
+  return slots.find((slot) => slot.name === target);
+}
+
+function findActivePromptSlot(
+  ctx: BridgeMessageHandlerDeps,
+  sessionKey: string | undefined,
+  slots: SessionSlot[],
+): SessionSlot | undefined {
+  if (!sessionKey) return undefined;
+  return slots.find((slot) =>
+    ctx.promptCoordinator.getSlotPromptState(
+      sessionKey,
+      slot.slotIndex,
+    ).hasActivePrompt,
+  );
+}
+
+async function sendCloseRejectedForActivePrompt(
+  ctx: BridgeMessageHandlerDeps,
+  msg: FeishuMessage,
+  slot: SessionSlot,
+): Promise<void> {
+  await ctx.feishuBot.sendText(
+    msg.chatId,
+    `⏳ ${formatSessionLabel(slot)} 仍有 ACP 回复在进行。请先发送 \`/stop\` / \`/cancel\` 中断后再关闭 session。`,
     msg.messageId,
     ctx.threadReplyOpts(msg),
   );

@@ -882,6 +882,7 @@ export class FeishuBot extends EventEmitter {
     let result = content;
     if (mentions && mentions.length > 0) {
       for (const m of mentions) {
+        if (!this.isMentionEntryForBot(m)) continue;
         if (m.name) {
           result = result.replace(new RegExp(`@${escapeRegExp(m.name)}\\s*`, "g"), "");
         }
@@ -893,10 +894,40 @@ export class FeishuBot extends EventEmitter {
         }
       }
     }
-    result = result.replace(/@_user_\d+/g, "");
-    result = result.replace(/<at\b[^>]*>[\s\S]*?<\/at>/gi, "");
-    result = result.replace(/<at\b[^>]*\/>/gi, "");
+    result = result.replace(/<at\b[^>]*>[\s\S]*?<\/at>/gi, (match) =>
+      this.atTagMentionsBot(match) ? "" : match,
+    );
+    result = result.replace(/<at\b[^>]*\/>/gi, (match) =>
+      this.atTagMentionsBot(match) ? "" : match,
+    );
     return result.trim();
+  }
+
+  private isMentionEntryForBot(m: {
+    id: { open_id?: string; user_id?: string; union_id?: string };
+  }): boolean {
+    return mentionEntryIdStrings(m).some((id) => this.isBotId(id));
+  }
+
+  private isBotId(id: string): boolean {
+    const normalized = id.trim();
+    if (!normalized || normalized === "all") return false;
+    return (
+      normalized === this.botOpenId?.trim() ||
+      normalized === this.botUserId?.trim() ||
+      (!!this.botUnionId?.trim() && normalized === this.botUnionId.trim())
+    );
+  }
+
+  private atTagMentionsBot(tag: string): boolean {
+    const re =
+      /\b(?:user_id|open_id|union_id|id)\s*=\s*["']?([^"'>\s/]+)["']?/gi;
+    let match: RegExpExecArray | null;
+    while ((match = re.exec(tag)) !== null) {
+      const id = match[1]?.trim();
+      if (id && this.isBotId(id)) return true;
+    }
+    return false;
   }
 
   getBotOpenId(): string | undefined {
