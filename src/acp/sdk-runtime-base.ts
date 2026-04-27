@@ -324,7 +324,10 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
   ): void {
     const next = this.normalizeSessionModelState(rawModels);
     if (next) {
-      this.sessionModelStates.set(sessionId, next);
+      this.sessionModelStates.set(
+        sessionId,
+        this.transformSessionModelState(next),
+      );
     }
     if (traceSource) {
       this.logOfficialModelTrace(traceSource, sessionId, {
@@ -332,6 +335,12 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
         normalized: this.summarizeModelStateForTrace(next),
       });
     }
+  }
+
+  protected transformSessionModelState(
+    state: AcpSessionModelState,
+  ): AcpSessionModelState {
+    return state;
   }
 
   protected deleteSessionModelState(sessionId: string): void {

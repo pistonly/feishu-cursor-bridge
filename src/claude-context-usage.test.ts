@@ -164,3 +164,27 @@ test("Non-Claude runtimes keep updating model state when setSessionModel uses a 
     ],
   });
 });
+
+test("Codex runtime enriches gpt-5.5 with effort selectors when ACP omits them", () => {
+  const handler = new EventEmitter() as any;
+  const runtime = new CodexAcpRuntime(createTestConfig("codex"), handler);
+
+  (runtime as any).updateSessionModelState("session-1", {
+    currentModelId: "gpt-5.5",
+    availableModels: [
+      { modelId: "gpt-5.5", name: "gpt-5.5" },
+      { modelId: "gpt-5.4/low", name: "gpt-5.4 (low)" },
+    ],
+  });
+
+  assert.deepEqual(runtime.getSessionModelState("session-1"), {
+    currentModelId: "gpt-5.5/medium",
+    availableModels: [
+      { modelId: "gpt-5.5/low", name: "gpt-5.5 (low)" },
+      { modelId: "gpt-5.5/medium", name: "gpt-5.5 (medium)" },
+      { modelId: "gpt-5.5/high", name: "gpt-5.5 (high)" },
+      { modelId: "gpt-5.5/xhigh", name: "gpt-5.5 (xhigh)" },
+      { modelId: "gpt-5.4/low", name: "gpt-5.4 (low)" },
+    ],
+  });
+});
