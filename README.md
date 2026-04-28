@@ -192,6 +192,7 @@ Notes:
 | `FEISHU_APP_ID` | Feishu App ID (required) | — |
 | `FEISHU_APP_SECRET` | Feishu App Secret (required) | — |
 | `FEISHU_DOMAIN` | `feishu` / `lark` / custom URL | `feishu` |
+| `BRIDGE_INSTANCE_NAME` | Optional local instance name. When set, default state paths and `service.sh` launchd/systemd names are isolated so multiple bots can run on one machine. Use letters, numbers, `.`, `_`, `-`. | empty |
 | `ACP_BACKEND` | Default backend: `cursor-official` / `cursor-legacy` / `claude` / `codex` | `cursor-official` |
 | `CURSOR_AGENT_PATH` | Official ACP command path | `agent` |
 | `CURSOR_API_KEY` | Official ACP API key (optional) | empty |
@@ -204,13 +205,13 @@ Notes:
 | `CODEX_AGENT_ACP_EXTRA_ARGS` | Extra args appended to Codex ACP child command | empty |
 | `BRIDGE_WORK_ALLOWLIST` | **Required.** Comma-separated absolute workspace roots; compatible with `CURSOR_WORK_ALLOWLIST`; ACP child `cwd` = first entry | — |
 | `CURSOR_LEGACY_NODE_PATH` | Node binary used to spawn **in-repo** `cursor-agent-acp` (`cursor-legacy` only; compatible with `ACP_NODE_PATH`) | `process.execPath` |
-| `CURSOR_LEGACY_SESSION_DIR` | Passed to `cursor-agent-acp` as `--session-dir` (`cursor-legacy` only; compatible with `CURSOR_ACP_SESSION_DIR`) | `~/.feishu-cursor-bridge/cursor-acp-sessions` |
+| `CURSOR_LEGACY_SESSION_DIR` | Passed to `cursor-agent-acp` as `--session-dir` (`cursor-legacy` only; compatible with `CURSOR_ACP_SESSION_DIR`) | `~/.feishu-cursor-bridge[/<instance>]/cursor-acp-sessions` |
 | `CURSOR_LEGACY_EXTRA_ARGS` | Extra args for `cursor-agent-acp` CLI (`cursor-legacy` only; compatible with `CURSOR_ACP_EXTRA_ARGS`) | empty |
-| `BRIDGE_SESSION_STORE` | Feishu ↔ ACP mapping JSON path | `~/.feishu-cursor-bridge/.feishu-bridge-sessions.json` |
+| `BRIDGE_SESSION_STORE` | Feishu ↔ ACP mapping JSON path | `~/.feishu-cursor-bridge[/<instance>]/.feishu-bridge-sessions.json` |
 | `SESSION_IDLE_TIMEOUT_MS` | Idle before new session; `0` / `infinity` = never | `604800000` (7 days) |
 | `BRIDGE_MAX_SESSIONS_PER_USER` | Max live sessions per user (all chats); `0` = unlimited | `10` |
 | `BRIDGE_GROUP_SESSION_SCOPE` | Group session isolation: `per-user` or `shared`; `shared` keeps group members on one shared session set per group/thread and makes session-management commands admin-only | `per-user` |
-| `BRIDGE_SINGLE_INSTANCE_LOCK` | Single-instance lock file (refuse start if PID alive) | `~/.feishu-cursor-bridge/bridge.lock` |
+| `BRIDGE_SINGLE_INSTANCE_LOCK` | Single-instance lock file (refuse start if PID alive) | `~/.feishu-cursor-bridge[/<instance>]/bridge.lock` |
 | `BRIDGE_ALLOW_MULTIPLE_INSTANCES` | `true` disables single-instance lock (debug only) | `false` |
 | `FEISHU_CARD_THROTTLE_MS` | Card update throttle | `800` |
 | `FEISHU_CARD_SPLIT_MARKDOWN_THRESHOLD` | Roll over to a new card when a card gets this long | `3500` |
@@ -219,7 +220,9 @@ Notes:
 | `LOG_LEVEL` | `debug` / `info` / `warn` / `error` | `info` |
 | `BRIDGE_DEBUG` | Verbose logs + `/status` details | `false` |
 | `EXPERIMENT_LOG_TO_FILE` | Experimental: append `console.*` to file | `false` |
-| `EXPERIMENT_LOG_FILE` | Experimental log path | `~/.feishu-cursor-bridge/logs/bridge.log` |
+| `EXPERIMENT_LOG_FILE` | Experimental log path | `~/.feishu-cursor-bridge[/<instance>]/logs/bridge.log` |
+
+`BRIDGE_INSTANCE_NAME` is the recommended way to run two configured copies on the same machine. For example, set `BRIDGE_INSTANCE_NAME=bot-a` in one checkout and `BRIDGE_INSTANCE_NAME=bot-b` in another; `bash service.sh install` will then create `com.feishu-cursor-bridge.bot-a` / `com.feishu-cursor-bridge.bot-b` on macOS, or `feishu-cursor-bridge.bot-a.service` / `feishu-cursor-bridge.bot-b.service` on Linux. Explicit path variables still override these instance-scoped defaults.
 
 Proxy precedence: `wss_proxy` / `ws_proxy` > `https_proxy` / `http_proxy` / `all_proxy`. Proxy is used only when env vars are set; otherwise direct.
 
@@ -451,9 +454,10 @@ docker-compose -f docker/compose.yaml run --rm claude-acp-smoke
 
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
-| `FEISHU_APP_ID` | 飞书 App ID（必填） | - |
-| `FEISHU_APP_SECRET` | 飞书 App Secret（必填） | - |
+| `FEISHU_APP_ID` | 飞书 App ID（必填） | — |
+| `FEISHU_APP_SECRET` | 飞书 App Secret（必填） | — |
 | `FEISHU_DOMAIN` | `feishu` / `lark` / 自定义 URL | `feishu` |
+| `BRIDGE_INSTANCE_NAME` | 本机实例名；设置后默认状态路径与 `service.sh` 的 launchd/systemd 服务名会自动隔离，便于同机多 bot 并存。可用字母、数字、`.`、`_`、`-`。 | 空 |
 | `ACP_BACKEND` | ACP 后端：`cursor-official` / `cursor-legacy` / `claude` / `codex` | `cursor-official` |
 | `CURSOR_AGENT_PATH` | 官方 ACP 命令路径 | `agent` |
 | `CURSOR_API_KEY` | 官方 ACP API key（可选） | 空 |
@@ -464,13 +468,13 @@ docker-compose -f docker/compose.yaml run --rm claude-acp-smoke
 | `CODEX_AGENT_ACP_EXTRA_ARGS` | 追加到 Codex ACP 子进程命令后的额外参数 | 空 |
 | `BRIDGE_WORK_ALLOWLIST` | **必填**，逗号分隔的绝对路径根；兼容 `CURSOR_WORK_ALLOWLIST`；ACP 子进程 `cwd` 取列表首项 | — |
 | `CURSOR_LEGACY_NODE_PATH` | 用于启动本仓 `vendor/cursor-agent-acp` 子进程的 Node（仅 `cursor-legacy`，兼容 `ACP_NODE_PATH`） | `process.execPath` |
-| `CURSOR_LEGACY_SESSION_DIR` | 传给 `vendor/cursor-agent-acp` 的 `--session-dir`（仅 `cursor-legacy`，兼容 `CURSOR_ACP_SESSION_DIR`） | `~/.feishu-cursor-bridge/cursor-acp-sessions` |
+| `CURSOR_LEGACY_SESSION_DIR` | 传给 `vendor/cursor-agent-acp` 的 `--session-dir`（仅 `cursor-legacy`，兼容 `CURSOR_ACP_SESSION_DIR`） | `~/.feishu-cursor-bridge[/<实例名>]/cursor-acp-sessions` |
 | `CURSOR_LEGACY_EXTRA_ARGS` | 透传 `vendor/cursor-agent-acp` CLI 的额外参数（仅 `cursor-legacy`，兼容 `CURSOR_ACP_EXTRA_ARGS`，空格分隔） | 空 |
-| `BRIDGE_SESSION_STORE` | 飞书↔ACP 映射 JSON 路径 | `~/.feishu-cursor-bridge/.feishu-bridge-sessions.json` |
+| `BRIDGE_SESSION_STORE` | 飞书↔ACP 映射 JSON 路径 | `~/.feishu-cursor-bridge[/<实例名>]/.feishu-bridge-sessions.json` |
 | `SESSION_IDLE_TIMEOUT_MS` | 空闲多久新建会话；`0` / `infinity` 表示永不过期 | `604800000`（7 天） |
 | `BRIDGE_MAX_SESSIONS_PER_USER` | 同一用户存活 session 总数上限（跨聊天）；`0` 不限制 | `10` |
 | `BRIDGE_GROUP_SESSION_SCOPE` | 群聊 session 隔离方式：`per-user` 或 `shared`；设为 `shared` 后，同一群/同一话题成员共享一组 session，且 session 管理命令仅管理员可用 | `per-user` |
-| `BRIDGE_SINGLE_INSTANCE_LOCK` | 单实例锁文件路径（已存在且 PID 存活则拒绝启动） | `~/.feishu-cursor-bridge/bridge.lock` |
+| `BRIDGE_SINGLE_INSTANCE_LOCK` | 单实例锁文件路径（已存在且 PID 存活则拒绝启动） | `~/.feishu-cursor-bridge[/<实例名>]/bridge.lock` |
 | `BRIDGE_ALLOW_MULTIPLE_INSTANCES` | `true` 时禁用单实例锁（仅调试） | `false` |
 | `FEISHU_CARD_THROTTLE_MS` | 卡片更新节流 | `800` |
 | `FEISHU_CARD_SPLIT_MARKDOWN_THRESHOLD` | 单张卡片内容达到该长度后滚动到下一张 | `3500` |
@@ -479,7 +483,9 @@ docker-compose -f docker/compose.yaml run --rm claude-acp-smoke
 | `LOG_LEVEL` | `debug` / `info` / `warn` / `error` | `info` |
 | `BRIDGE_DEBUG` | 调试日志与 `/status` 详情 | `false` |
 | `EXPERIMENT_LOG_TO_FILE` | 实验参数：是否把 `console.*` 追加写入日志文件 | `false` |
-| `EXPERIMENT_LOG_FILE` | 实验参数：日志文件路径 | `~/.feishu-cursor-bridge/logs/bridge.log` |
+| `EXPERIMENT_LOG_FILE` | 实验参数：日志文件路径 | `~/.feishu-cursor-bridge[/<实例名>]/logs/bridge.log` |
+
+`BRIDGE_INSTANCE_NAME` 是同一台机器上运行多套 bot 的推荐方式。例如两份 checkout 分别设置 `BRIDGE_INSTANCE_NAME=bot-a` 与 `BRIDGE_INSTANCE_NAME=bot-b` 后，`bash service.sh install` 在 macOS 会生成 `com.feishu-cursor-bridge.bot-a` / `com.feishu-cursor-bridge.bot-b`，在 Linux 会生成 `feishu-cursor-bridge.bot-a.service` / `feishu-cursor-bridge.bot-b.service`。显式配置的路径变量仍会覆盖这些按实例隔离的默认路径。
 
 代理相关说明：
 `wss_proxy` / `ws_proxy` > `https_proxy` / `http_proxy` / `all_proxy`。仅在环境变量存在时才启用代理，否则默认直连。

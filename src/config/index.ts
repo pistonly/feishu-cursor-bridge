@@ -141,6 +141,26 @@ export interface Config {
 }
 
 const LOG_LEVELS = new Set(["debug", "info", "warn", "error"]);
+const BRIDGE_INSTANCE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+export function normalizeBridgeInstanceName(
+  raw: string | undefined,
+): string | undefined {
+  const trimmed = raw?.trim();
+  if (!trimmed) return undefined;
+  if (!BRIDGE_INSTANCE_NAME_PATTERN.test(trimmed)) {
+    throw new Error(
+      "Invalid BRIDGE_INSTANCE_NAME. Use 1-64 characters: letters, numbers, dot, underscore, or hyphen; first character must be a letter or number.",
+    );
+  }
+  return trimmed;
+}
+
+function bridgeStateDir(homeDir: string, instanceName: string | undefined): string {
+  return instanceName
+    ? path.join(homeDir, ".feishu-cursor-bridge", instanceName)
+    : path.join(homeDir, ".feishu-cursor-bridge");
+}
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -437,6 +457,10 @@ export function loadConfig(): Config {
     );
   }
 
+  const instanceName = normalizeBridgeInstanceName(
+    process.env["BRIDGE_INSTANCE_NAME"],
+  );
+  const defaultStateDir = bridgeStateDir(os.homedir(), instanceName);
   const backend = parseAcpBackend(process.env["ACP_BACKEND"]);
   const enabledBackends = parseEnabledAcpBackends(
     process.env["ACP_ENABLED_BACKENDS"],
@@ -470,11 +494,7 @@ export function loadConfig(): Config {
 
   const workspaceRoot = allowedWorkspaceRoots[0]!;
 
-  const defaultAdapterSession = path.join(
-    os.homedir(),
-    ".feishu-cursor-bridge",
-    "cursor-acp-sessions",
-  );
+  const defaultAdapterSession = path.join(defaultStateDir, "cursor-acp-sessions");
   const adapterSessionDir = path.resolve(
     expandHome(
         process.env["CURSOR_LEGACY_SESSION_DIR"]?.trim() ||
@@ -483,22 +503,14 @@ export function loadConfig(): Config {
     ),
   );
 
-  const defaultStore = path.join(
-    os.homedir(),
-    ".feishu-cursor-bridge",
-    ".feishu-bridge-sessions.json",
-  );
+  const defaultStore = path.join(defaultStateDir, ".feishu-bridge-sessions.json");
   const sessionStorePath = path.resolve(
     expandHome(
       process.env["BRIDGE_SESSION_STORE"]?.trim() || defaultStore,
     ),
   );
 
-  const defaultMaintenanceState = path.join(
-    os.homedir(),
-    ".feishu-cursor-bridge",
-    "maintenance-state.json",
-  );
+  const defaultMaintenanceState = path.join(defaultStateDir, "maintenance-state.json");
   const maintenanceStatePath = path.resolve(
     expandHome(
       process.env["BRIDGE_MAINTENANCE_STATE_FILE"]?.trim() || defaultMaintenanceState,
@@ -506,11 +518,7 @@ export function loadConfig(): Config {
   );
 
 
-  const defaultSingleInstanceLock = path.join(
-    os.homedir(),
-    ".feishu-cursor-bridge",
-    "bridge.lock",
-  );
+  const defaultSingleInstanceLock = path.join(defaultStateDir, "bridge.lock");
   const singleInstanceLockPath = path.resolve(
     expandHome(
       process.env["BRIDGE_SINGLE_INSTANCE_LOCK"]?.trim() ||
@@ -526,12 +534,7 @@ export function loadConfig(): Config {
     ) ||
     !!process.env["INVOCATION_ID"]?.trim();
 
-  const defaultExperimentalLogFile = path.join(
-    os.homedir(),
-    ".feishu-cursor-bridge",
-    "logs",
-    "bridge.log",
-  );
+  const defaultExperimentalLogFile = path.join(defaultStateDir, "logs", "bridge.log");
   const experimentalLogToFile =
     (process.env["EXPERIMENT_LOG_TO_FILE"] ?? "false").toLowerCase() === "true";
   const experimentalLogFilePath = path.resolve(
@@ -549,11 +552,7 @@ export function loadConfig(): Config {
     (process.env["BRIDGE_ENABLE_BANG_COMMAND"] ?? "true").toLowerCase() ===
     "true";
 
-  const defaultPresetsFile = path.join(
-    os.homedir(),
-    ".feishu-cursor-bridge",
-    "workspace-presets.json",
-  );
+  const defaultPresetsFile = path.join(defaultStateDir, "workspace-presets.json");
   const workspacePresetsPath = path.resolve(
     expandHome(
       process.env["BRIDGE_WORK_PRESETS_FILE"]?.trim() ||
@@ -598,11 +597,7 @@ export function loadConfig(): Config {
     DEFAULT_CARD_SPLIT_TOOL_THRESHOLD,
   );
 
-  const defaultUpgradeResultPath = path.join(
-    os.homedir(),
-    ".feishu-cursor-bridge",
-    "upgrade-result.json",
-  );
+  const defaultUpgradeResultPath = path.join(defaultStateDir, "upgrade-result.json");
   const upgradeResultPath = path.resolve(
     expandHome(
       process.env["BRIDGE_UPGRADE_RESULT_FILE"]?.trim() || defaultUpgradeResultPath,

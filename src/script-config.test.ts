@@ -15,11 +15,43 @@ test("loadScriptConfig 解析 quoted dotenv 值与默认路径", () => {
   });
 
   assert.equal(config.singleInstanceLockPath, "/home/tester/.feishu-cursor-bridge/bridge.lock");
+  assert.equal(config.instanceName, undefined);
+  assert.equal(config.launchdLabel, "com.feishu-cursor-bridge");
+  assert.equal(config.systemdUnitName, "feishu-cursor-bridge.service");
+  assert.equal(config.serviceLogPath, "/tmp/feishu-cursor-bridge.log");
   assert.equal(config.bridgeDevLogPath, "/home/tester/.feishu-cursor-bridge/logs/bridge-dev.log");
   assert.equal(config.experimentalLogToFile, false);
   assert.equal(config.experimentalLogFilePath, "/home/tester/.feishu-cursor-bridge/logs/bridge.log");
   assert.equal(config.condaEnvName, "base");
   assert.equal(config.upgradeRemote, "origin");
+});
+
+test("loadScriptConfig 支持实例名隔离默认路径与服务名", () => {
+  const config = loadScriptConfig({
+    repoRoot: "/repo",
+    homeDir: "/Users/me",
+    dotenvPath: "/missing/.env",
+    env: {
+      BRIDGE_INSTANCE_NAME: "bot-a",
+    },
+  });
+
+  assert.equal(config.instanceName, "bot-a");
+  assert.equal(config.launchdLabel, "com.feishu-cursor-bridge.bot-a");
+  assert.equal(config.systemdUnitName, "feishu-cursor-bridge.bot-a.service");
+  assert.equal(config.serviceLogPath, "/tmp/feishu-cursor-bridge.bot-a.log");
+  assert.equal(
+    config.singleInstanceLockPath,
+    "/Users/me/.feishu-cursor-bridge/bot-a/bridge.lock",
+  );
+  assert.equal(
+    config.bridgeDevLogPath,
+    "/Users/me/.feishu-cursor-bridge/bot-a/logs/bridge-dev.log",
+  );
+  assert.equal(
+    config.experimentalLogFilePath,
+    "/Users/me/.feishu-cursor-bridge/bot-a/logs/bridge.log",
+  );
 });
 
 test("loadScriptConfig 优先使用环境变量并按 app 语义 resolve 路径", () => {

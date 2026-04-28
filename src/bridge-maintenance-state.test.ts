@@ -4,7 +4,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { BridgeMaintenanceStateStore } from "./bridge/maintenance-state.js";
-import { UpgradeResultStore, truncateOutputTail } from "./bridge/upgrade-result-store.js";
+import {
+  appendOutputTail,
+  UpgradeResultStore,
+  truncateOutputTail,
+} from "./bridge/upgrade-result-store.js";
 
 test("BridgeMaintenanceStateStore 会把 pending restart 在下次启动时转为成功记录", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "bridge-maint-"));
@@ -69,4 +73,12 @@ test("truncateOutputTail 会仅保留输出尾部", () => {
   assert.equal(truncateOutputTail("  \n  "), undefined);
   assert.equal(truncateOutputTail("ok"), "ok");
   assert.equal(truncateOutputTail("x".repeat(5000)), "x".repeat(4000));
+});
+
+test("appendOutputTail 会在增量追加时仅保留最近输出", () => {
+  let output = appendOutputTail(undefined, "a".repeat(2500));
+  output = appendOutputTail(output, "b".repeat(2500));
+  output = appendOutputTail(output, "");
+
+  assert.equal(output, `${"a".repeat(1500)}${"b".repeat(2500)}`);
 });

@@ -37,3 +37,63 @@ test("loadConfig 默认开启 bridge bang command", async () => {
     await fs.rm(tmpRoot, { recursive: true, force: true });
   }
 });
+
+test("loadConfig 使用 BRIDGE_INSTANCE_NAME 隔离默认状态路径", async () => {
+  const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "bridge-config-"));
+  const keys = [
+    "FEISHU_APP_ID",
+    "FEISHU_APP_SECRET",
+    "BRIDGE_WORK_ALLOWLIST",
+    "BRIDGE_INSTANCE_NAME",
+    "BRIDGE_SESSION_STORE",
+    "BRIDGE_MAINTENANCE_STATE_FILE",
+    "BRIDGE_SINGLE_INSTANCE_LOCK",
+    "BRIDGE_WORK_PRESETS_FILE",
+    "BRIDGE_UPGRADE_RESULT_FILE",
+    "EXPERIMENT_LOG_FILE",
+    "CURSOR_LEGACY_SESSION_DIR",
+  ];
+  const original = new Map(keys.map((key) => [key, process.env[key]]));
+
+  process.env["FEISHU_APP_ID"] = "app-id";
+  process.env["FEISHU_APP_SECRET"] = "app-secret";
+  process.env["BRIDGE_WORK_ALLOWLIST"] = tmpRoot;
+  process.env["BRIDGE_INSTANCE_NAME"] = "bot-a";
+  for (const key of keys.slice(4)) {
+    delete process.env[key];
+  }
+
+  try {
+    const config = loadConfig();
+    const stateDir = path.join(os.homedir(), ".feishu-cursor-bridge", "bot-a");
+    assert.equal(
+      config.bridge.sessionStorePath,
+      path.join(stateDir, ".feishu-bridge-sessions.json"),
+    );
+    assert.equal(
+      config.bridge.maintenanceStatePath,
+      path.join(stateDir, "maintenance-state.json"),
+    );
+    assert.equal(config.bridge.singleInstanceLockPath, path.join(stateDir, "bridge.lock"));
+    assert.equal(
+      config.bridge.workspacePresetsPath,
+      path.join(stateDir, "workspace-presets.json"),
+    );
+    assert.equal(
+      config.bridge.upgradeResultPath,
+      path.join(stateDir, "upgrade-result.json"),
+    );
+    assert.equal(
+      config.bridge.experimentalLogFilePath,
+      path.join(stateDir, "logs", "bridge.log"),
+    );
+    assert.equal(config.acp.adapterSessionDir, path.join(stateDir, "cursor-acp-sessions"));
+  } finally {
+    for (const key of keys) {
+      const value = original.get(key);
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    await fs.rm(tmpRoot, { recursive: true, force: true });
+  }
+});

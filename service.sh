@@ -50,6 +50,26 @@ get_script_config() {
     (cd "$BOT_DIR" && "${SCRIPT_CONFIG_CMD[@]}" "$key")
 }
 
+SERVICE_IDENTITY_READY=0
+
+init_service_identity() {
+    if [[ "$SERVICE_IDENTITY_READY" -eq 1 ]]; then
+        return
+    fi
+
+    local launchd_label systemd_unit service_log
+    launchd_label="$(get_script_config launchdLabel 2>/dev/null || true)"
+    systemd_unit="$(get_script_config systemdUnitName 2>/dev/null || true)"
+    service_log="$(get_script_config serviceLogPath 2>/dev/null || true)"
+
+    [[ -n "$launchd_label" ]] && LABEL_LAUNCHD="$launchd_label"
+    [[ -n "$systemd_unit" ]] && UNIT_NAME="$systemd_unit"
+    [[ -n "$service_log" ]] && LOG_FILE_MACOS="$service_log"
+    PLIST="$HOME/Library/LaunchAgents/$LABEL_LAUNCHD.plist"
+    UNIT_FILE="$UNIT_DIR/$UNIT_NAME"
+    SERVICE_IDENTITY_READY=1
+}
+
 service_base_path_linux() {
     echo "$(dirname "$NODE_BIN"):$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
 }
@@ -107,6 +127,16 @@ print_app_log_config() {
         echo "  🧪 应用日志(.env): 已启用 -> $app_log_path"
     else
         echo "  🧪 应用日志(.env): 未启用（EXPERIMENT_LOG_TO_FILE=${enabled_raw:-false}；启用后路径: $app_log_path）"
+    fi
+}
+
+print_instance_info() {
+    local instance
+    instance="$(get_script_config instanceName 2>/dev/null || true)"
+    if [[ -n "$instance" ]]; then
+        echo "  🧩 实例名: $instance"
+    else
+        echo "  🧩 实例名: default"
     fi
 }
 
@@ -365,6 +395,7 @@ require_systemctl() {
 
 cmd_install_darwin() {
     echo "📦 安装 launchd 自启动（macOS）..."
+    print_instance_info
     generate_plist
     launchctl enable "$(launchd_target)" 2>/dev/null || true
     if launchd_is_loaded; then
@@ -381,6 +412,7 @@ cmd_install_darwin() {
 cmd_install_linux() {
     require_systemctl
     echo "📦 安装 systemd --user 自启动（Linux）..."
+    print_instance_info
     generate_systemd_unit
     systemctl --user daemon-reload
     systemctl --user enable "$UNIT_NAME"
@@ -477,6 +509,7 @@ cmd_status_darwin() {
         return
     fi
     echo "  📋 标签: $LABEL_LAUNCHD"
+    print_instance_info
     echo "  📁 工作目录: $BOT_DIR"
     echo "  📝 服务日志: $LOG_FILE_MACOS"
     print_app_log_config
@@ -509,6 +542,7 @@ cmd_status_linux() {
         return
     fi
     systemctl --user --no-pager -l status "$UNIT_NAME" || true
+    print_instance_info
     echo "  📁 工作目录: $BOT_DIR"
     echo "  📝 服务日志: journalctl --user -u $UNIT_NAME -n 50 --no-pager"
     print_app_log_config
@@ -538,6 +572,7 @@ run_npm_install_and_build() {
 
 cmd_install() {
     run_npm_install_and_build
+    init_service_identity
     case "$UNAME_S" in
         Darwin) cmd_install_darwin ;;
         Linux)  cmd_install_linux ;;
@@ -552,6 +587,7 @@ cmd_install() {
 cmd_update() {
     echo "🔄 更新服务（npm install + build + refresh service + restart）..."
     run_npm_install_and_build
+    init_service_identity
     case "$UNAME_S" in
         Darwin)
             generate_plist
@@ -571,6 +607,7 @@ cmd_update() {
 }
 
 cmd_uninstall() {
+    init_service_identity
     case "$UNAME_S" in
         Darwin) cmd_uninstall_darwin ;;
         Linux)  cmd_uninstall_linux ;;
@@ -582,6 +619,7 @@ cmd_uninstall() {
 }
 
 cmd_start() {
+    init_service_identity
     case "$UNAME_S" in
         Darwin) cmd_start_darwin ;;
         Linux)  cmd_start_linux ;;
@@ -590,6 +628,7 @@ cmd_start() {
 }
 
 cmd_stop() {
+    init_service_identity
     case "$UNAME_S" in
         Darwin) cmd_stop_darwin ;;
         Linux)  cmd_stop_linux ;;
@@ -599,6 +638,7 @@ cmd_stop() {
 
 cmd_restart() {
     echo "🔄 重启服务..."
+    init_service_identity
     case "$UNAME_S" in
         Darwin)
             cmd_stop_darwin
@@ -622,6 +662,7 @@ cmd_restart() {
 }
 
 cmd_status() {
+    init_service_identity
     case "$UNAME_S" in
         Darwin) cmd_status_darwin ;;
         Linux)  cmd_status_linux ;;
@@ -630,6 +671,7 @@ cmd_status() {
 }
 
 cmd_logs() {
+    init_service_identity
     case "$UNAME_S" in
         Darwin) cmd_logs_darwin ;;
         Linux)  cmd_logs_linux ;;
@@ -650,6 +692,10 @@ case "${1:-}" in
     *)
         echo "feishu-cursor-bridge 服务管理"
         echo "  macOS → launchd    Linux（Ubuntu 等 / systemd）→ systemctl --user"
+        init_service_identity
+        print_instance_info
+        echo "  launchd: $LABEL_LAUNCHD"
+        echo "  systemd: $UNIT_NAME"
         echo ""
         echo "用法: bash service.sh <命令>"
         echo ""

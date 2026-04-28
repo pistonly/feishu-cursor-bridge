@@ -2,7 +2,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { parse as parseDotenv } from "dotenv";
-import { expandHomeWith } from "./config/index.js";
+import {
+  expandHomeWith,
+  normalizeBridgeInstanceName,
+} from "./config/index.js";
 
 export interface ScriptConfigOptions {
   env?: NodeJS.ProcessEnv;
@@ -14,6 +17,10 @@ export interface ScriptConfigOptions {
 export interface ScriptConfigView {
   repoRoot: string;
   dotenvPath: string;
+  instanceName?: string;
+  launchdLabel: string;
+  systemdUnitName: string;
+  serviceLogPath: string;
   singleInstanceLockPath: string;
   bridgeDevLogPath: string;
   experimentalLogToFile: boolean;
@@ -69,6 +76,12 @@ function resolveOptionalPathLikeApp(
   return resolvePathLikeApp(raw, repoRoot, homeDir);
 }
 
+function bridgeStateDir(homeDir: string, instanceName: string | undefined): string {
+  return instanceName
+    ? path.join(homeDir, ".feishu-cursor-bridge", instanceName)
+    : path.join(homeDir, ".feishu-cursor-bridge");
+}
+
 function parseBooleanLike(raw: string | undefined, fallback = false): boolean {
   if (!raw?.trim()) return fallback;
   return raw.trim().toLowerCase() === "true";
@@ -120,18 +133,31 @@ export function loadScriptConfig(
   const dotenvPath = path.resolve(options.dotenvPath ?? path.join(repoRoot, ".env"));
   const env = options.env ?? process.env;
   const dotenvMap = readDotenvMap(dotenvPath);
+  const instanceName = normalizeBridgeInstanceName(
+    readEnvValue("BRIDGE_INSTANCE_NAME", env, dotenvMap),
+  );
+  const defaultStateDir = bridgeStateDir(homeDir, instanceName);
+  const launchdLabel = instanceName
+    ? `com.feishu-cursor-bridge.${instanceName}`
+    : "com.feishu-cursor-bridge";
+  const systemdUnitName = instanceName
+    ? `feishu-cursor-bridge.${instanceName}.service`
+    : "feishu-cursor-bridge.service";
+  const serviceLogPath = instanceName
+    ? `/tmp/feishu-cursor-bridge.${instanceName}.log`
+    : "/tmp/feishu-cursor-bridge.log";
 
   const singleInstanceLockPath = resolveOptionalPathLikeApp(
     readEnvValue("BRIDGE_SINGLE_INSTANCE_LOCK", env, dotenvMap),
     repoRoot,
     homeDir,
-  ) ?? path.join(homeDir, ".feishu-cursor-bridge", "bridge.lock");
+  ) ?? path.join(defaultStateDir, "bridge.lock");
 
   const bridgeDevLogPath = resolveOptionalPathLikeApp(
     env["BRIDGE_DEV_LOG_FILE"]?.trim(),
     repoRoot,
     homeDir,
-  ) ?? path.join(homeDir, ".feishu-cursor-bridge", "logs", "bridge-dev.log");
+  ) ?? path.join(defaultStateDir, "logs", "bridge-dev.log");
 
   const experimentalLogToFile = parseBooleanLike(
     readEnvValue("EXPERIMENT_LOG_TO_FILE", env, dotenvMap),
@@ -141,7 +167,7 @@ export function loadScriptConfig(
     readEnvValue("EXPERIMENT_LOG_FILE", env, dotenvMap),
     repoRoot,
     homeDir,
-  ) ?? path.join(homeDir, ".feishu-cursor-bridge", "logs", "bridge.log");
+  ) ?? path.join(defaultStateDir, "logs", "bridge.log");
 
   const condaEnvName =
     readEnvValue("CONDA_ENV_NAME", env, dotenvMap)?.trim() || "base";
@@ -156,6 +182,10 @@ export function loadScriptConfig(
   return {
     repoRoot,
     dotenvPath,
+    ...(instanceName ? { instanceName } : {}),
+    launchdLabel,
+    systemdUnitName,
+    serviceLogPath,
     singleInstanceLockPath,
     bridgeDevLogPath,
     experimentalLogToFile,
