@@ -47,6 +47,15 @@ export const BACKEND_METADATA = [
     configAliases: ["codex"],
     documentedFlagValues: ["codex", "cx"],
   },
+  {
+    id: "gemini",
+    label: "Gemini CLI（gemini --acp）",
+    description: "Gemini CLI ACP 后端",
+    preferredShortcut: "gm",
+    commandAliases: ["gemini", "gm"],
+    configAliases: ["gemini", "gm"],
+    documentedFlagValues: ["gemini", "gm"],
+  },
 ] as const satisfies readonly BackendMetadata[];
 
 export const ACP_BACKENDS = BACKEND_METADATA.map((metadata) => metadata.id) as readonly AcpBackend[];
@@ -83,6 +92,8 @@ const DOCUMENTED_BACKEND_FLAG_VALUES = [
   "codex",
   "cc",
   "cx",
+  "gemini",
+  "gm",
 ] as const;
 
 export const COMMAND_BACKEND_ALIAS_MAP = buildAliasMap("commandAliases");
@@ -152,7 +163,7 @@ export function buildBackendCommandSyntaxDocSnippet(): string {
 }
 
 export function buildBackendAliasGuideSnippet(): string {
-  return `- backend 值支持完整名称，也支持常用简写：\`${getBackendShortcut("cursor-official")}\` = \`cursor-official\`、\`${getBackendShortcut("claude")}\` = \`claude\`、\`${getBackendShortcut("codex")}\` = \`codex\`；\`${getBackendShortcut("cursor-legacy")}\` 继续使用全写，${formatCompatibleBackendAliases()} 仍兼容。`;
+  return `- backend 值支持完整名称，也支持常用简写：\`${getBackendShortcut("cursor-official")}\` = \`cursor-official\`、\`${getBackendShortcut("claude")}\` = \`claude\`、\`${getBackendShortcut("codex")}\` = \`codex\`、\`${getBackendShortcut("gemini")}\` = \`gemini\`；\`${getBackendShortcut("cursor-legacy")}\` 继续使用全写，${formatCompatibleBackendAliases()} 仍兼容。`;
 }
 
 export function buildReadmeBackendSwitchSnippet(language: "en" | "zh"): string {

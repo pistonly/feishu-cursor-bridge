@@ -118,10 +118,10 @@
 
 <!-- backend-command-syntax:start -->
 ```text
-/new <路径> --backend <cursor-official|cursor-legacy|claude|codex>
-/new <序号> --backend <cursor-official|cursor-legacy|claude|codex>
-/new <路径> -b <official|cur|legacy|claude|codex|cc|cx>
-/new <序号> -b <official|cur|legacy|claude|codex|cc|cx>
+/new <路径> --backend <cursor-official|cursor-legacy|claude|codex|gemini>
+/new <序号> --backend <cursor-official|cursor-legacy|claude|codex|gemini>
+/new <路径> -b <official|cur|legacy|claude|codex|cc|cx|gemini|gm>
+/new <序号> -b <official|cur|legacy|claude|codex|cc|cx|gemini|gm>
 ```
 <!-- backend-command-syntax:end -->
 
@@ -129,7 +129,7 @@
 
 - `-b` 是 `--backend` 的简写。
 <!-- backend-alias-guide:start -->
-- backend 值支持完整名称，也支持常用简写：`cur` = `cursor-official`、`cc` = `claude`、`cx` = `codex`；`legacy` 继续使用全写，`official` 仍兼容。
+- backend 值支持完整名称，也支持常用简写：`cur` = `cursor-official`、`cc` = `claude`、`cx` = `codex`、`gm` = `gemini`；`legacy` 继续使用全写，`official` 仍兼容。
 <!-- backend-alias-guide:end -->
 - `--backend` 仅对**真正创建 session** 的 `/new <路径>`、`/new <序号>` 生效。
 - `/new`、`/new list`、`/new add-list`、`/new remove-list` 不创建 session，因此不使用 `--backend`。
@@ -340,12 +340,12 @@
 /mode <模式ID>
 ```
 
-**作用**：`cursor-official` / `cursor-legacy` / `claude` / `codex` backend 下，查看或切换**当前活跃 session** 的 ACP mode，**不会**把整条消息再发给大模型。
+**作用**：`cursor-official` / `cursor-legacy` / `claude` / `codex` / `gemini` backend 下，查看或切换**当前活跃 session** 的 ACP mode，**不会**把整条消息再发给大模型。
 
 backend 差异：
 
-- `cursor-official` / `cursor-legacy` / `claude` / `codex` 不带参数时：返回当前 session 已知的可用模式列表与当前模式。
-- `cursor-official` / `cursor-legacy` / `claude` / `codex` 带参数时：调用 ACP `session/set_mode` 切换当前 session 模式。
+- `cursor-official` / `cursor-legacy` / `claude` / `codex` / `gemini` 不带参数时：返回当前 session 已知的可用模式列表与当前模式。
+- `cursor-official` / `cursor-legacy` / `claude` / `codex` / `gemini` 带参数时：调用 ACP `session/set_mode` 切换当前 session 模式。
 
 **示例**：
 
@@ -470,7 +470,7 @@ backend 差异：
 - 当前活跃 session 的 CLI resume ID（若该 backend 暴露或缓存了该字段）
 - 若当前 backend 为 `cursor-official`，默认显示当前 Official ACP `sessionId`
 - 若当前 backend 为 `claude`，默认显示当前 Claude 恢复会话 id（新建 session 时会回退为当前 ACP `sessionId`）
-- 若当前 backend 为 `codex`，额外显示当前 ACP `sessionId`
+- 若当前 backend 为 `codex` 或 `gemini`，默认显示当前 ACP `sessionId`
 
 **增强信息**：当服务环境 **`BRIDGE_DEBUG=true`** 时，同一条回复中会追加调试信息，包括：
 
@@ -493,7 +493,7 @@ backend 差异：
 /model <序号>
 ```
 
-**作用**：`cursor-legacy` / `cursor-official` / `claude` / `codex` backend 下，bridge 直接调用 ACP `session/set_model` 切换**当前活跃 session** 的模型，**不会**把整条消息再发给大模型（避免仅出现「解释 /model」类回复）。
+**作用**：`cursor-legacy` / `cursor-official` / `claude` / `codex` / `gemini` backend 下，bridge 直接调用 ACP `session/set_model` 切换**当前活跃 session** 的模型，**不会**把整条消息再发给大模型（避免仅出现「解释 /model」类回复）。
 
 **示例**：
 
@@ -508,11 +508,11 @@ backend 差异：
 - 默认 `cursor-official` backend 下，以**当前 ACP session 返回的 `availableModels`** 为准，而不是 `cursor-agent models` 的 alias 列表。
 - 机器人返回列表时，反引号中的值就是可直接提交给 ACP `session/set_model` 的**精确 selector**；若带 `[]` 或其它参数后缀，必须完整带上。
 - 只要 `/model` 由 bridge 接管，列表都会带 `【n】` 序号，可直接使用 `/model <序号>`；桥接会按当前 session 的可用模型列表做 1-based 解析。
-- `cursor-legacy` / `cursor-official` / `claude` / `codex` backend 下，若当前 session 尚未拿到模型状态，机器人会回退到基础用法提示；此时请先让该 slot 建立/恢复 session 并完成一轮交互，再使用模型 id、selector 或序号。
+- `cursor-legacy` / `cursor-official` / `claude` / `codex` / `gemini` backend 下，若当前 session 尚未拿到模型状态，机器人会回退到基础用法提示；此时请先让该 slot 建立/恢复 session 并完成一轮交互，再使用模型 id、selector 或序号。
 
 未带参数时：
 
-- `cursor-legacy` / `cursor-official` / `claude` / `codex` backend 下，若当前 session 已拿到模型状态，机器人会直接返回可用模型列表与当前模型；否则回退到基础用法提示。
+- `cursor-legacy` / `cursor-official` / `claude` / `codex` / `gemini` backend 下，若当前 session 已拿到模型状态，机器人会直接返回可用模型列表与当前模型；否则回退到基础用法提示。
 
 ---
 

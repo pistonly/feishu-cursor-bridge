@@ -231,8 +231,17 @@ export class AcpRuntimeRegistry {
     return [...this.config.acp.enabledBackends];
   }
 
+  private reconcileEntryStateFromRuntime(entry: RuntimeEntry): void {
+    if (!entry.runtime.initializeResult) return;
+    entry.state = "ready";
+    entry.readyAt ??= Date.now();
+    delete entry.errorAt;
+    delete entry.errorMessage;
+  }
+
   getRuntimeStatus(backend: AcpBackend): AcpRuntimeStatus {
     const entry = this.getEntry(backend);
+    this.reconcileEntryStateFromRuntime(entry);
     return {
       backend,
       state: entry.state,

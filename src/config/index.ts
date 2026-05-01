@@ -62,6 +62,9 @@ export interface Config {
     /** Codex ACP 子进程命令 */
     codexSpawnCommand: string;
     codexSpawnArgs: string[];
+    /** Gemini CLI ACP 子进程命令 */
+    geminiSpawnCommand?: string;
+    geminiSpawnArgs?: string[];
     /**
      * ACP 子进程 spawn 使用的 `cwd`（取 `CURSOR_WORK_ALLOWLIST` 中第一项）；
      * `session/new` 仍传入各 session 自己的工作区路径。
@@ -370,6 +373,33 @@ function resolveCodexAgentAcpSpawn(): { command: string; args: string[] } {
   };
 }
 
+function resolveGeminiCliAcpSpawn(): { command: string; args: string[] } {
+  const envRaw = process.env["GEMINI_CLI_ACP_COMMAND"]?.trim();
+  const extra = parseExtraArgs(process.env["GEMINI_CLI_ACP_EXTRA_ARGS"]);
+  const baseTokens = envRaw ? parseShellLikeArgs(envRaw) : ["gemini"];
+  if (baseTokens.length === 0) {
+    throw new Error("GEMINI_CLI_ACP_COMMAND 解析为空");
+  }
+  const args = [...baseTokens.slice(1)];
+  if (!args.includes("--acp")) {
+    args.push("--acp");
+  }
+  if (logLevelIsDebug()) {
+    if (!args.includes("--debug")) {
+      args.push("--debug");
+    }
+  }
+  args.push(...extra);
+  return {
+    command: baseTokens[0]!,
+    args,
+  };
+}
+
+function logLevelIsDebug(): boolean {
+  return (process.env["LOG_LEVEL"] ?? "info").trim().toLowerCase() === "debug";
+}
+
 const DEFAULT_SESSION_IDLE_TIMEOUT_MS = 7 * 24 * 60 * 60_000;
 
 const DEFAULT_MAX_SESSIONS_PER_USER = 10;
@@ -640,6 +670,7 @@ export function loadConfig(): Config {
 
   const claudeSpawn = resolveClaudeAgentAcpSpawn();
   const codexSpawn = resolveCodexAgentAcpSpawn();
+  const geminiSpawn = resolveGeminiCliAcpSpawn();
 
   return {
     feishu: {
@@ -661,6 +692,8 @@ export function loadConfig(): Config {
       claudeSpawnArgs: claudeSpawn.args,
       codexSpawnCommand: codexSpawn.command,
       codexSpawnArgs: codexSpawn.args,
+      geminiSpawnCommand: geminiSpawn.command,
+      geminiSpawnArgs: geminiSpawn.args,
       workspaceRoot,
       allowedWorkspaceRoots,
       adapterSessionDir,

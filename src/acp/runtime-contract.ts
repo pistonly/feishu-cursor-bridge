@@ -83,6 +83,7 @@ export interface BridgeAcpRuntime {
 
 export interface AcpRuntimeResolver {
   getRuntime(backend: AcpBackend): BridgeAcpRuntime;
+  getEnabledBackends?(): AcpBackend[];
 }
 
 export function isCursorLegacyBackend(backend: AcpBackend): boolean {

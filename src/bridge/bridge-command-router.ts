@@ -230,7 +230,7 @@ function buildResumeUsageLines(): string[] {
     "• `/resume <序号>` — 恢复到对应历史 session",
     "• `/resume <sessionId>` — 按历史列表中的 sessionId 恢复",
     "• `/resume -b <backend> <id>` — 直接按 backend 指定的恢复 ID 绑定当前槽位",
-    "• `<id>` 含义：`cursor-legacy` = CLI resume ID，`claude` = Claude resume session，`codex` / `cursor-official` = ACP sessionId",
+    "• `<id>` 含义：`cursor-legacy` = CLI resume ID，`claude` = Claude resume session，`codex` / `cursor-official` / `gemini` = ACP sessionId",
   ];
 }
 
@@ -252,6 +252,7 @@ function buildResumeReplayMessage(headerLines: string[], replayMd: string): stri
 function formatDirectResumeInputLabel(backend: AcpBackend): string {
   if (backend === "cursor-legacy") return "CLI resume ID";
   if (backend === "claude") return "Claude resume session";
+  if (backend === "gemini") return "Gemini sessionId";
   return "sessionId";
 }
 
@@ -1117,6 +1118,16 @@ async function handleNewCommand(
   }
 
   const requestedBackend: AcpBackend = command.backend ?? ctx.config.acp.backend;
+  if (!ctx.config.acp.enabledBackends.includes(requestedBackend)) {
+    await ctx.feishuBot.sendText(
+      msg.chatId,
+      `❌ backend \`${requestedBackend}\` 当前未启用。已启用：${ctx.config.acp.enabledBackends.map((item) => `\`${item}\``).join(" / ")}。`,
+      msg.messageId,
+      ctx.threadReplyOpts(msg),
+    );
+    return;
+  }
+
   const result = await ctx.sessionManager.createNewSlot(
     msg.chatId,
     msg.senderId,
@@ -1304,7 +1315,10 @@ async function handleModelCommand(
     const confirmedModelId =
       runtime.getSessionModelState(activeSessionForModel.sessionId)
         ?.currentModelId ?? resolved.modelId;
-    if (activeSessionForModel.backend === "codex") {
+    if (
+      activeSessionForModel.backend === "codex" ||
+      activeSessionForModel.backend === "gemini"
+    ) {
       ctx.sessionManager.setActiveSessionPreferredModel(
         msg.chatId,
         msg.senderId,

@@ -5,6 +5,10 @@ import type {
   BridgeAcpRuntime,
   SessionRecovery,
 } from "../acp/runtime-contract.js";
+import {
+  isCodexBackend,
+  isGeminiBackend,
+} from "../acp/runtime-contract.js";
 import type { GroupSessionScope } from "../config/index.js";
 import type {
   PersistedSessionTurnRecord,
@@ -977,6 +981,11 @@ export class SessionManager {
     return this.resolver.getRuntime(backend);
   }
 
+  private backendIsEnabled(backend: AcpBackend): boolean {
+    const enabledBackends = this.resolver.getEnabledBackends?.();
+    return !enabledBackends || enabledBackends.includes(backend);
+  }
+
   private runtimeForSlot(slot: SessionSlot): BridgeAcpRuntime {
     return this.runtimeForBackend(slot.session.backend);
   }
@@ -1232,7 +1241,10 @@ export class SessionManager {
     noticeKey?: string,
   ): Promise<void> {
     const preferredModelId = slot.session.preferredModelId?.trim();
-    if (!preferredModelId || slot.session.backend !== "codex") {
+    if (
+      !preferredModelId ||
+      (!isCodexBackend(slot.session.backend) && !isGeminiBackend(slot.session.backend))
+    ) {
       return;
     }
     const runtime = this.runtimeForSlot(slot);
@@ -1358,12 +1370,18 @@ export class SessionManager {
     const restoredUserId = this.usesSharedGroupSessions(chatType)
       ? persisted.userId
       : userId;
-    const liveSlots = persisted.slots.filter(
+    const nonExpiredSlots = persisted.slots.filter(
       (s) => !this.isExpiredAt(s.lastActiveAt, now),
     );
-    if (liveSlots.length === 0) {
+    if (nonExpiredSlots.length === 0) {
       this.store.delete(key);
       void this.store.flush().catch(() => {});
+      return undefined;
+    }
+    const liveSlots = nonExpiredSlots.filter((s) =>
+      this.backendIsEnabled(s.backend ?? this.defaultBackend),
+    );
+    if (liveSlots.length === 0) {
       return undefined;
     }
 

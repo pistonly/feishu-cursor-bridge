@@ -23,6 +23,13 @@ test("loadConfig 默认开启 bridge bang command", async () => {
     const config = loadConfig();
     assert.equal(config.bridge.enableBangCommand, true);
     assert.equal(config.bridge.sessionHistoryEnabled, true);
+    assert.equal(config.acp.geminiSpawnCommand, "gemini");
+    assert.equal(config.acp.geminiSpawnArgs?.[0], "--acp");
+    assert.equal(config.acp.geminiSpawnArgs?.includes("--acp"), true);
+    assert.equal(
+      config.acp.geminiSpawnArgs?.includes("--debug"),
+      config.logLevel === "debug",
+    );
   } finally {
     if (originalAppId === undefined) delete process.env["FEISHU_APP_ID"];
     else process.env["FEISHU_APP_ID"] = originalAppId;

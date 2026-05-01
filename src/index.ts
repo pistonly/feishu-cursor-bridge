@@ -75,6 +75,12 @@ async function main() {
       `[main] Codex ACP command: ${config.acp.codexSpawnCommand} ${config.acp.codexSpawnArgs.join(" ")}`.trim(),
     );
   }
+  if (config.acp.enabledBackends.includes("gemini")) {
+    const geminiArgs = config.acp.geminiSpawnArgs ?? ["--acp"];
+    console.log(
+      `[main] Gemini CLI ACP command: ${config.acp.geminiSpawnCommand ?? "gemini"} ${geminiArgs.join(" ")}`.trim(),
+    );
+  }
   console.log(
     `[main] BRIDGE_WORK_ALLOWLIST (${config.acp.allowedWorkspaceRoots.length}): ${config.acp.allowedWorkspaceRoots.join(", ")} — ACP spawn cwd: ${config.acp.workspaceRoot}`,
   );

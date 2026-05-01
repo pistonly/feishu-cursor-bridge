@@ -101,6 +101,7 @@ const BACKEND_ALIASES: Record<string, AcpBackend> = {
   "cursor-legacy": "cursor-legacy",
   claude: "claude",
   codex: "codex",
+  gemini: "gemini",
 };
 
 function normalizeBackend(

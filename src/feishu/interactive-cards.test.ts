@@ -13,14 +13,15 @@ test("buildWorkspaceWithBackendSelectCardMarkdown uses metadata-driven shortcuts
   const markdown = buildWorkspaceWithBackendSelectCardMarkdown({
     presets: ["/tmp/demo"],
     showBackendSelector: true,
-    enabledBackends: ["cursor-official", "claude"],
-    defaultBackend: "claude",
+    enabledBackends: ["cursor-official", "claude", "gemini"],
+    defaultBackend: "gemini",
   });
 
   assert.match(markdown, new RegExp(`--backend cursor-official.*-b ${getBackendShortcut("cursor-official")}`));
   assert.match(markdown, new RegExp(`--backend claude.*-b ${getBackendShortcut("claude")}`));
+  assert.match(markdown, new RegExp(`--backend gemini.*-b ${getBackendShortcut("gemini")}`));
   assert.doesNotMatch(markdown, /--backend codex/);
-  assert.match(markdown, /claude` \/ `-b cc` \(默认\)/);
+  assert.match(markdown, /gemini` \/ `-b gm` \(默认\)/);
 });
 
 test("buildWelcomeCardMarkdown includes backend descriptions from shared metadata", () => {
@@ -32,5 +33,6 @@ test("buildWelcomeCardMarkdown includes backend descriptions from shared metadat
   assert.match(markdown, new RegExp(`-b ${getBackendShortcut("cursor-official")}`));
   assert.match(markdown, new RegExp(`-b ${getBackendShortcut("claude")}`));
   assert.match(markdown, new RegExp(`-b ${getBackendShortcut("codex")}`));
+  assert.match(markdown, new RegExp(`-b ${getBackendShortcut("gemini")}`));
   assert.doesNotMatch(markdown, /-b legacy/);
 });

@@ -358,6 +358,31 @@ test("/whoami 会返回当前消息识别到的飞书用户 ID", async () => {
   assert.match(sentTexts[0] ?? "", /open_id/);
 });
 
+test("/new 会拒绝当前未启用的 backend", async () => {
+  const bridge = new Bridge(createTestConfig());
+  const sentTexts: string[] = [];
+  let createCalled = false;
+  (bridge as any).sessionManager = {
+    async createNewSlot(): Promise<void> {
+      createCalled = true;
+    },
+  };
+  (bridge as any).feishuBot = {
+    stripBotMentionKeepLines(content: string) {
+      return content;
+    },
+    async sendText(_chatId: string, body: string): Promise<void> {
+      sentTexts.push(body);
+    },
+  };
+
+  await (bridge as any).handleFeishuMessage(createMessage("/new /tmp -b claude"));
+
+  assert.equal(createCalled, false);
+  assert.equal(sentTexts.length, 1);
+  assert.match(sentTexts[0] ?? "", /backend `claude` 当前未启用/);
+});
+
 test("bridge 在显式关闭时会拒绝 ! 终端命令", async () => {
   const config = createTestConfig();
   config.bridge.enableBangCommand = false;

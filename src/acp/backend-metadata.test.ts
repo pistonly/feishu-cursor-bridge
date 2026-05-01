@@ -13,7 +13,7 @@ import {
 } from "./backend-metadata.js";
 
 test("backend metadata keeps canonical backend ids ordered", () => {
-  assert.deepEqual(ACP_BACKENDS, ["cursor-official", "cursor-legacy", "claude", "codex"]);
+  assert.deepEqual(ACP_BACKENDS, ["cursor-official", "cursor-legacy", "claude", "codex", "gemini"]);
 });
 
 test("backend metadata aliases do not collide across backends", () => {
@@ -42,9 +42,10 @@ test("backend metadata aliases do not collide across backends", () => {
 });
 
 test("backend metadata formatters expose current supported backend text", () => {
-  assert.equal(formatSupportedBackendValues(), "`cursor-official` / `cursor-legacy` / `claude` / `codex`");
-  assert.equal(formatSupportedBackendValuePattern(), "cursor-official|cursor-legacy|claude|codex");
-  assert.equal(formatPreferredBackendShortcuts(), "`cur` / `legacy` / `cc` / `cx`");
+  assert.equal(formatSupportedBackendValues(), "`cursor-official` / `cursor-legacy` / `claude` / `codex` / `gemini`");
+  assert.equal(formatSupportedBackendValuePattern(), "cursor-official|cursor-legacy|claude|codex|gemini");
+  assert.equal(formatPreferredBackendShortcuts(), "`cur` / `legacy` / `cc` / `cx` / `gm`");
   assert.equal(formatCompatibleBackendAliases(), "`official`");
   assert.equal(getBackendShortcut("cursor-official"), "cur");
+  assert.equal(getBackendShortcut("gemini"), "gm");
 });
