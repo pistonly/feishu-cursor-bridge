@@ -591,6 +591,37 @@ test("ConversationService 会在卡片底部显示 backend、model 和 context �
   );
 });
 
+test("ConversationService 对 codex-app-server 状态栏显示 context 近似用量", async () => {
+  const { service, updateCardCalls } = createHarness([
+    {
+      type: "agent_message_chunk",
+      sessionId: "session-1",
+      text: "完成。",
+    },
+    {
+      type: "usage_update",
+      sessionId: "session-1",
+      summary: "用量统计已更新",
+      usage: {
+        usedTokens: 250_000,
+        maxTokens: 1_000_000,
+        percent: 25,
+      },
+    },
+  ]);
+
+  await service.handleUserPrompt(
+    createMessage(),
+    createSession("codex-app-server"),
+  );
+
+  const finalCard = updateCardCalls.at(-1)?.content ?? "";
+  assert.match(
+    finalCard,
+    /`codex-app-server` \| Auto \| 约 25% \(250,000 \/ 1,000,000\)/,
+  );
+});
+
 test("ConversationService 会在 prompt 返回后重新同步状态条，补上无后续事件的 context 用量", async () => {
   const bridgeClient = new EventEmitter() as EventEmitter & {
     setFeishuPromptContext: (_sessionId: string, _ctx: unknown) => void;

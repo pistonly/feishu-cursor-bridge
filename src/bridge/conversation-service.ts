@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import {
   formatSessionModelLabel,
-  formatSessionUsage,
+  formatSessionUsageStatusSegment,
 } from "../acp/session-display-format.js";
 import { assertPathInWorkspace } from "../acp/fs-sandbox.js";
 import type { BridgeAcpRuntime } from "../acp/runtime-contract.js";
@@ -122,7 +122,8 @@ export class ConversationService {
       state.setStatusSummary(
         `\`${session.backend}\` | ${formatSessionModelLabel(
           this.acp.getSessionModelState(session.sessionId),
-        ) ?? "—"} | ${formatSessionUsage(
+        ) ?? "—"} | ${formatSessionUsageStatusSegment(
+          session.backend,
           this.acp.getSessionUsageState(session.sessionId),
         ) ?? "—"}`,
       );

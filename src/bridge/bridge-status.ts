@@ -1,4 +1,5 @@
 import { isCodexBackend, isGeminiBackend } from "../acp/runtime-contract.js";
+import { formatSessionUsageLabel } from "../acp/session-display-format.js";
 import * as path from "node:path";
 import type { FeishuMessage } from "../feishu/bot.js";
 import type { BridgeMessageHandlerDeps } from "./bridge-message-handler-types.js";
@@ -61,6 +62,7 @@ export async function handleStatusCommand(
     ? runtime?.getSessionUsageState(activeSession.sessionId)
     : undefined;
   const usageLabel = ctx.formatSessionUsage(usageState);
+  const usageTitle = formatSessionUsageLabel(activeSession?.backend);
   const maintenanceEnabled =
     ctx.config.bridge.adminUserIds.length > 0 &&
     (await ctx.isManagedByService());
@@ -98,7 +100,7 @@ export async function handleStatusCommand(
   }
   if (usageLabel) {
     body += `
-• Context 用量：${usageLabel}`;
+• ${usageTitle}：${usageLabel}`;
   }
   if (recovery?.kind === "cursor-cli") {
     body += `\n• CLI resume ID：\`${recovery.cursorCliChatId}\``;
@@ -174,7 +176,7 @@ export async function handleStatusCommand(
 • ACP sessionId: ${slot?.session.sessionId ?? "—"}
 • 当前模式: ${currentModeId ?? "—"}
 • 当前模型: ${currentModelLabel ?? "—"}
-• Context 用量: ${usageLabel ?? "—"}
+• ${usageTitle}: ${usageLabel ?? "—"}
 • 可用模式: ${availableModeIds || "—"}
 • 会话 cwd: ${slot?.session.workspaceRoot ?? "—"}
 • 空闲过期约: ${idleLabel}

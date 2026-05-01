@@ -7,6 +7,8 @@ import {
   formatPercent,
   formatSessionModelLabel,
   formatSessionUsage,
+  formatSessionUsageLabel,
+  formatSessionUsageStatusSegment,
 } from "./session-display-format.js";
 
 test("formatPercent 与 formatNumber 返回稳定展示格式", () => {
@@ -25,6 +27,25 @@ test("formatSessionUsage 返回 context 百分比与 token 占用", () => {
     "1.1% (10,633 / 950,000)",
   );
   assert.equal(formatSessionUsage(undefined), undefined);
+});
+
+test("codex-app-server 用近似文案展示 context 用量", () => {
+  const usage = {
+    usedTokens: 250_000,
+    maxTokens: 1_000_000,
+    percent: 25,
+  };
+
+  assert.equal(formatSessionUsageLabel("codex-app-server"), "Context 近似用量");
+  assert.equal(formatSessionUsageLabel("codex"), "Context 用量");
+  assert.equal(
+    formatSessionUsageStatusSegment("codex-app-server", usage),
+    "约 25% (250,000 / 1,000,000)",
+  );
+  assert.equal(
+    formatSessionUsageStatusSegment("codex", usage),
+    "25% (250,000 / 1,000,000)",
+  );
 });
 
 test("formatSessionModelLabel 在有展示名时优先返回展示名", () => {

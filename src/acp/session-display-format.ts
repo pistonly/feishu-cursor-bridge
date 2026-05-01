@@ -1,4 +1,5 @@
 import type {
+  AcpBackend,
   AcpSessionModeState,
   AcpSessionModelState,
   AcpSessionUsageState,
@@ -17,6 +18,19 @@ export function formatSessionUsage(
 ): string | undefined {
   if (!usage) return undefined;
   return `${formatPercent(usage.percent)} (${formatNumber(usage.usedTokens)} / ${formatNumber(usage.maxTokens)})`;
+}
+
+export function formatSessionUsageLabel(backend: AcpBackend | undefined): string {
+  return backend === "codex-app-server" ? "Context 近似用量" : "Context 用量";
+}
+
+export function formatSessionUsageStatusSegment(
+  backend: AcpBackend | undefined,
+  usage: AcpSessionUsageState | undefined,
+): string | undefined {
+  const formatted = formatSessionUsage(usage);
+  if (!formatted) return undefined;
+  return backend === "codex-app-server" ? `约 ${formatted}` : formatted;
 }
 
 export function formatSessionModelLabel(
