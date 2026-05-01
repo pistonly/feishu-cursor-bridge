@@ -1,3 +1,4 @@
+import { isCodexBackend } from "../acp/runtime-contract.js";
 import * as path from "node:path";
 import type { FeishuMessage } from "../feishu/bot.js";
 import type { BridgeMessageHandlerDeps } from "./bridge-message-handler-types.js";
@@ -83,10 +84,7 @@ export async function handleStatusCommand(
     activeSession.sessionId
   ) {
     body += `\n• Official ACP sessionId：\`${activeSession.sessionId}\``;
-  } else if (
-    activeSession?.backend === "codex" &&
-    activeSession.sessionId
-  ) {
+  } else if (isCodexBackend(activeSession?.backend ?? "cursor-official") && activeSession?.sessionId) {
     body += `\n• Codex sessionId：\`${activeSession.sessionId}\``;
   } else {
     body += "\n• 恢复绑定：暂无（尚无活跃会话或后端未返回恢复元信息）";

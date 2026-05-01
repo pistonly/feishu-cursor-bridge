@@ -10,6 +10,9 @@ const NEW_COMMAND_BACKEND_ALIASES: Record<string, AcpBackend> = {
   cc: "claude",
   codex: "codex",
   cx: "codex",
+  "codex-app-server": "codex-app-server",
+  "codex-app": "codex-app-server",
+  cxs: "codex-app-server",
 };
 
 type NewCommandCommon = {

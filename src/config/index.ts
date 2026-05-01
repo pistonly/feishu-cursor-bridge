@@ -55,6 +55,9 @@ export interface Config {
     /** Codex ACP 子进程命令 */
     codexSpawnCommand: string;
     codexSpawnArgs: string[];
+    /** Codex app-server 子进程命令 */
+    codexAppServerSpawnCommand?: string;
+    codexAppServerSpawnArgs?: string[];
     /**
      * ACP 子进程 spawn 使用的 `cwd`（取 `CURSOR_WORK_ALLOWLIST` 中第一项）；
      * `session/new` 仍传入各 session 自己的工作区路径。
@@ -127,6 +130,7 @@ const ACP_BACKENDS = new Set<AcpBackend>([
   "cursor-legacy",
   "claude",
   "codex",
+  "codex-app-server",
 ]);
 
 const LEGACY_BACKEND_ALIASES: Record<string, AcpBackend> = {
@@ -134,6 +138,10 @@ const LEGACY_BACKEND_ALIASES: Record<string, AcpBackend> = {
   legacy: "cursor-legacy",
   claude: "claude",
   codex: "codex",
+  "codex-app-server": "codex-app-server",
+  "codex-app": "codex-app-server",
+  appserver: "codex-app-server",
+  "app-server": "codex-app-server",
 };
 
 function requireEnv(name: string): string {
@@ -332,6 +340,26 @@ function resolveCodexAgentAcpSpawn(): { command: string; args: string[] } {
   return {
     command: "npx",
     args,
+  };
+}
+
+function resolveCodexAppServerSpawn(): { command: string; args: string[] } {
+  const envRaw = process.env["CODEX_APP_SERVER_COMMAND"]?.trim();
+  const extra = parseExtraArgs(process.env["CODEX_APP_SERVER_EXTRA_ARGS"]);
+  if (envRaw) {
+    const tokens = parseShellLikeArgs(envRaw);
+    if (tokens.length === 0) {
+      throw new Error("CODEX_APP_SERVER_COMMAND 解析为空");
+    }
+    const baseArgs = [...tokens.slice(1), ...extra];
+    return {
+      command: tokens[0]!,
+      args: baseArgs[0] === "app-server" ? baseArgs : ["app-server", ...baseArgs],
+    };
+  }
+  return {
+    command: "codex",
+    args: ["app-server", "--analytics-default-enabled", ...extra],
   };
 }
 
@@ -621,6 +649,7 @@ export function loadConfig(): Config {
 
   const claudeSpawn = resolveClaudeAgentAcpSpawn();
   const codexSpawn = resolveCodexAgentAcpSpawn();
+  const codexAppServerSpawn = resolveCodexAppServerSpawn();
 
   return {
     feishu: {
@@ -642,6 +671,8 @@ export function loadConfig(): Config {
       claudeSpawnArgs: claudeSpawn.args,
       codexSpawnCommand: codexSpawn.command,
       codexSpawnArgs: codexSpawn.args,
+      codexAppServerSpawnCommand: codexAppServerSpawn.command,
+      codexAppServerSpawnArgs: codexAppServerSpawn.args,
       workspaceRoot,
       allowedWorkspaceRoots,
       adapterSessionDir,

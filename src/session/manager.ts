@@ -1,9 +1,10 @@
 import * as path from "node:path";
-import type {
-  AcpBackend,
-  AcpRuntimeResolver,
-  BridgeAcpRuntime,
-  SessionRecovery,
+import {
+  isCodexBackend,
+  type AcpBackend,
+  type AcpRuntimeResolver,
+  type BridgeAcpRuntime,
+  type SessionRecovery,
 } from "../acp/runtime-contract.js";
 import type {
   SessionStore,
@@ -881,7 +882,7 @@ export class SessionManager {
     noticeKey?: string,
   ): Promise<void> {
     const preferredModelId = slot.session.preferredModelId?.trim();
-    if (!preferredModelId || slot.session.backend !== "codex") {
+    if (!preferredModelId || !isCodexBackend(slot.session.backend)) {
       return;
     }
     const runtime = this.runtimeForSlot(slot);

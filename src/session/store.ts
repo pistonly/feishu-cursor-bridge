@@ -75,6 +75,10 @@ const BACKEND_ALIASES: Record<string, AcpBackend> = {
   "cursor-legacy": "cursor-legacy",
   claude: "claude",
   codex: "codex",
+  "codex-app-server": "codex-app-server",
+  "codex-app": "codex-app-server",
+  appserver: "codex-app-server",
+  "app-server": "codex-app-server",
 };
 
 function normalizeBackend(

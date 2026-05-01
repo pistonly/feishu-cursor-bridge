@@ -5,7 +5,8 @@ export type AcpBackend =
   | "cursor-official"
   | "cursor-legacy"
   | "claude"
-  | "codex";
+  | "codex"
+  | "codex-app-server";
 
 export type SessionRecovery =
   | { kind: "cursor-cli"; cursorCliChatId: string }
@@ -96,5 +97,5 @@ export function isClaudeBackend(backend: AcpBackend): boolean {
 }
 
 export function isCodexBackend(backend: AcpBackend): boolean {
-  return backend === "codex";
+  return backend === "codex" || backend === "codex-app-server";
 }

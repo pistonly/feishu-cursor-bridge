@@ -1,5 +1,5 @@
 import { captureAcpReplayDuring } from "../acp/replay-capture.js";
-import type { AcpBackend } from "../acp/runtime-contract.js";
+import { isCodexBackend, type AcpBackend } from "../acp/runtime-contract.js";
 import {
   matchesBridgeHelpCommand,
   matchesBridgeStartCommand,
@@ -445,7 +445,7 @@ async function handleNewCommand(
     await ctx.feishuBot.sendText(
       msg.chatId,
       command.invalidBackend
-        ? `❌ 不支持的 backend：\`${command.invalidBackend}\`。可用值：\`cursor-official\` / \`cursor-legacy\` / \`claude\` / \`codex\`（简写：\`official\` / \`legacy\` / \`cc\` / \`cx\`）。`
+        ? `❌ 不支持的 backend：\`${command.invalidBackend}\`。可用值：\`cursor-official\` / \`cursor-legacy\` / \`claude\` / \`codex\` / \`codex-app-server\`（简写：\`official\` / \`legacy\` / \`cc\` / \`cx\` / \`cxs\`）。`
         : "❌ `/new` 参数不正确。请先发送 `/commands` 或 `/help` 查看用法。",
       msg.messageId,
       ctx.threadReplyOpts(msg),
@@ -727,7 +727,7 @@ async function handleModelCommand(
     const confirmedModelId =
       runtime.getSessionModelState(activeSessionForModel.sessionId)
         ?.currentModelId ?? resolved.modelId;
-    if (activeSessionForModel.backend === "codex") {
+    if (isCodexBackend(activeSessionForModel.backend)) {
       ctx.sessionManager.setActiveSessionPreferredModel(
         msg.chatId,
         msg.senderId,

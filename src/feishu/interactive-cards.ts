@@ -3,6 +3,7 @@ import type { AcpBackend } from "../acp/runtime-contract.js";
 const BACKEND_SHORTCUTS: Partial<Record<AcpBackend, string>> = {
   claude: "cc",
   codex: "cx",
+  "codex-app-server": "cxs",
 };
 
 /**
@@ -113,10 +114,12 @@ export function buildWelcomeCardMarkdown(): string {
     "   • `cursor-legacy` - 内嵌适配器后端",
     "   • `claude` - Claude AI 后端",
     "   • `codex` - Codex ACP 后端",
+    "   • `codex-app-server` - Codex app-server 后端",
     "",
     "**3. 命令示例:**",
     "   • `/new 1 -b cc` - 使用第 1 个工作区和 Claude 后端",
-    "   • `/new 1 -b cx` - 使用第 1 个工作区和 Codex 后端",
+    "   • `/new 1 -b cx` - 使用第 1 个工作区和 Codex ACP 后端",
+    "   • `/new 1 -b cxs` - 使用第 1 个工作区和 Codex app-server 后端",
     "   • `/new /path/to/project --name my-project` - 自定义路径并命名",
     "",
     "---",
