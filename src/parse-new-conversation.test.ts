@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  BACKEND_METADATA,
+  COMMAND_BACKEND_ALIAS_MAP,
+} from "./acp/backend-metadata.js";
+import {
   matchesBridgeHelpCommand,
   matchesBridgeStartCommand,
   matchesInterruptUserCommand,
@@ -22,6 +26,32 @@ test("parseNewConversationCommand 支持 /reply 指定编号或名称", () => {
   assert.deepEqual(parseNewConversationCommand('/reply "backend api"'), {
     kind: "reply",
     target: "backend api",
+  });
+});
+
+test("parseNewConversationCommand 仅把纯数字目标解析为槽位编号", () => {
+  assert.deepEqual(parseNewConversationCommand("/rename 1abc new-name"), {
+    kind: "rename",
+    target: "1abc",
+    name: "new-name",
+  });
+  assert.deepEqual(parseNewConversationCommand("/close 1abc"), {
+    kind: "close",
+    target: "1abc",
+  });
+});
+
+test("parseNewConversationCommand 支持 /history", () => {
+  assert.deepEqual(parseNewConversationCommand("/history"), {
+    kind: "history",
+  });
+  assert.deepEqual(parseNewConversationCommand("/history 10"), {
+    kind: "history",
+    count: 10,
+  });
+  assert.deepEqual(parseNewConversationCommand("/history x"), {
+    kind: "history",
+    invalidUsage: true,
   });
 });
 
@@ -53,13 +83,20 @@ test("parseNewConversationCommand 支持 /new --backend codex", () => {
 });
 
 test("parseNewConversationCommand 支持 /new -b 简写与 backend 别名", () => {
-  assert.deepEqual(parseNewConversationCommand("/new 1 -b cc"), {
-    kind: "new",
-    variant: "preset",
-    index: 1,
-    backend: "claude",
-    name: undefined,
-  });
+  for (const [alias, backend] of Object.entries(COMMAND_BACKEND_ALIAS_MAP)) {
+    assert.deepEqual(parseNewConversationCommand(`/new 1 -b ${alias}`), {
+      kind: "new",
+      variant: "preset",
+      index: 1,
+      backend,
+      name: undefined,
+    });
+  }
+
+  for (const metadata of BACKEND_METADATA) {
+    assert.equal(Array.from(metadata.commandAliases).includes(metadata.id), true);
+  }
+
   assert.deepEqual(parseNewConversationCommand("/new /tmp/demo -b=cx"), {
     kind: "new",
     variant: "workspace",
@@ -110,6 +147,51 @@ test("parseNewConversationCommand 支持 /whoami", () => {
   });
   assert.deepEqual(parseNewConversationCommand("/WHOAMI"), {
     kind: "whoami",
+  });
+});
+
+test("parseNewConversationCommand 支持 /resume", () => {
+  assert.deepEqual(parseNewConversationCommand("/resume"), {
+    kind: "resume",
+    target: null,
+  });
+  assert.deepEqual(parseNewConversationCommand("/RESUME"), {
+    kind: "resume",
+    target: null,
+  });
+  assert.deepEqual(parseNewConversationCommand("/resume 0"), {
+    kind: "resume",
+    target: 0,
+  });
+  assert.deepEqual(parseNewConversationCommand("/resume 2"), {
+    kind: "resume",
+    target: 2,
+  });
+  assert.deepEqual(parseNewConversationCommand("/resume session-abc"), {
+    kind: "resume",
+    target: "session-abc",
+  });
+  assert.deepEqual(parseNewConversationCommand("/resume -b codex session-abc"), {
+    kind: "resume",
+    target: "session-abc",
+    backend: "codex",
+  });
+  assert.deepEqual(parseNewConversationCommand("/resume session-abc --backend cc"), {
+    kind: "resume",
+    target: "session-abc",
+    backend: "claude",
+  });
+  assert.deepEqual(parseNewConversationCommand("/resume -b codex"), {
+    kind: "resume",
+    target: null,
+    backend: "codex",
+    invalidUsage: true,
+  });
+  assert.deepEqual(parseNewConversationCommand("/resume -b tmux session-abc"), {
+    kind: "resume",
+    target: "session-abc",
+    invalidUsage: true,
+    invalidBackend: "tmux",
   });
 });
 

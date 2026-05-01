@@ -1,6 +1,44 @@
 import type { Config } from "../config/index.js";
 import { FeishuBridgeClient } from "./feishu-bridge-client.js";
+import type { AcpModelInfo, AcpSessionModelState } from "./runtime-contract.js";
 import { SdkAcpRuntimeBase } from "./sdk-runtime-base.js";
+
+const CODEX_GPT_55_EFFORT_LEVELS = ["low", "medium", "high", "xhigh"] as const;
+
+function enrichCodexGpt55EffortModels(
+  state: AcpSessionModelState,
+): AcpSessionModelState {
+  if (!state.availableModels.some((model) => model.modelId === "gpt-5.5")) {
+    return state;
+  }
+  if (
+    CODEX_GPT_55_EFFORT_LEVELS.some((effort) =>
+      state.availableModels.some((model) => model.modelId === `gpt-5.5/${effort}`),
+    )
+  ) {
+    return state;
+  }
+
+  const availableModels: AcpModelInfo[] = [];
+  for (const model of state.availableModels) {
+    if (model.modelId !== "gpt-5.5") {
+      availableModels.push({ ...model });
+      continue;
+    }
+    for (const effort of CODEX_GPT_55_EFFORT_LEVELS) {
+      availableModels.push({
+        modelId: `gpt-5.5/${effort}`,
+        name: `gpt-5.5 (${effort})`,
+      });
+    }
+  }
+
+  return {
+    currentModelId:
+      state.currentModelId === "gpt-5.5" ? "gpt-5.5/medium" : state.currentModelId,
+    availableModels,
+  };
+}
 
 function findCodexConfigOverride(args: string[], key: string): string | undefined {
   for (let i = 0; i < args.length; i++) {
@@ -36,6 +74,12 @@ export class CodexAcpRuntime extends SdkAcpRuntimeBase {
 
   constructor(config: Config, handler: FeishuBridgeClient) {
     super(config, handler);
+  }
+
+  protected override transformSessionModelState(
+    state: AcpSessionModelState,
+  ): AcpSessionModelState {
+    return enrichCodexGpt55EffortModels(state);
   }
 
   protected createSpawnSpec() {

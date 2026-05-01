@@ -38,6 +38,7 @@ function createTestConfig(): Config {
     },
     bridge: {
       adminUserIds: [],
+      groupSessionScope: "per-user",
       maxSessionsPerUser: 10,
       sessionIdleTimeoutMs: 60_000,
       sessionStorePath: "/tmp/sessions.json",
@@ -53,7 +54,9 @@ function createTestConfig(): Config {
       experimentalLogToFile: false,
       experimentalLogFilePath: "/tmp/bridge.log",
       slotMessageLogEnabled: false,
+      sessionHistoryEnabled: true,
       showAcpAvailableCommands: false,
+      enableBangCommand: false,
       enableUpgradeCommand: false,
       upgradeAdmins: {
         openIds: new Set<string>(),
@@ -101,6 +104,21 @@ function createSession(backend: UserSession["backend"] = "cursor-official"): Use
 function createHarness(
   events: BridgeAcpEvent[],
   configOverrides?: Partial<Config["bridge"]>,
+  feishuOverrides?: Partial<{
+    sendText: (
+      chatId: string,
+      content: string,
+      messageId?: string,
+      replyOpts?: unknown,
+    ) => Promise<void>;
+    uploadAndSendLocalFile: (
+      absPath: string,
+      chatId: string,
+      messageId?: string,
+      replyOpts?: unknown,
+    ) => Promise<void>;
+  }>,
+  runtimeOverrides?: Partial<BridgeAcpRuntime>,
 ) {
   const bridgeClient = new EventEmitter() as EventEmitter & {
     setFeishuPromptContext: (_sessionId: string, _ctx: unknown) => void;
@@ -108,6 +126,8 @@ function createHarness(
   bridgeClient.setFeishuPromptContext = () => {};
   const sendCardCalls: Array<{ id: string; content: string }> = [];
   const updateCardCalls: Array<{ id: string; content: string }> = [];
+  const sendTextCalls: Array<{ chatId: string; content: string }> = [];
+  const uploadFileCalls: Array<{ absPath: string; chatId: string }> = [];
 
   const feishu = {
     async sendCard(_chatId: string, content: string): Promise<string> {
@@ -117,6 +137,19 @@ function createHarness(
     },
     async updateCard(id: string, content: string): Promise<void> {
       updateCardCalls.push({ id, content });
+    },
+    async sendText(chatId: string, content: string, messageId?: string, replyOpts?: unknown): Promise<void> {
+      sendTextCalls.push({ chatId, content });
+      await feishuOverrides?.sendText?.(chatId, content, messageId, replyOpts);
+    },
+    async uploadAndSendLocalFile(
+      absPath: string,
+      chatId: string,
+      messageId?: string,
+      replyOpts?: unknown,
+    ): Promise<void> {
+      uploadFileCalls.push({ absPath, chatId });
+      await feishuOverrides?.uploadAndSendLocalFile?.(absPath, chatId, messageId, replyOpts);
     },
   };
 
@@ -184,6 +217,7 @@ function createHarness(
       return false;
     },
     async stop(): Promise<void> {},
+    ...runtimeOverrides,
   } satisfies BridgeAcpRuntime;
 
   const config = createTestConfig();
@@ -193,8 +227,70 @@ function createHarness(
 
   const service = new ConversationService(config, runtime, feishu as any);
 
-  return { service, sendCardCalls, updateCardCalls, config, runtime, feishu };
+  return {
+    service,
+    sendCardCalls,
+    updateCardCalls,
+    sendTextCalls,
+    uploadFileCalls,
+    config,
+    runtime,
+    feishu,
+  };
 }
+
+test("ConversationService 会在长时间无进展时发送等待提示", async () => {
+  const { service, sendTextCalls } = createHarness(
+    [],
+    {
+      promptProgressPollMs: 5,
+      promptSlowNoticeMs: 10,
+      promptStuckNoticeMs: 25,
+    },
+    undefined,
+    {
+      async prompt(): Promise<{ stopReason: string }> {
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        return { stopReason: "end_turn" };
+      },
+    },
+  );
+
+  await service.handleUserPrompt(createMessage(), createSession());
+
+  assert.equal(sendTextCalls.length, 2);
+  assert.match(sendTextCalls[0]?.content ?? "", /等待较久/);
+  assert.match(sendTextCalls[1]?.content ?? "", /长时间没有任何进展/);
+});
+
+test("ConversationService 在正文已显示且无活跃工具时不再发送等待提示", async () => {
+  const { service, sendTextCalls } = createHarness(
+    [],
+    {
+      promptProgressPollMs: 5,
+      promptSlowNoticeMs: 10,
+      promptStuckNoticeMs: 25,
+    },
+    undefined,
+    {
+      async prompt(): Promise<{ stopReason: string }> {
+        const bridgeClient = this.bridgeClient as EventEmitter;
+        bridgeClient.emit("acp", {
+          type: "agent_message_chunk",
+          sessionId: "session-1",
+          text: "已经给出最终答复。",
+        } satisfies BridgeAcpEvent);
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        return { stopReason: "end_turn" };
+      },
+    },
+  );
+
+  const reply = await service.handleUserPrompt(createMessage(), createSession());
+
+  assert.equal(sendTextCalls.length, 0);
+  assert.match(reply ?? "", /已经给出最终答复/);
+});
 
 test("ConversationService 会把交错的工具事件持续合并到同一张卡片", async () => {
   const { service, sendCardCalls, updateCardCalls } = createHarness([
@@ -368,10 +464,6 @@ test("ConversationService 在长回答拆卡时仍保留完整 reply 内容", as
     updateCardCalls.filter((call) => call.id === "card-1").at(-1)?.content ?? "";
 
   assert.equal(sendCardCalls.length >= 3, true);
-  assert.equal(
-    updateCardCalls.some((call) => call.id === sendCardCalls.at(-1)?.id),
-    true,
-  );
   assert.match(finalCard1, /📖 读取文件 — completed/);
   assert.equal(
     sendCardCalls
@@ -386,56 +478,43 @@ test("ConversationService 在长回答拆卡时仍保留完整 reply 内容", as
   const firstCardFinal =
     updateCardCalls.filter((call) => call.id === "card-1").at(-1)?.content ?? "";
   const lastCardFinal =
-    updateCardCalls.filter((call) => call.id === lastCardId).at(-1)?.content ?? "";
+    updateCardCalls.filter((call) => call.id === lastCardId).at(-1)?.content ??
+    sendCardCalls.find((call) => call.id === lastCardId)?.content ??
+    "";
   assert.doesNotMatch(firstCardFinal, /`cursor-official` \|/);
   assert.match(lastCardFinal, /`cursor-official` \| Auto \| —/);
 });
 
-test("ConversationService 仅在 legacy backend 下把鉴权样式超时改写为 Cursor CLI 超时提示", async () => {
-  const authLike =
-    "Unable to process your request because cursor-agent CLI is not authenticated.\n\nPlease run cursor-agent login.";
-  const originalNow = Date.now;
-  let now = 0;
-  Date.now = () => now;
-  try {
-    const legacy = createHarness([
+test("ConversationService 在多卡场景下只更新发生变化的尾部卡片", async () => {
+  const firstChunk = "甲".repeat(220);
+  const secondChunk = "乙".repeat(40);
+  const { service, sendCardCalls, updateCardCalls } = createHarness(
+    [
       {
         type: "agent_message_chunk",
         sessionId: "session-1",
-        text: authLike,
+        text: firstChunk,
       },
-    ]);
-    const codex = createHarness([
       {
         type: "agent_message_chunk",
         sessionId: "session-1",
-        text: authLike,
+        text: secondChunk,
       },
-    ]);
+    ],
+    {
+      cardSplitMarkdownThreshold: 180,
+    },
+  );
 
-    now = 0;
-    const legacyPromise = legacy.service.handleUserPrompt(
-      createMessage(),
-      createSession("cursor-legacy"),
-    );
-    now = 120_000;
-    const legacyReply = await legacyPromise;
+  await service.handleUserPrompt(createMessage(), createSession());
 
-    now = 0;
-    const codexPromise = codex.service.handleUserPrompt(
-      createMessage(),
-      createSession("codex"),
-    );
-    now = 120_000;
-    const codexReply = await codexPromise;
+  const lastCardId = sendCardCalls.at(-1)?.id ?? "";
+  const firstCardUpdates = updateCardCalls.filter((call) => call.id === "card-1");
+  const lastCardUpdates = updateCardCalls.filter((call) => call.id === lastCardId);
 
-    assert.match(legacyReply ?? "", /Cursor CLI 超时/);
-    assert.match(legacyReply ?? "", /约 120 秒/);
-    assert.doesNotMatch(codexReply ?? "", /Cursor CLI 超时/);
-    assert.match(codexReply ?? "", /cursor-agent CLI is not authenticated/i);
-  } finally {
-    Date.now = originalNow;
-  }
+  assert.equal(sendCardCalls.length >= 2, true);
+  assert.equal(firstCardUpdates.length, 1);
+  assert.equal(lastCardUpdates.length >= 1, true);
 });
 
 test("ConversationService 会按 legacy adapter timeout 动态改写超时提示", async () => {
@@ -589,6 +668,43 @@ test("ConversationService 会在 prompt 返回后重新同步状态条，补上�
     finalCard.lastIndexOf("CLAUDE_OK") <
       finalCard.lastIndexOf("`claude` | — | 9.9% (19,783 / 200,000)"),
   );
+});
+
+test("ConversationService 会把 FEISHU_SEND_FILE 的结构化错误发回飞书", async () => {
+  const { service, sendTextCalls, uploadFileCalls } = createHarness(
+    [
+      {
+        type: "agent_message_chunk",
+        sessionId: "session-1",
+        text: "生成完成。\nFEISHU_SEND_FILE: reports/result.json",
+      },
+    ],
+    undefined,
+    {
+      async uploadAndSendLocalFile() {
+        throw {
+          message: "Internal error",
+          code: -32603,
+          data: {
+            details: "upload failed",
+            fileId: "reports/result.json",
+          },
+        };
+      },
+    },
+  );
+
+  const reply = await service.handleUserPrompt(createMessage(), createSession());
+
+  assert.equal(uploadFileCalls.length, 1);
+  assert.equal(uploadFileCalls[0]?.absPath, "/tmp/reports/result.json");
+  assert.equal(sendTextCalls.length, 1);
+  assert.match(sendTextCalls[0]?.content ?? "", /⚠️ 未能发送文件 `reports\/result\.json`:/);
+  assert.match(sendTextCalls[0]?.content ?? "", /Internal error/);
+  assert.match(sendTextCalls[0]?.content ?? "", /JSON-RPC code: -32603/);
+  assert.match(sendTextCalls[0]?.content ?? "", /"details": "upload failed"/);
+  assert.doesNotMatch(sendTextCalls[0]?.content ?? "", /\[object Object\]/);
+  assert.doesNotMatch(reply ?? "", /FEISHU_SEND_FILE:/);
 });
 
 test("ConversationService 只有 metadata 更新时也会渲染状态条而不是空响应", async () => {

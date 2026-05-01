@@ -1,15 +1,16 @@
 import * as path from "node:path";
-import type { Config } from "../config/index.js";
+import {
+  formatSessionModelLabel,
+  formatSessionUsage,
+} from "../acp/session-display-format.js";
 import { assertPathInWorkspace } from "../acp/fs-sandbox.js";
+import type { BridgeAcpRuntime } from "../acp/runtime-contract.js";
 import type { BridgeAcpEvent } from "../acp/types.js";
-import type {
-  AcpSessionModelState,
-  AcpSessionUsageState,
-  BridgeAcpRuntime,
-} from "../acp/runtime-contract.js";
+import type { Config } from "../config/index.js";
 import { FeishuBot, type FeishuMessage } from "../feishu/bot.js";
 import { FeishuCardState, isRenderableEvent } from "../feishu/renderer.js";
 import type { UserSession } from "../session/manager.js";
+import { formatJsonRpcLikeError } from "../utils/format-json-rpc-error.js";
 
 const AUTH_HINT_PATTERNS = [
   "unable to process your request because cursor-agent cli is not authenticated",
@@ -23,6 +24,9 @@ const AUTH_LIKE_REPLY_PREFIXES = [
 ];
 const DEFAULT_LEGACY_CURSOR_TIMEOUT_MS = 120_000;
 const MISLEADING_AUTH_TIMEOUT_TOLERANCE_MS = 5_000;
+const PROMPT_PROGRESS_POLL_MS = 5_000;
+const PROMPT_SLOW_NOTICE_MS = 20_000;
+const PROMPT_STUCK_NOTICE_MS = 60_000;
 
 function formatLegacyTimeoutSeconds(timeoutMs: number): string {
   const seconds = Math.max(1, Math.round(timeoutMs / 1000));
@@ -56,30 +60,6 @@ function buildAuthTimeoutHintBody(timeoutMs: number): string {
 
 function normalizeText(text: string): string {
   return text.toLowerCase().replace(/\r/g, "").trim();
-}
-
-function formatNumber(value: number): string {
-  return new Intl.NumberFormat("en-US").format(value);
-}
-
-function formatPercent(value: number): string {
-  return `${value.toFixed(1).replace(/\.0$/, "")}%`;
-}
-
-function formatCurrentModel(modelState: AcpSessionModelState | undefined): string {
-  if (!modelState?.currentModelId) return "—";
-  const current = modelState.availableModels.find(
-    (model) => model.modelId === modelState.currentModelId,
-  );
-  if (current?.name && current.name !== current.modelId) {
-    return current.name;
-  }
-  return `\`${modelState.currentModelId}\``;
-}
-
-function formatContextUsage(usageState: AcpSessionUsageState | undefined): string {
-  if (!usageState) return "—";
-  return `${formatPercent(usageState.percent)} (${formatNumber(usageState.usedTokens)} / ${formatNumber(usageState.maxTokens)})`;
 }
 
 function isStandaloneAuthLikeReply(text: string): boolean {
@@ -121,6 +101,12 @@ export class ConversationService {
     const cardSplitMarkdownThreshold =
       this.config.bridge.cardSplitMarkdownThreshold;
     const cardSplitToolThreshold = this.config.bridge.cardSplitToolThreshold;
+    const promptSlowNoticeMs =
+      this.config.bridge.promptSlowNoticeMs ?? PROMPT_SLOW_NOTICE_MS;
+    const promptStuckNoticeMs =
+      this.config.bridge.promptStuckNoticeMs ?? PROMPT_STUCK_NOTICE_MS;
+    const promptProgressPollMs =
+      this.config.bridge.promptProgressPollMs ?? PROMPT_PROGRESS_POLL_MS;
     const replyOpts = msg.replyInThread ? { replyInThread: true } : undefined;
     const showCommands = this.config.bridge.showAcpAvailableCommands;
 
@@ -134,22 +120,26 @@ export class ConversationService {
     const state = new FeishuCardState(showCommands);
     const syncStatusSummary = (): void => {
       state.setStatusSummary(
-        `\`${session.backend}\` | ${formatCurrentModel(
+        `\`${session.backend}\` | ${formatSessionModelLabel(
           this.acp.getSessionModelState(session.sessionId),
-        )} | ${formatContextUsage(
+        ) ?? "—"} | ${formatSessionUsage(
           this.acp.getSessionUsageState(session.sessionId),
-        )}`,
+        ) ?? "—"}`,
       );
     };
     syncStatusSummary();
     const cardMessageIds: string[] = [loadingCardId];
     let lastRenderedChunks: string[] = [];
-    let aggregatedMain = "";
     let sawRenderableEvent = false;
+    let promptFinished = false;
+    let lastProgressAt = Date.now();
+    let sentSlowNotice = false;
+    let sentStuckNotice = false;
 
     let lastFlush = 0;
     let cardPatchChain: Promise<void> = Promise.resolve();
     let toolRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+    let progressMonitorTimer: ReturnType<typeof setInterval> | undefined;
 
     const awaitPatchChain = async (): Promise<void> => {
       await cardPatchChain;
@@ -162,30 +152,75 @@ export class ConversationService {
       }
     };
 
+    const clearProgressMonitorTimer = (): void => {
+      if (progressMonitorTimer) {
+        clearInterval(progressMonitorTimer);
+        progressMonitorTimer = undefined;
+      }
+    };
+
+    const shouldSuppressIdleNotice = (): boolean =>
+      state.hasMainText() && !state.hasActiveTool();
+
+    const markProgress = (): void => {
+      lastProgressAt = Date.now();
+    };
+
+    const startProgressMonitor = (): void => {
+      clearProgressMonitorTimer();
+      progressMonitorTimer = setInterval(() => {
+        if (promptFinished) return;
+        if (shouldSuppressIdleNotice()) return;
+        const idleMs = Date.now() - lastProgressAt;
+        if (!sentSlowNotice && idleMs >= promptSlowNoticeMs) {
+          sentSlowNotice = true;
+          void this.feishu.sendText(
+            msg.chatId,
+            "⏳ 这个请求已经等待较久，backend 可能正在推理、重连，或暂时卡住。你可以继续等待，或发送 `/stop` / `/cancel` 尝试中断。",
+            msg.messageId,
+            replyOpts,
+          ).catch(() => {});
+        }
+        if (!sentStuckNotice && idleMs >= promptStuckNoticeMs) {
+          sentStuckNotice = true;
+          void this.feishu.sendText(
+            msg.chatId,
+            "⚠️ 这个请求已长时间没有任何进展。Bot 连接本身仍然可用；如问题持续，请管理员私聊发送 `/restart` 重启 bridge。",
+            msg.messageId,
+            replyOpts,
+          ).catch(() => {});
+        }
+      }, promptProgressPollMs);
+    };
+
     const syncRenderedCards = (force: boolean, label: string): void => {
       const now = Date.now();
       if (!force && now - lastFlush < throttleMs) return;
       if (!state.hasContent()) return;
 
-      const chunks = state.toCardMarkdownChunks({
-        maxMarkdownLength: cardSplitMarkdownThreshold,
-        maxTools: cardSplitToolThreshold,
-      });
+      const previousChunks = lastRenderedChunks;
+      const chunks = state.toCardMarkdownChunks(
+        {
+          maxMarkdownLength: cardSplitMarkdownThreshold,
+          maxTools: cardSplitToolThreshold,
+        },
+        now,
+      );
       if (
-        !force &&
-        chunks.length === lastRenderedChunks.length &&
-        chunks.every((chunk, index) => chunk === lastRenderedChunks[index])
+        chunks.length === previousChunks.length &&
+        chunks.every((chunk, index) => chunk === previousChunks[index])
       ) {
         return;
       }
       lastFlush = now;
-      lastRenderedChunks = chunks;
+      lastRenderedChunks = [...chunks];
 
       cardPatchChain = cardPatchChain.then(async () => {
         for (let i = 0; i < chunks.length; i += 1) {
           const chunk = chunks[i]!;
           const messageId = cardMessageIds[i];
           if (messageId) {
+            if (previousChunks[i] === chunk) continue;
             try {
               await this.feishu.updateCard(messageId, chunk);
             } catch (err) {
@@ -244,9 +279,7 @@ export class ConversationService {
     };
 
     const processAcpEvent = async (ev: BridgeAcpEvent): Promise<void> => {
-      if (ev.type === "agent_message_chunk") {
-        aggregatedMain += ev.text;
-      }
+      markProgress();
       await opts?.onAcpEvent?.(ev);
 
       syncStatusSummary();
@@ -279,6 +312,7 @@ export class ConversationService {
       messageId: msg.messageId,
       ...(replyOpts ? { replyInThread: true } : {}),
     });
+    startProgressMonitor();
 
     try {
       if (this.config.bridgeDebug) {
@@ -288,6 +322,7 @@ export class ConversationService {
       }
 
       const result = await this.acp.prompt(session.sessionId, msg.content);
+      promptFinished = true;
 
       await acpQueue;
       syncStatusSummary();
@@ -319,6 +354,7 @@ export class ConversationService {
               replyOpts,
             );
           } catch (err) {
+            const errorText = formatJsonRpcLikeError(err);
             console.warn(
               `[conversation] FEISHU_SEND_FILE failed path=${raw} sessionId=${session.sessionId}`,
               err instanceof Error ? err.message : err,
@@ -326,9 +362,7 @@ export class ConversationService {
             try {
               await this.feishu.sendText(
                 msg.chatId,
-                `⚠️ 未能发送文件 \`${raw}\`：${
-                  err instanceof Error ? err.message : String(err)
-                }`,
+                `⚠️ 未能发送文件 \`${raw}\`:\n${errorText}`,
                 msg.messageId,
                 replyOpts,
               );
@@ -343,7 +377,7 @@ export class ConversationService {
       if (
         session.backend === "cursor-legacy" &&
         isLikelyTimeoutMisclassifiedAsAuth(
-          aggregatedMain,
+          state.getMainText(),
           elapsedMs,
           legacyCursorTimeoutMs,
         )
@@ -383,7 +417,9 @@ export class ConversationService {
 
       return state.toMarkdown();
     } finally {
+      promptFinished = true;
       clearToolRefreshTimer();
+      clearProgressMonitorTimer();
       this.acp.bridgeClient.setFeishuPromptContext(session.sessionId, undefined);
       this.acp.bridgeClient.off("acp", onAcp);
     }

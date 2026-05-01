@@ -33,6 +33,7 @@ function createTestConfig(
     },
     bridge: {
       adminUserIds: [],
+      groupSessionScope: "per-user",
       maxSessionsPerUser: 10,
       sessionIdleTimeoutMs: 60_000,
       sessionStorePath: "/tmp/sessions.json",
@@ -48,7 +49,9 @@ function createTestConfig(
       experimentalLogToFile: false,
       experimentalLogFilePath: "/tmp/bridge.log",
       slotMessageLogEnabled: false,
+      sessionHistoryEnabled: true,
       showAcpAvailableCommands: false,
+      enableBangCommand: false,
       enableUpgradeCommand: false,
       upgradeAdmins: {
         openIds: new Set<string>(),
@@ -121,6 +124,7 @@ test("Non-Claude runtimes do not overwrite model state with an unknown selector 
   (runtime as any).connection = {
     async unstable_setSessionModel(): Promise<void> {},
   };
+  (runtime as any).initResult = {};
   (runtime as any).sessionModelStates.set("session-1", {
     currentModelId: "claude-opus-4-6",
     availableModels: [{ modelId: "claude-opus-4-6", name: "Claude Opus 4.6" }],
@@ -141,6 +145,7 @@ test("Non-Claude runtimes keep updating model state when setSessionModel uses a 
   (runtime as any).connection = {
     async unstable_setSessionModel(): Promise<void> {},
   };
+  (runtime as any).initResult = {};
   (runtime as any).sessionModelStates.set("session-1", {
     currentModelId: "claude-opus-4-6",
     availableModels: [
@@ -156,6 +161,30 @@ test("Non-Claude runtimes keep updating model state when setSessionModel uses a 
     availableModels: [
       { modelId: "claude-opus-4-6", name: "Claude Opus 4.6" },
       { modelId: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+    ],
+  });
+});
+
+test("Codex runtime enriches gpt-5.5 with effort selectors when ACP omits them", () => {
+  const handler = new EventEmitter() as any;
+  const runtime = new CodexAcpRuntime(createTestConfig("codex"), handler);
+
+  (runtime as any).updateSessionModelState("session-1", {
+    currentModelId: "gpt-5.5",
+    availableModels: [
+      { modelId: "gpt-5.5", name: "gpt-5.5" },
+      { modelId: "gpt-5.4/low", name: "gpt-5.4 (low)" },
+    ],
+  });
+
+  assert.deepEqual(runtime.getSessionModelState("session-1"), {
+    currentModelId: "gpt-5.5/medium",
+    availableModels: [
+      { modelId: "gpt-5.5/low", name: "gpt-5.5 (low)" },
+      { modelId: "gpt-5.5/medium", name: "gpt-5.5 (medium)" },
+      { modelId: "gpt-5.5/high", name: "gpt-5.5 (high)" },
+      { modelId: "gpt-5.5/xhigh", name: "gpt-5.5 (xhigh)" },
+      { modelId: "gpt-5.4/low", name: "gpt-5.4 (low)" },
     ],
   });
 });

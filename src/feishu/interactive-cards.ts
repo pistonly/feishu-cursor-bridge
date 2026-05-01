@@ -1,10 +1,8 @@
+import {
+  buildBackendDescriptionLines,
+  getBackendShortcut,
+} from "../acp/backend-metadata.js";
 import type { AcpBackend } from "../acp/runtime-contract.js";
-
-const BACKEND_SHORTCUTS: Partial<Record<AcpBackend, string>> = {
-  claude: "cc",
-  codex: "cx",
-  "codex-app-server": "cxs",
-};
 
 /**
  * 交互式卡片数据结构
@@ -76,13 +74,13 @@ export function buildWorkspaceWithBackendSelectCardMarkdown(
     for (const backend of opts.enabledBackends) {
       const isDefault = backend === opts.defaultBackend;
       const defaultMarker = isDefault ? " (默认)" : "";
-      const shortcut = BACKEND_SHORTCUTS[backend];
+      const shortcut = getBackendShortcut(backend);
       const shortcutNote = shortcut ? ` / \`-b ${shortcut}\`` : "";
       lines.push(`• \`--backend ${backend}\`${shortcutNote}${defaultMarker}`);
     }
 
     lines.push("");
-    lines.push("示例: `/new 1 -b cc --name my-project`");
+    lines.push("示例: `/new 1 -b cur --name my-project`");
   }
 
   return lines.join("\n");
@@ -110,16 +108,14 @@ export function buildWelcomeCardMarkdown(): string {
     "   • 发送 `/new <路径>` 使用自定义路径",
     "",
     "**2. 支持的后端:**",
-    "   • `cursor-official` - Cursor 官方 ACP 后端",
-    "   • `cursor-legacy` - 内嵌适配器后端",
-    "   • `claude` - Claude AI 后端",
-    "   • `codex` - Codex ACP 后端",
-    "   • `codex-app-server` - Codex app-server 后端",
+    ...buildBackendDescriptionLines("   • "),
     "",
     "**3. 命令示例:**",
+    "   • `/new 1 -b cur` - 使用第 1 个工作区和 Cursor 官方后端",
     "   • `/new 1 -b cc` - 使用第 1 个工作区和 Claude 后端",
     "   • `/new 1 -b cx` - 使用第 1 个工作区和 Codex ACP 后端",
     "   • `/new 1 -b cxs` - 使用第 1 个工作区和 Codex app-server 后端",
+    "   • `/new 1 -b gm` - 使用第 1 个工作区和 Gemini 后端",
     "   • `/new /path/to/project --name my-project` - 自定义路径并命名",
     "",
     "---",
@@ -150,6 +146,7 @@ export function buildQuickActionsHelp(): string {
     "**对话控制:**",
     "• `/stop` - 中断当前生成",
     "• `/reply` - 重发上一轮",
+    "• `/history` - 查看最近几条 prompt",
     "• `/model` - 查看/切换模型",
     "• `/mode` - 查看/切换模式",
     "",

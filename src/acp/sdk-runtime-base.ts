@@ -77,11 +77,17 @@ function formatTraceValue(value: unknown, maxLen = 6000): string {
 }
 
 export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
+  private static readonly STDERR_HISTORY_LIMIT = 20;
   readonly bridgeClient: FeishuBridgeClient;
   protected readonly config: Config;
   protected child: ChildProcess | null = null;
   protected connection: ClientSideConnection | null = null;
   protected initResult: InitializeResponse | null = null;
+  private ensureStartedPromise: Promise<void> | null = null;
+  private lastReadyErrorMessage: string | null = null;
+  private recentStderrLines: string[] = [];
+  private lastExitCode: number | null | undefined;
+  private lastExitSignal: NodeJS.Signals | null | undefined;
   private readonly sessionModeStates = new Map<string, AcpSessionModeState>();
   private readonly sessionModelStates = new Map<string, AcpSessionModelState>();
   private readonly sessionUsageStates = new Map<string, AcpSessionUsageState>();
@@ -302,6 +308,118 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
     };
   }
 
+  private rememberStderrLine(line: string): void {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    this.recentStderrLines.push(trimmed);
+    if (
+      this.recentStderrLines.length >
+      SdkAcpRuntimeBase.STDERR_HISTORY_LIMIT
+    ) {
+      this.recentStderrLines.splice(
+        0,
+        this.recentStderrLines.length - SdkAcpRuntimeBase.STDERR_HISTORY_LIMIT,
+      );
+    }
+  }
+
+  private formatRecentStderrSummary(): string | undefined {
+    if (this.recentStderrLines.length === 0) {
+      return undefined;
+    }
+    const summary = this.recentStderrLines
+      .slice(-4)
+      .map((line) => line.replace(/\s+/g, " ").trim())
+      .join(" | ");
+    if (!summary) {
+      return undefined;
+    }
+    return summary.length > 500 ? `${summary.slice(0, 500)}...` : summary;
+  }
+
+  private formatChildExitSummary(): string | undefined {
+    if (this.lastExitCode == null && this.lastExitSignal == null) {
+      return undefined;
+    }
+    const parts: string[] = [];
+    if (this.lastExitCode != null) {
+      parts.push(`exit code=${this.lastExitCode}`);
+    }
+    if (this.lastExitSignal) {
+      parts.push(`signal=${this.lastExitSignal}`);
+    }
+    return parts.length > 0 ? parts.join(", ") : undefined;
+  }
+
+  private buildStartupFailureDetail(error: unknown): string {
+    const base = error instanceof Error ? error.message : String(error);
+    const details = [base];
+    const exit = this.formatChildExitSummary();
+    const stderr = this.formatRecentStderrSummary();
+    if (exit) {
+      details.push(exit);
+    }
+    if (stderr) {
+      details.push(`stderr: ${stderr}`);
+    }
+    return details.join("；");
+  }
+
+  private formatBackendReadyError(): string {
+    if (this.lastReadyErrorMessage?.trim()) {
+      return `backend ${this.backend} 启动失败：${this.lastReadyErrorMessage.trim()}`;
+    }
+    if (this.connection && !this.initResult) {
+      return `backend ${this.backend} 正在启动或等待认证，暂未就绪。请稍后重试，或发送 /status 查看 backend 状态。`;
+    }
+    return `backend ${this.backend} 当前未连接。请稍后重试；若持续失败，请联系管理员检查服务状态或执行 /restart。`;
+  }
+
+  async ensureStarted(): Promise<void> {
+    if (this.connection && this.initResult) {
+      return;
+    }
+    if (this.ensureStartedPromise) {
+      return this.ensureStartedPromise;
+    }
+    this.ensureStartedPromise = (async () => {
+      if (!this.child) {
+        this.lastReadyErrorMessage = null;
+        this.lastExitCode = undefined;
+        this.lastExitSignal = undefined;
+        this.recentStderrLines = [];
+        await this.start();
+      }
+      try {
+        if (!this.initResult) {
+          await this.initializeAndAuth();
+        }
+        this.lastReadyErrorMessage = null;
+      } catch (error) {
+        const detail = this.buildStartupFailureDetail(error);
+        this.lastReadyErrorMessage = detail;
+        try {
+          await this.stop();
+        } catch {
+          // ignore secondary stop failures while already surfacing startup error
+        }
+        throw new Error(detail);
+      }
+    })().finally(() => {
+      this.ensureStartedPromise = null;
+    });
+    return this.ensureStartedPromise;
+  }
+
+  protected async requireReadyConnection(): Promise<ClientSideConnection> {
+    await this.ensureStarted();
+    const conn = this.connection;
+    if (!conn || !this.initResult) {
+      throw new Error(this.formatBackendReadyError());
+    }
+    return conn;
+  }
+
   protected updateSessionModelState(
     sessionId: string,
     rawModels: unknown,
@@ -309,7 +427,10 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
   ): void {
     const next = this.normalizeSessionModelState(rawModels);
     if (next) {
-      this.sessionModelStates.set(sessionId, next);
+      this.sessionModelStates.set(
+        sessionId,
+        this.transformSessionModelState(next),
+      );
     }
     if (traceSource) {
       this.logOfficialModelTrace(traceSource, sessionId, {
@@ -317,6 +438,12 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
         normalized: this.summarizeModelStateForTrace(next),
       });
     }
+  }
+
+  protected transformSessionModelState(
+    state: AcpSessionModelState,
+  ): AcpSessionModelState {
+    return state;
   }
 
   protected deleteSessionModelState(sessionId: string): void {
@@ -584,13 +711,17 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
       console.log(
         `[acp] ${spec.label} exited code=${code} signal=${signal}`,
       );
+      this.lastExitCode = code;
+      this.lastExitSignal = signal;
       this.child = null;
       this.connection = null;
+      this.initResult = null;
     });
 
     if (child.stderr) {
       const rl = readline.createInterface({ input: child.stderr });
       rl.on("line", (line) => {
+        this.rememberStderrLine(line);
         if (this.config.logLevel === "debug") {
           console.warn("[acp stderr]", line);
         } else if (line.toLowerCase().includes("error")) {
@@ -638,8 +769,7 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
     cwd?: string,
     options?: AcpNewSessionOptions,
   ): Promise<AcpNewSessionResult> {
-    const conn = this.connection;
-    if (!conn) throw new Error("ACP not started");
+    const conn = await this.requireReadyConnection();
     const dir = path.resolve(cwd ?? this.config.acp.workspaceRoot);
     const res = await conn.newSession(this.buildNewSessionParams(dir, options));
     this.updateSessionModeState(res.sessionId, (res as { modes?: unknown }).modes);
@@ -652,8 +782,7 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
   }
 
   async loadSession(sessionId: string, cwd: string): Promise<void> {
-    const conn = this.connection;
-    if (!conn) throw new Error("ACP not started");
+    const conn = await this.requireReadyConnection();
     if (!this.supportsLoadSession) {
       throw new Error("Agent does not advertise loadSession");
     }
@@ -689,8 +818,7 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
   }
 
   async prompt(sessionId: string, text: string): Promise<AcpPromptResult> {
-    const conn = this.connection;
-    if (!conn) throw new Error("ACP not started");
+    const conn = await this.requireReadyConnection();
     this.logOfficialModelTrace("prompt_begin", sessionId, {
       cached: this.summarizeModelStateForTrace(this.sessionModelStates.get(sessionId)),
     });
@@ -720,8 +848,7 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
   }
 
   async setSessionMode(sessionId: string, modeId: string): Promise<void> {
-    const conn = this.connection;
-    if (!conn) throw new Error("ACP not started");
+    const conn = await this.requireReadyConnection();
     await conn.setSessionMode({ sessionId, modeId });
     const current = this.sessionModeStates.get(sessionId);
     this.sessionModeStates.set(sessionId, {
@@ -731,8 +858,7 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
   }
 
   async setSessionModel(sessionId: string, modelId: string): Promise<void> {
-    const conn = this.connection;
-    if (!conn) throw new Error("ACP not started");
+    const conn = await this.requireReadyConnection();
     this.logOfficialModelTrace("set_model_begin", sessionId, {
       requestedModelId: modelId,
       cached: this.summarizeModelStateForTrace(this.sessionModelStates.get(sessionId)),
@@ -799,6 +925,7 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
       this.child.kill();
       this.child = null;
     }
+    this.ensureStartedPromise = null;
     this.connection = null;
     this.initResult = null;
     this.sessionModeStates.clear();

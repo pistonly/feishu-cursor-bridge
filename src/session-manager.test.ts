@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { BridgeAcpRuntime } from "./acp/runtime-contract.js";
+import type { AcpRuntimeResolver, BridgeAcpRuntime } from "./acp/runtime-contract.js";
 import { SessionManager } from "./session/manager.js";
 import { SessionStore, type PersistedSessionGroup } from "./session/store.js";
 
@@ -284,6 +284,47 @@ test("活跃 slot 的 ACP session 被上游清理后会自动重建并保留 CLI
   await waitForFlushes();
 });
 
+
+test("getActiveSession 支持显式跳过 availability probe 以避免额外 loadSession", async () => {
+  const storeFile = await createEmptyStoreFile();
+
+  const loadSessionCalls: string[] = [];
+  const acp: FakeAcpRuntime = {
+    supportsLoadSession: true,
+    supportsSetSessionMode: false,
+    supportsSetSessionModel: false,
+    async newSession(): Promise<{ sessionId: string }> {
+      return { sessionId: "acp-live" };
+    },
+    async loadSession(sessionId: string): Promise<void> {
+      loadSessionCalls.push(sessionId);
+    },
+    async cancelSession(): Promise<void> {},
+    async closeSession(): Promise<void> {},
+  };
+
+  const store = new SessionStore(storeFile);
+  const waitForFlushes = trackPendingFlushes(store);
+  const manager = new SessionManager(
+    acp as BridgeAcpRuntime,
+    store,
+    60_000,
+    { defaultWorkspaceRoot: WORKSPACE_ROOT, defaultBackend: "cursor-official" },
+  );
+
+  await manager.init();
+  await manager.createNewSlot(CHAT_ID, USER_ID, "p2p", WORKSPACE_ROOT, "cursor-official");
+
+  const session = await manager.getActiveSession(CHAT_ID, USER_ID, "p2p", undefined, {
+    skipAvailabilityProbe: true,
+  });
+
+  assert.ok(session);
+  assert.equal(session.sessionId, "acp-live");
+  assert.deepEqual(loadSessionCalls, []);
+  await waitForFlushes();
+});
+
 test("runtime 关闭主动探活时不会因 loadSession 探针误判而重建活跃 session", async () => {
   const storeFile = await createEmptyStoreFile();
 
@@ -328,6 +369,27 @@ test("runtime 关闭主动探活时不会因 loadSession 探针误判而重建�
   assert.deepEqual(loadSessionCalls, []);
   assert.deepEqual(newSessionCalls, [WORKSPACE_ROOT]);
   await waitForFlushes();
+});
+
+test("从 store 恢复时会跳过当前未启用的 backend", async () => {
+  const storePath = await createStoreFile(createPersistedCodexGroup());
+  const store = new SessionStore(storePath, "cursor-official");
+  const resolver: AcpRuntimeResolver = {
+    getEnabledBackends() {
+      return ["cursor-official"];
+    },
+    getRuntime(backend) {
+      throw new Error(`disabled backend should not be started: ${backend}`);
+    },
+  };
+  const manager = new SessionManager(resolver, store, 60_000, {
+    defaultWorkspaceRoot: WORKSPACE_ROOT,
+    defaultBackend: "cursor-official",
+  });
+  await manager.init();
+
+  const active = await manager.getActiveSession(CHAT_ID, USER_ID, "p2p");
+  assert.equal(active, null);
 });
 
 test("getSlot 可读取当前活跃 slot 或按名称读取指定 slot", async () => {
@@ -401,6 +463,7 @@ test("getSessionSnapshotLoaded 会在内存为空时从 store 恢复当前快照
   const storeFile = await createStoreFile(createPersistedGroup("cli-old"));
 
   const loadSessionCalls: string[] = [];
+  const cancelSessionCalls: string[] = [];
   const acp: FakeAcpRuntime = {
     supportsLoadSession: true,
     supportsSetSessionMode: false,
@@ -411,7 +474,9 @@ test("getSessionSnapshotLoaded 会在内存为空时从 store 恢复当前快照
     async loadSession(sessionId: string): Promise<void> {
       loadSessionCalls.push(sessionId);
     },
-    async cancelSession(): Promise<void> {},
+    async cancelSession(sessionId: string): Promise<void> {
+      cancelSessionCalls.push(sessionId);
+    },
     async closeSession(): Promise<void> {},
   };
 
@@ -435,8 +500,129 @@ test("getSessionSnapshotLoaded 会在内存为空时从 store 恢复当前快照
   assert.equal(snapshot.activeSlot.session.sessionId, "acp-old");
   assert.equal(snapshot.activeSlot.session.workspaceRoot, WORKSPACE_ROOT);
   assert.deepEqual(loadSessionCalls, ["acp-old"]);
+  assert.deepEqual(cancelSessionCalls, ["acp-old"]);
   assert.deepEqual(manager.getStats(), { active: 1, total: 1 });
   await waitForFlushes();
+});
+
+test("listKnownSessionsForShutdown 会返回 store 中当前已知 sessions", async () => {
+  const storeFile = await createEmptyStoreFile();
+
+  let createCount = 0;
+  const acp: FakeAcpRuntime = {
+    supportsLoadSession: false,
+    supportsSetSessionMode: false,
+    supportsSetSessionModel: false,
+    async newSession(): Promise<{ sessionId: string }> {
+      createCount += 1;
+      return { sessionId: `session-${createCount}` };
+    },
+    async loadSession(): Promise<void> {},
+    async cancelSession(): Promise<void> {},
+    async closeSession(): Promise<void> {},
+  };
+
+  const store = new SessionStore(storeFile);
+  const waitForFlushes = trackPendingFlushes(store);
+  const manager = new SessionManager(
+    acp as BridgeAcpRuntime,
+    store,
+    60_000,
+    { defaultWorkspaceRoot: WORKSPACE_ROOT, defaultBackend: "cursor-official" },
+  );
+
+  await manager.init();
+  await manager.createNewSlot(CHAT_ID, USER_ID, "p2p", WORKSPACE_ROOT, "cursor-official");
+  await manager.createNewSlot(CHAT_ID, USER_ID, "p2p", WORKSPACE_ROOT, "codex");
+
+  assert.deepEqual(manager.listKnownSessionsForShutdown(), [
+    { backend: "cursor-official", sessionId: "session-1" },
+    { backend: "codex", sessionId: "session-2" },
+  ]);
+  await waitForFlushes();
+});
+
+test("recordSlotTurn 会持久化并在重新加载后恢复 slot history", async () => {
+  const storeFile = await createEmptyStoreFile();
+
+  let createCount = 0;
+  const acp: FakeAcpRuntime = {
+    supportsLoadSession: false,
+    supportsSetSessionMode: false,
+    supportsSetSessionModel: false,
+    async newSession(): Promise<{ sessionId: string }> {
+      createCount += 1;
+      return { sessionId: `session-${createCount}` };
+    },
+    async loadSession(): Promise<void> {},
+    async cancelSession(): Promise<void> {},
+    async closeSession(): Promise<void> {},
+  };
+
+  const store = new SessionStore(storeFile);
+  const waitForFlushes = trackPendingFlushes(store);
+  const manager = new SessionManager(
+    acp as BridgeAcpRuntime,
+    store,
+    60_000,
+    { defaultWorkspaceRoot: WORKSPACE_ROOT, defaultBackend: "cursor-official" },
+  );
+
+  await manager.init();
+  await manager.createNewSlot(CHAT_ID, USER_ID, "p2p", WORKSPACE_ROOT, "cursor-official");
+  manager.recordSlotTurn(CHAT_ID, USER_ID, "p2p", 1, {
+    startedAt: 100,
+    finishedAt: 120,
+    prompt: "first prompt",
+    status: "succeeded",
+    reply: "first reply",
+  });
+  manager.recordSlotTurn(CHAT_ID, USER_ID, "p2p", 1, {
+    startedAt: 130,
+    finishedAt: 150,
+    prompt: "second prompt",
+    status: "error",
+    error: "failed",
+  });
+  await waitForFlushes();
+
+  const raw = JSON.parse(await fs.readFile(storeFile, "utf8")) as {
+    sessions?: Record<
+      string,
+      { slots?: Array<{ history?: Array<{ prompt?: string; status?: string; reply?: string; error?: string }> }> }
+    >;
+  };
+  assert.equal(raw.sessions?.[SESSION_KEY]?.slots?.[0]?.history?.length, 2);
+  assert.equal(raw.sessions?.[SESSION_KEY]?.slots?.[0]?.history?.[1]?.status, "error");
+  assert.equal(raw.sessions?.[SESSION_KEY]?.slots?.[0]?.history?.[0]?.reply, undefined);
+  assert.equal(raw.sessions?.[SESSION_KEY]?.slots?.[0]?.history?.[1]?.error, undefined);
+
+  const storeReloaded = new SessionStore(storeFile);
+  const waitForReloadedFlushes = trackPendingFlushes(storeReloaded);
+  const managerReloaded = new SessionManager(
+    acp as BridgeAcpRuntime,
+    storeReloaded,
+    60_000,
+    { defaultWorkspaceRoot: WORKSPACE_ROOT, defaultBackend: "cursor-official" },
+  );
+  await managerReloaded.init();
+  const slot = await managerReloaded.getSlot(CHAT_ID, USER_ID, "p2p", null);
+
+  assert.deepEqual(slot.history, [
+    {
+      startedAt: 100,
+      finishedAt: 120,
+      prompt: "first prompt",
+      status: "succeeded",
+    },
+    {
+      startedAt: 130,
+      finishedAt: 150,
+      prompt: "second prompt",
+      status: "error",
+    },
+  ]);
+  await waitForReloadedFlushes();
 });
 
 test("setActiveSessionPreferredModel 会把 codex 模型选择持久化到 store", async () => {
@@ -482,41 +668,22 @@ test("setActiveSessionPreferredModel 会把 codex 模型选择持久化到 store
   );
 });
 
-test("restoreGroupFromStore 会在 codex loadSession 后自动恢复已持久化的模型选择", async () => {
-  const storeFile = await createStoreFile(
-    createPersistedCodexGroup("gpt-5.3-codex/low"),
-  );
 
-  const loadSessionCalls: string[] = [];
-  const setModelCalls: Array<{ sessionId: string; modelId: string }> = [];
-  let currentModelId = "gpt-5.4/medium";
-  const acp = {
-    supportsLoadSession: true,
+
+test("setActiveSessionResumeLabel 会把最后一个问题写入当前 project 的 resume history", async () => {
+  const storeFile = await createEmptyStoreFile();
+
+  const acp: FakeAcpRuntime = {
+    supportsLoadSession: false,
     supportsSetSessionMode: false,
-    supportsSetSessionModel: true,
+    supportsSetSessionModel: false,
     async newSession(): Promise<{ sessionId: string }> {
-      throw new Error("should not create new session");
+      return { sessionId: "acp-live" };
     },
-    async loadSession(sessionId: string): Promise<void> {
-      loadSessionCalls.push(sessionId);
-    },
-    getSessionModelState(): { currentModelId: string; availableModels: Array<{ modelId: string }> } {
-      return {
-        currentModelId,
-        availableModels: [
-          { modelId: "gpt-5.4/medium" },
-          { modelId: "gpt-5.3-codex/low" },
-        ],
-      };
-    },
-    async setSessionModel(sessionId: string, modelId: string): Promise<void> {
-      setModelCalls.push({ sessionId, modelId });
-      currentModelId = modelId;
-    },
+    async loadSession(): Promise<void> {},
     async cancelSession(): Promise<void> {},
     async closeSession(): Promise<void> {},
-  } as FakeAcpRuntime &
-    Pick<BridgeAcpRuntime, "getSessionModelState" | "setSessionModel">;
+  };
 
   const store = new SessionStore(storeFile);
   const waitForFlushes = trackPendingFlushes(store);
@@ -524,27 +691,144 @@ test("restoreGroupFromStore 会在 codex loadSession 后自动恢复已持久化
     acp as BridgeAcpRuntime,
     store,
     60_000,
-    { defaultWorkspaceRoot: WORKSPACE_ROOT, defaultBackend: "codex" },
+    { defaultWorkspaceRoot: WORKSPACE_ROOT, defaultBackend: "cursor-official" },
   );
 
   await manager.init();
-  const snapshot = await manager.getSessionSnapshotLoaded(
+  await manager.createNewSlot(CHAT_ID, USER_ID, "p2p", WORKSPACE_ROOT, "cursor-official");
+  manager.setActiveSessionResumeLabel(
     CHAT_ID,
     USER_ID,
     "p2p",
+    "   这是   最后一个问题，带有\n换行和   多余空白   ",
+  );
+  await waitForFlushes();
+
+  const persisted = JSON.parse(await fs.readFile(storeFile, "utf8")) as {
+    version: number;
+    resumeHistory: Record<string, Array<{ sessionId: string; label?: string }>>;
+  };
+  assert.equal(persisted.version, 4);
+  assert.equal(
+    persisted.resumeHistory[WORKSPACE_ROOT]?.[0]?.sessionId,
+    "acp-live",
+  );
+  assert.equal(
+    persisted.resumeHistory[WORKSPACE_ROOT]?.[0]?.label,
+    "这是 最后一个问题，带有 换行和 多余空白",
+  );
+});
+
+test("rebindActiveSlotToResumeHistory 会切换 backend/session 并清空上一轮缓存", async () => {
+  const storeFile = await createEmptyStoreFile();
+
+  const acp: FakeAcpRuntime = {
+    supportsLoadSession: false,
+    supportsSetSessionMode: false,
+    supportsSetSessionModel: false,
+    async newSession(): Promise<{ sessionId: string }> {
+      return { sessionId: "acp-live" };
+    },
+    async loadSession(): Promise<void> {},
+    async cancelSession(): Promise<void> {},
+    async closeSession(): Promise<void> {},
+  };
+
+  const store = new SessionStore(storeFile);
+  const waitForFlushes = trackPendingFlushes(store);
+  const manager = new SessionManager(
+    {
+      getRuntime() {
+        return acp as BridgeAcpRuntime;
+      },
+    } as AcpRuntimeResolver,
+    store,
+    60_000,
+    { defaultWorkspaceRoot: WORKSPACE_ROOT, defaultBackend: "cursor-official" },
   );
 
-  assert.ok(snapshot);
-  assert.equal(snapshot.activeSlot.session.sessionId, "codex-old");
-  assert.equal(
-    snapshot.activeSlot.session.preferredModelId,
-    "gpt-5.3-codex/low",
+  await manager.init();
+  await manager.createNewSlot(CHAT_ID, USER_ID, "p2p", WORKSPACE_ROOT, "cursor-official", "main");
+  manager.setSlotLastTurn(CHAT_ID, USER_ID, "p2p", 1, "old prompt", "old reply");
+
+  const rebound = await manager.rebindActiveSlotToResumeHistory(
+    CHAT_ID,
+    USER_ID,
+    "p2p",
+    {
+      backend: "claude",
+      sessionId: "claude-old",
+      workspaceRoot: WORKSPACE_ROOT,
+      lastActiveAt: Date.now() - 10_000,
+      label: "历史问题",
+    },
   );
-  assert.deepEqual(loadSessionCalls, ["codex-old"]);
-  assert.deepEqual(setModelCalls, [
-    { sessionId: "codex-old", modelId: "gpt-5.3-codex/low" },
-  ]);
   await waitForFlushes();
+
+  assert.equal(rebound.slotIndex, 1);
+  assert.equal(rebound.name, "main");
+  assert.equal(rebound.session.backend, "claude");
+  assert.equal(rebound.session.sessionId, "claude-old");
+  assert.equal(rebound.lastPrompt, undefined);
+  assert.equal(rebound.lastReply, undefined);
+});
+
+test("群聊共享 session 模式下不同用户会复用同一组 session", async () => {
+  const storeFile = await createEmptyStoreFile();
+
+  let createCount = 0;
+  const acp: FakeAcpRuntime = {
+    supportsLoadSession: false,
+    supportsSetSessionMode: false,
+    supportsSetSessionModel: false,
+    async newSession(): Promise<{ sessionId: string }> {
+      createCount += 1;
+      return { sessionId: `group-session-${createCount}` };
+    },
+    async loadSession(): Promise<void> {},
+    async cancelSession(): Promise<void> {},
+    async closeSession(): Promise<void> {},
+  };
+
+  const store = new SessionStore(storeFile);
+  const waitForFlushes = trackPendingFlushes(store);
+  const manager = new SessionManager(
+    acp as BridgeAcpRuntime,
+    store,
+    60_000,
+    {
+      defaultWorkspaceRoot: WORKSPACE_ROOT,
+      defaultBackend: "cursor-official",
+      groupSessionScope: "shared",
+    },
+  );
+
+  await manager.init();
+  const created = await manager.createNewSlot(
+    CHAT_ID,
+    "admin-1",
+    "group",
+    WORKSPACE_ROOT,
+    "cursor-official",
+    "shared-main",
+  );
+  const reused = await manager.getActiveSession(CHAT_ID, "user-2", "group");
+  const listed = await manager.listSlots(CHAT_ID, "user-3", "group");
+  const snapshot = manager.getSessionSnapshot(CHAT_ID, "user-4", "group");
+  await waitForFlushes();
+
+  assert.equal(created.sessionId, "group-session-1");
+  assert.equal(reused?.sessionId, "group-session-1");
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0]?.slotIndex, 1);
+  assert.equal(listed[0]?.name, "shared-main");
+  assert.equal(snapshot?.sessionKey, CHAT_ID);
+  assert.equal(createCount, 1);
+
+  const persisted = JSON.parse(await fs.readFile(storeFile, "utf8")) as {
+    sessions: Record<string, PersistedSessionGroup>;
+  };
+  assert.deepEqual(Object.keys(persisted.sessions), [CHAT_ID]);
 });
 
 test("restoreGroupFromStore 会在 codex-app-server loadSession 后自动恢复已持久化的模型选择", async () => {

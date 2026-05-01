@@ -32,6 +32,7 @@ function createTestConfig(): Config {
     },
     bridge: {
       adminUserIds: [],
+      groupSessionScope: "per-user",
       maxSessionsPerUser: 10,
       sessionIdleTimeoutMs: 60_000,
       sessionStorePath: "/tmp/sessions.json",
@@ -47,7 +48,9 @@ function createTestConfig(): Config {
       experimentalLogToFile: false,
       experimentalLogFilePath: "/tmp/bridge.log",
       slotMessageLogEnabled: false,
+      sessionHistoryEnabled: false,
       showAcpAvailableCommands: false,
+      enableBangCommand: false,
       enableUpgradeCommand: false,
       upgradeAdmins: {
         openIds: new Set<string>(),

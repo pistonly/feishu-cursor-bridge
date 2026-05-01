@@ -55,8 +55,7 @@
   - `shell`
   - `statusline`
   - `update-cli-config`
-  - `memory-summary`
-  - `memory-summarizer`
+  - `memory-checkpoint`
 
 ### `/compact`
 
@@ -87,8 +86,7 @@
 - `available_commands_update` 里同样没有 `summary` / `summarize`
 - 当前环境下与“summary”最接近的仅有：
   - `simplify`：内置命令，含义是代码清理/复用检查，不是会话摘要
-  - `memory-summary`：`user skill`
-  - `memory-summarizer`：`user skill`
+  - `memory-checkpoint`：`user skill`
 
 ### `/summary`
 
@@ -115,7 +113,7 @@
 - 官方 backend 宣告了 `loadSession: true`，但对刚创建 session 的恢复行为与预期不完全一致，需要额外验证历史真实 session 的恢复路径
 - 官方 backend 没有明确宣告 `supportsSetMode` / `supportsSetModel`，但实测两者可用
 - 官方 backend 当前宣告的 slash/skills 列表里没有 `compact`、`clear`、`summary`、`summarize`
-- `memory-summary` / `memory-summarizer` 是环境里的 user skill，不是 official ACP 原生命令
+- `memory-checkpoint` 是环境里的 user skill，不是 official ACP 原生命令
 
 ## 当前判断
 

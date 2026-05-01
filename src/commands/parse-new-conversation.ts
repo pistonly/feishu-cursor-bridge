@@ -1,19 +1,6 @@
+import { COMMAND_BACKEND_ALIAS_MAP, parseBackendAlias } from "../acp/backend-metadata.js";
 import { parseShellLikeArgs } from "../config/index.js";
 import type { AcpBackend } from "../acp/runtime-contract.js";
-
-const NEW_COMMAND_BACKEND_ALIASES: Record<string, AcpBackend> = {
-  official: "cursor-official",
-  "cursor-official": "cursor-official",
-  legacy: "cursor-legacy",
-  "cursor-legacy": "cursor-legacy",
-  claude: "claude",
-  cc: "claude",
-  codex: "codex",
-  cx: "codex",
-  "codex-app-server": "codex-app-server",
-  "codex-app": "codex-app-server",
-  cxs: "codex-app-server",
-};
 
 type NewCommandCommon = {
   backend?: AcpBackend;
@@ -87,10 +74,15 @@ export type NewConversationCommand =
   | { kind: "close"; target: number | string }
   | { kind: "whoami" }
   | { kind: "sessions" }
-  | { kind: "resume" }
+  | { kind: "history"; count?: number; invalidUsage?: boolean }
+  | ({ kind: "resume"; target: number | string | null } & NewCommandCommon)
   | { kind: "restart"; force: boolean; invalidUsage?: boolean }
   | { kind: "update"; force: boolean; invalidUsage?: boolean }
   | { kind: "upgrade"; force: boolean; invalidUsage?: boolean };
+
+function parseSlotTargetToken(arg: string): number | string {
+  return /^\d+$/.test(arg) ? parseInt(arg, 10) : arg;
+}
 
 export function parseNewConversationCommand(
   content: string,
@@ -113,6 +105,7 @@ export function parseNewConversationCommand(
     cmd !== "mode" &&
     cmd !== "sessions" &&
     cmd !== "session" &&
+    cmd !== "history" &&
     cmd !== "resume" &&
     cmd !== "restart" &&
     cmd !== "update" &&
@@ -123,7 +116,48 @@ export function parseNewConversationCommand(
 
   if (cmd === "whoami") return { kind: "whoami" };
   if (cmd === "sessions" || cmd === "session") return { kind: "sessions" };
-  if (cmd === "resume") return { kind: "resume" };
+  if (cmd === "history") {
+    if (tokens.length === 1) return { kind: "history" };
+    if (tokens.length === 2 && /^\d+$/.test(tokens[1]!)) {
+      const count = parseInt(tokens[1]!, 10);
+      return count >= 1
+        ? { kind: "history", count }
+        : { kind: "history", count, invalidUsage: true };
+    }
+    return { kind: "history", invalidUsage: true };
+  }
+  if (cmd === "resume") {
+    const extracted = extractResumeFlags(tokens.slice(1));
+    const resumeCommandMeta = extracted.invalidBackend
+      ? { invalidUsage: true as const, invalidBackend: extracted.invalidBackend }
+      : {};
+    if (extracted.backend) {
+      if (extracted.remainingTokens.length !== 1) {
+        return {
+          kind: "resume",
+          target: extracted.remainingTokens[0] ?? null,
+          backend: extracted.backend,
+          invalidUsage: true,
+          ...resumeCommandMeta,
+        };
+      }
+      return {
+        kind: "resume",
+        target: extracted.remainingTokens[0] ?? null,
+        backend: extracted.backend,
+        ...resumeCommandMeta,
+      };
+    }
+    if (extracted.remainingTokens.length === 0) {
+      return { kind: "resume", target: null, ...resumeCommandMeta };
+    }
+    const arg = extracted.remainingTokens[0];
+    return {
+      kind: "resume",
+      target: /^\d+$/.test(arg) ? parseInt(arg, 10) : arg,
+      ...resumeCommandMeta,
+    };
+  }
   if (cmd === "restart" || cmd === "update" || cmd === "upgrade") {
     return parseMaintenanceCommand(cmd, tokens.slice(1));
   }
@@ -135,7 +169,7 @@ export function parseNewConversationCommand(
   if (cmd === "switch" || cmd === "reply") {
     if (tokens.length === 1) return { kind: cmd, target: null };
     const arg = tokens[1];
-    return { kind: cmd, target: /^\d+$/.test(arg) ? parseInt(arg, 10) : arg };
+    return { kind: cmd, target: parseSlotTargetToken(arg) };
   }
 
   if (cmd === "rename") {
@@ -146,10 +180,9 @@ export function parseNewConversationCommand(
       return { kind: "rename", target: null, name: tokens[1] };
     }
     const arg = tokens[1];
-    const num = parseInt(arg, 10);
     return {
       kind: "rename",
-      target: isNaN(num) ? arg : num,
+      target: parseSlotTargetToken(arg),
       name: tokens.slice(2).join(" ").trim(),
     };
   }
@@ -160,8 +193,7 @@ export function parseNewConversationCommand(
     }
     const arg = tokens[1];
     if (arg.toLowerCase() === "all") return { kind: "close", target: "all" };
-    const num = parseInt(arg, 10);
-    return { kind: "close", target: isNaN(num) ? arg : num };
+    return { kind: "close", target: parseSlotTargetToken(arg) };
   }
 
   if (tokens.length === 1) return { kind: "new", variant: "list" };
@@ -239,9 +271,7 @@ export function parseNewConversationCommand(
 }
 
 function normalizeBackend(raw: string | undefined): AcpBackend | undefined {
-  const normalized = raw?.trim().toLowerCase();
-  if (!normalized) return undefined;
-  return NEW_COMMAND_BACKEND_ALIASES[normalized];
+  return parseBackendAlias(raw, COMMAND_BACKEND_ALIAS_MAP);
 }
 
 function extractNewFlags(tokens: string[]): {
@@ -289,6 +319,44 @@ function extractNewFlags(tokens: string[]): {
     }
   }
   return { name, backend, invalidBackend, remainingTokens: remaining };
+}
+
+function extractResumeFlags(tokens: string[]): {
+  backend: AcpBackend | undefined;
+  invalidBackend: string | undefined;
+  remainingTokens: string[];
+} {
+  const remaining: string[] = [];
+  let backend: AcpBackend | undefined;
+  let invalidBackend: string | undefined;
+  let i = 0;
+  while (i < tokens.length) {
+    const tok = tokens[i];
+    const tokLc = tok.toLowerCase();
+    if ((tokLc === "--backend" || tokLc === "-b") && i + 1 < tokens.length) {
+      const next = tokens[i + 1];
+      const normalized = normalizeBackend(next);
+      if (normalized) {
+        backend = normalized;
+      } else {
+        invalidBackend ??= next;
+      }
+      i += 2;
+    } else if (tokLc.startsWith("--backend=") || tokLc.startsWith("-b=")) {
+      const value = tokLc.startsWith("-b=") ? tok.slice(3) : tok.slice("--backend=".length);
+      const normalized = normalizeBackend(value);
+      if (normalized) {
+        backend = normalized;
+      } else {
+        invalidBackend ??= value;
+      }
+      i += 1;
+    } else {
+      remaining.push(tok);
+      i += 1;
+    }
+  }
+  return { backend, invalidBackend, remainingTokens: remaining };
 }
 
 function parseMaintenanceCommand(

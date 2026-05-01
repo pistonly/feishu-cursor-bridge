@@ -1,7 +1,11 @@
 import "dotenv/config";
 import { spawn } from "node:child_process";
 import { loadConfig } from "../config/index.js";
-import { UpgradeResultStore, truncateOutputTail } from "./upgrade-result-store.js";
+import {
+  appendOutputTail,
+  UpgradeResultStore,
+  truncateOutputTail,
+} from "./upgrade-result-store.js";
 
 async function main() {
   const attemptId = process.argv[2]?.trim();
@@ -41,12 +45,12 @@ async function main() {
     },
   );
 
-  let output = "";
+  let outputTail = "";
   child.stdout.on("data", (chunk) => {
-    output += String(chunk);
+    outputTail = appendOutputTail(outputTail, String(chunk)) ?? "";
   });
   child.stderr.on("data", (chunk) => {
-    output += String(chunk);
+    outputTail = appendOutputTail(outputTail, String(chunk)) ?? "";
   });
 
   const result = await new Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
@@ -66,7 +70,7 @@ async function main() {
       finishedAt: Date.now(),
       exitCode: 0,
       signal: result.signal ?? undefined,
-      outputTail: truncateOutputTail(output),
+      outputTail: truncateOutputTail(outputTail),
     });
   } else {
     store.setAttempt({
@@ -79,7 +83,7 @@ async function main() {
         result.signal != null
           ? `Upgrade runner terminated by signal ${result.signal}`
           : `Upgrade exited with code ${result.exitCode ?? "unknown"}`,
-      outputTail: truncateOutputTail(output),
+      outputTail: truncateOutputTail(outputTail),
     });
   }
   await store.flush();

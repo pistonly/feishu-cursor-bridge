@@ -1,6 +1,6 @@
 # 飞书端支持的命令
 
-本文说明由 **飞书-Cursor 桥接服务**（`src/bridge/bridge.ts`）直接识别并处理的命令。其它以 `/` 开头的文本若未命中下表，会作为普通对话交给 Cursor Agent（`vendor/cursor-agent-acp`），行为与 Cursor 客户端内类似。**例外**：首条非空行以 `/topic` 开头的消息会被桥接直接忽略，不交给 Agent（见下文）。
+本文说明由 **飞书-Cursor 桥接服务**（`src/bridge/bridge.ts`）直接识别并处理的命令。其它以 `/` 开头的文本若未命中下表，会作为普通对话交给 Cursor Agent（`vendor/cursor-agent-acp`），行为与 Cursor 客户端内类似。额外地，若启用了 bridge 内置终端功能，则以 `!` / `！` 开头的消息会直接在 bridge 宿主机执行本地 shell 命令。**例外**：首条非空行以 `/topic` 开头的消息会被桥接直接忽略，不交给 Agent（见下文）。
 
 补充说明：在 `codex` session 中，`/compact`、`/clear` 都**不是 bridge 内置命令**，而是未命中后按普通 prompt 透传给 Codex backend。根据 2026-04-15 的真实探针，`/compact` 是 `codex-acp` 明确宣告的命令；`/clear` 当前环境下会表现出“清空上下文”的效果，但不是 `codex-acp` 已宣告的稳定命令。详见 `docs/codex-backend-notes.md`。
 
@@ -15,13 +15,15 @@
 | **私聊** | 直接发送命令或消息即可。 |
 | **群聊** | 必须先 **@机器人**，再输入命令或 `@机器人 + 内容`；命令必须紧跟在 @ 之后，且整条消息以 `/` 开头才会被识别为命令（与实现一致）。 |
 | **「双人」群** | 群内仅一名普通用户且仅一名机器人时，可不 @，直接发消息（与私聊类似）。 |
-| **话题群** | 不同话题（`thread_id`）下 **session 槽位相互隔离**，与主楼消息不共享；`/sessions`、`/switch` 等仅在当前话题内生效。 |
+| **话题群** | 不同话题（`thread_id`）下 **session 槽位相互隔离**，与主楼消息不共享；`/sessions`、`/switch` 等仅在当前话题内生效。即使启用群共享 session，也只会共享到当前话题，不会跨话题合并。 |
 
 ## 多 Session 管理
 
-同一用户在同一聊天中可以同时持有**多个** session（最多 5 个），每个 session 对应一个独立的 Cursor Agent 上下文与工作区。可以在多个 session 之间自由切换，切走的 session 保持 ACP 连接，不会被关闭。
+默认情况下，同一用户在同一聊天中可以同时持有**多个** session（最多 5 个），每个 session 对应一个独立的 Cursor Agent 上下文与工作区。可以在多个 session 之间自由切换，切走的 session 保持 ACP 连接，不会被关闭。
 
-此外，同一飞书用户**跨所有私聊、群、话题**的存活 session 总数有默认上限（**10**，可用环境变量 `BRIDGE_MAX_SESSIONS_PER_USER` 调整；设为 `0` 表示不限制），与「单聊天最多 5 个」是两层独立限制。
+若设置 `BRIDGE_GROUP_SESSION_SCOPE=shared`，则群聊或话题内所有成员共享同一组 session 槽位；此时 `/new`、`/switch`、`/close`、`/rename`、`/resume`、`/mode`、`/model`、`/stop` 等 session 管理命令仅 `BRIDGE_ADMIN_USER_IDS` 中的管理员可用，普通成员仍可继续向当前共享 session 发普通消息。
+
+此外，同一飞书用户**跨所有私聊、按用户隔离的群/话题**的存活 session 总数有默认上限（**10**，可用环境变量 `BRIDGE_MAX_SESSIONS_PER_USER` 调整；设为 `0` 表示不限制），与「单聊天最多 5 个」是两层独立限制。共享群 session 不占用创建者的个人配额。
 
 ### Session 标识
 
@@ -64,6 +66,8 @@
 
 **作用**：在当前聊天下**新建一个 session** 并自动切换到它，旧 session 保持连接。工作区须落在环境变量 **`BRIDGE_WORK_ALLOWLIST`**（兼容 `BRIDGE_WORK_ALLOWLIST`（兼容 `CURSOR_WORK_ALLOWLIST`）） 配置的允许根之下。
 
+若当前群聊启用了 `BRIDGE_GROUP_SESSION_SCOPE=shared`，则只有管理员可以执行 `/new`；一旦创建成功，该群/该话题内所有成员都会共享这组 session。
+
 每个新建 session 现在都可以显式指定 backend；**backend 一旦绑定到该 session，在该 session 生命周期内保持不变**。如果不指定，则使用服务端配置的默认 backend。
 
 **用法**：
@@ -85,7 +89,7 @@
 /new /home/you/project
 /new ~/projects/my-app
 /new "/path/with spaces/in name"
-/new /home/you/project --backend cursor-official
+/new /home/you/project -b cur
 /new ~/projects/my-app -b legacy
 /new "/path/with spaces/in name" -b claude
 ```
@@ -95,7 +99,7 @@
 ```text
 /new 1
 /new 2
-/new 1 --backend cursor-official
+/new 1 -b cur
 /new 2 -b cc
 ```
 
@@ -105,24 +109,28 @@
 /new --name backend
 /new ~/projects/api --name api
 /new 1 --name frontend
-/new 1 --backend cursor-official --name frontend
+/new 1 -b cur --name frontend
 /new ~/projects/api -b legacy --name api
 /new 2 -b cx --name review
 ```
 
 指定 backend 的格式：
 
+<!-- backend-command-syntax:start -->
 ```text
-/new <路径> --backend <cursor-official|cursor-legacy|claude|codex>
-/new <序号> --backend <cursor-official|cursor-legacy|claude|codex>
-/new <路径> -b <official|legacy|claude|codex|cc|cx>
-/new <序号> -b <official|legacy|claude|codex|cc|cx>
+/new <路径> --backend <cursor-official|cursor-legacy|claude|codex|codex-app-server|gemini>
+/new <序号> --backend <cursor-official|cursor-legacy|claude|codex|codex-app-server|gemini>
+/new <路径> -b <official|cur|legacy|claude|codex|cc|cx|codex-app-server|codex-app|cxs|gemini|gm>
+/new <序号> -b <official|cur|legacy|claude|codex|cc|cx|codex-app-server|codex-app|cxs|gemini|gm>
 ```
+<!-- backend-command-syntax:end -->
 
 说明：
 
 - `-b` 是 `--backend` 的简写。
-- backend 值支持完整名称，也支持常用简写：`cc` = `claude`、`cx` = `codex`。
+<!-- backend-alias-guide:start -->
+- backend 值支持完整名称，也支持常用简写：`cur` = `cursor-official`、`cc` = `claude`、`cx` = `codex`、`cxs` = `codex-app-server`、`gm` = `gemini`；`legacy` 继续使用全写，`official` 仍兼容。
+<!-- backend-alias-guide:end -->
 - `--backend` 仅对**真正创建 session** 的 `/new <路径>`、`/new <序号>` 生效。
 - `/new`、`/new list`、`/new add-list`、`/new remove-list` 不创建 session，因此不使用 `--backend`。
 - 当前服务只允许选择启动时启用的 backend；若某 backend 未启用，机器人会直接报错。
@@ -154,6 +162,8 @@
 - backend
 - 工作区路径
 - 若当前 backend 支持，已知的当前模式
+
+在群共享模式下，这里列出的就是当前群/当前话题所有成员共同使用的 session 槽位；普通成员也可查看。
 
 ---
 
@@ -200,7 +210,61 @@
 
 ---
 
-### 5. 中断当前回复（`/stop` / `/cancel`）
+### 5. 恢复历史 session（`/resume`）
+
+```text
+/resume
+/resume 0
+/resume <序号>
+/resume <sessionId>
+```
+
+**作用**：按当前活跃 session 的 `workspaceRoot`（project）列出并恢复该 project 下已持久化的历史 session。
+
+- `/resume`：列出当前 project 可恢复的历史 session
+- `/resume 0`：保留旧行为，对**当前 session** 执行一次 ACP `session/load`
+- `/resume <序号>`：恢复列表中的第 N 条历史 session
+- `/resume <sessionId>`：按精确 `sessionId` 恢复指定历史 session
+
+**列表内容**：
+
+- backend
+- 真实 `sessionId`
+- 最近一次问题生成的标签（若已有）
+- 最近活跃时间
+
+**持久化规则**：
+
+- 以 project（规范化后的 `workspaceRoot`）为维度保存
+- 每个 project 最多保留 10 条历史 session
+- 标签来自该 session 最近一次成功对话的用户原始问题，会做单行化与长度裁剪
+
+**恢复行为**：
+
+- 恢复时会调用目标 backend 的 ACP `session/load`
+- 成功后，当前活跃槽位会重绑到该历史 session
+- 若目标记录来自不同 backend，当前槽位也会切换到对应 backend
+- 重绑后会清空该槽位缓存的上一轮 `/reply` 内容，避免误展示旧缓存
+
+**失败场景**：
+
+- 当前没有活跃 session：会提示先创建 session
+- 目标 backend 未宣告 `loadSession`：会拒绝恢复
+- 指定序号或 `sessionId` 不存在：会提示先发送 `/resume` 查看列表
+- `loadSession` 失败：当前槽位保持不变
+
+**示例**：
+
+```text
+/resume
+/resume 0
+/resume 1
+/resume claude-session-abc123
+```
+
+---
+
+### 6. 中断当前回复（`/stop` / `/cancel`）
 
 ```text
 /stop
@@ -209,20 +273,29 @@
 
 **作用**：打断**当前活跃 session（当前槽位）**正在进行中的模型回复（桥接对该 ACP session 调用 SDK `cancel`，即 **`session/cancel` 通知**）。**不会**关闭 session，之后可照常发消息继续对话。
 
-仅作用于**当前活跃槽位**：其它槽位若在并行生成，需先 `/switch` 到对应槽位再发 `/stop`。若当前活跃槽位没有进行中的生成，会提示并说明可先切换槽位。
+若当前群聊启用了 `BRIDGE_GROUP_SESSION_SCOPE=shared`，则 `/stop` / `/cancel` 仅管理员可执行。
 
-与 `/close` 的区别：`/close` 会关闭并移除 session；本命令仅中断本轮输出。
+当同一槽位已经在生成回复时，bridge 还会为该槽位保留**最多 1 条排队消息**：
+
+- 新消息到来时，会提示“已加入排队”
+- 如果该槽位原本已有排队消息，则会被**最新一条替换**
+- 当前回复结束后，这条排队消息会自动开始处理
+- `/stop` / `/cancel` 除了中断当前生成外，也会**一并撤销当前槽位的排队消息**；若当前没有生成、但有排队消息，也会只撤销排队消息
+
+仅作用于**当前活跃槽位**：其它槽位若在并行生成，需先 `/switch` 到对应槽位再发 `/stop`。若当前活跃槽位既没有进行中的生成，也没有排队消息，会给出提示说明。
+
+与 `/close` 的区别：`/close` 会关闭并移除 session；本命令仅中断本轮输出 / 撤销排队。
 
 ---
 
-### 6. 关闭 session（`/close`）
+### 7. 关闭 session（`/close`）
 
 ```text
 /close <编号或名称>
 /close all
 ```
 
-关闭并移除指定的 session（发送 ACP cancel + close），释放资源。若关闭后该聊天/话题下已无任何 session，会从持久化中移除该 topic，**释放同一用户全局 session 配额**；之后在该处发消息会新建 session。多槽时仅移除指定槽；只剩一个槽时关闭即整 topic 清空（与闲置过期清理后效果类似）。
+关闭并移除指定的 session（发送 ACP cancel + close），释放资源。若关闭后该聊天/话题下已无任何 session，会从持久化中移除该 topic，**释放同一用户全局 session 配额**；之后在该处发消息会新建 session。多槽时仅移除指定槽；只剩一个槽时关闭即整 topic 清空（与闲置过期清理后效果类似）。若当前群聊启用了 `BRIDGE_GROUP_SESSION_SCOPE=shared`，则 `/close` / `/close all` 仅管理员可执行。
 
 `/close all` 会一次性关闭**当前聊天/话题组内**的全部 slot，效果等同于对该组内每个 session 逐个执行 `/close`，便于快速腾出全局配额。关键字 `all` 为保留用法；若某 slot 的显示名称恰好为 `all`，请用编号关闭（如 `/close 2`）。
 
@@ -236,7 +309,7 @@
 
 ---
 
-### 7. 重命名 session（`/rename`）
+### 8. 重命名 session（`/rename`）
 
 ```text
 /rename <新名字>
@@ -260,19 +333,19 @@
 
 ---
 
-### 8. 切换模式（`/mode`）
+### 9. 切换模式（`/mode`）
 
 ```text
 /mode
 /mode <模式ID>
 ```
 
-**作用**：`cursor-official` / `cursor-legacy` / `claude` / `codex` backend 下，查看或切换**当前活跃 session** 的 ACP mode，**不会**把整条消息再发给大模型。
+**作用**：`cursor-official` / `cursor-legacy` / `claude` / `codex` / `gemini` backend 下，查看或切换**当前活跃 session** 的 ACP mode，**不会**把整条消息再发给大模型。
 
 backend 差异：
 
-- `cursor-official` / `cursor-legacy` / `claude` / `codex` 不带参数时：返回当前 session 已知的可用模式列表与当前模式。
-- `cursor-official` / `cursor-legacy` / `claude` / `codex` 带参数时：调用 ACP `session/set_mode` 切换当前 session 模式。
+- `cursor-official` / `cursor-legacy` / `claude` / `codex` / `gemini` 不带参数时：返回当前 session 已知的可用模式列表与当前模式。
+- `cursor-official` / `cursor-legacy` / `claude` / `codex` / `gemini` 带参数时：调用 ACP `session/set_mode` 切换当前 session 模式。
 
 **示例**：
 
@@ -290,7 +363,7 @@ backend 差异：
 
 ---
 
-### 9. 通过飞书发文件（`/fileback`）
+### 10. 通过飞书发文件（`/fileback`）
 
 ```text
 /fileback <任务说明>
@@ -307,7 +380,41 @@ backend 差异：
 
 ---
 
-### 10. 查询当前用户 ID（`/whoami`）
+### 11. Bridge 内置终端命令（`!<shell 命令>`）
+
+```text
+!pwd
+!git status
+！npm test
+```
+
+**作用**：由 bridge 直接在**当前活跃 session 的工作区**执行本地 shell 命令；**不会**把整条消息发给 ACP backend / Agent。
+
+**安全边界**：
+
+- 默认开启；可设置 `BRIDGE_ENABLE_BANG_COMMAND=false` 关闭
+- 启用后仍**仅 `BRIDGE_ADMIN_USER_IDS` 中的管理员可用**
+- 若未配置 `BRIDGE_ADMIN_USER_IDS`，即使开关已打开也会拒绝执行
+
+**执行行为**：
+
+- 工作目录：当前活跃 session 的 `workspaceRoot`
+- shell：bridge 进程环境中的 `SHELL`；若未设置则回退 `/bin/sh`
+- 当前实现仅支持**一次性非交互命令**
+- 单条命令最长执行 **60 秒**；超时后 bridge 会终止该进程
+- 若输出过长，仅保留 `stdout` / `stderr` 的**末尾部分**
+
+**与普通对话的关系**：
+
+- 这是 **bridge-native** 能力，不依赖 ACP `terminal/*`
+- 它绕过 ACP 权限问询，因此桥接默认要求管理员身份
+- 若当前槽位仍有 ACP 回复在进行或排队，bridge 会拒绝执行，并提示先等待完成或发送 `/stop`
+
+**前提**：必须已有活跃 session；若当前聊天/话题还没有 session，会提示先 `/new`
+
+---
+
+### 12. 查询当前用户 ID（`/whoami`）
 
 ```text
 /whoami
@@ -321,7 +428,7 @@ backend 差异：
 
 ---
 
-### 11. 从 GitHub 升级（`/upgrade`）
+### 13. 从 GitHub 升级（`/upgrade`）
 
 ```text
 /upgrade
@@ -339,7 +446,7 @@ backend 差异：
 **权限与前提**：
 
 - 默认关闭；需先设置 `BRIDGE_ENABLE_UPGRADE_COMMAND=true`。
-- 仅允许命中 `BRIDGE_UPGRADE_ADMIN_OPEN_IDS` / `BRIDGE_UPGRADE_ADMIN_USER_IDS` / `BRIDGE_UPGRADE_ADMIN_UNION_IDS` 任一 allowlist 的飞书管理员触发。
+- 默认继承 `BRIDGE_ADMIN_USER_IDS`；若显式配置了 `BRIDGE_UPGRADE_ADMIN_OPEN_IDS` / `BRIDGE_UPGRADE_ADMIN_USER_IDS` / `BRIDGE_UPGRADE_ADMIN_UNION_IDS` 中任一项，则 `/upgrade` 仅允许命中升级专用 allowlist 的管理员触发。
 - 当前 bridge 进程需由 launchd / systemd 托管；否则会拒绝执行，避免升级后无法自动恢复。
 - 若已有上一轮升级处于 `queued` / `running`，会拒绝重复触发。
 
@@ -349,7 +456,7 @@ backend 差异：
 
 ---
 
-### 12. 状态（`/status`）
+### 14. 状态（`/status`）
 
 **等价命令**：`/status`、`/状态`
 
@@ -363,7 +470,7 @@ backend 差异：
 - 当前活跃 session 的 CLI resume ID（若该 backend 暴露或缓存了该字段）
 - 若当前 backend 为 `cursor-official`，默认显示当前 Official ACP `sessionId`
 - 若当前 backend 为 `claude`，默认显示当前 Claude 恢复会话 id（新建 session 时会回退为当前 ACP `sessionId`）
-- 若当前 backend 为 `codex`，额外显示当前 ACP `sessionId`
+- 若当前 backend 为 `codex` 或 `gemini`，默认显示当前 ACP `sessionId`
 
 **增强信息**：当服务环境 **`BRIDGE_DEBUG=true`** 时，同一条回复中会追加调试信息，包括：
 
@@ -376,7 +483,7 @@ backend 差异：
 
 ---
 
-### 13. 切换模型（`/model`）
+### 15. 切换模型（`/model`）
 
 **格式**：
 
@@ -386,7 +493,7 @@ backend 差异：
 /model <序号>
 ```
 
-**作用**：`cursor-legacy` / `cursor-official` / `claude` / `codex` backend 下，bridge 直接调用 ACP `session/set_model` 切换**当前活跃 session** 的模型，**不会**把整条消息再发给大模型（避免仅出现「解释 /model」类回复）。
+**作用**：`cursor-legacy` / `cursor-official` / `claude` / `codex` / `gemini` backend 下，bridge 直接调用 ACP `session/set_model` 切换**当前活跃 session** 的模型，**不会**把整条消息再发给大模型（避免仅出现「解释 /model」类回复）。
 
 **示例**：
 
@@ -401,11 +508,11 @@ backend 差异：
 - 默认 `cursor-official` backend 下，以**当前 ACP session 返回的 `availableModels`** 为准，而不是 `cursor-agent models` 的 alias 列表。
 - 机器人返回列表时，反引号中的值就是可直接提交给 ACP `session/set_model` 的**精确 selector**；若带 `[]` 或其它参数后缀，必须完整带上。
 - 只要 `/model` 由 bridge 接管，列表都会带 `【n】` 序号，可直接使用 `/model <序号>`；桥接会按当前 session 的可用模型列表做 1-based 解析。
-- `cursor-legacy` / `cursor-official` / `claude` / `codex` backend 下，若当前 session 尚未拿到模型状态，机器人会回退到基础用法提示；此时请先让该 slot 建立/恢复 session 并完成一轮交互，再使用模型 id、selector 或序号。
+- `cursor-legacy` / `cursor-official` / `claude` / `codex` / `gemini` backend 下，若当前 session 尚未拿到模型状态，机器人会回退到基础用法提示；此时请先让该 slot 建立/恢复 session 并完成一轮交互，再使用模型 id、selector 或序号。
 
 未带参数时：
 
-- `cursor-legacy` / `cursor-official` / `claude` / `codex` backend 下，若当前 session 已拿到模型状态，机器人会直接返回可用模型列表与当前模型；否则回退到基础用法提示。
+- `cursor-legacy` / `cursor-official` / `claude` / `codex` / `gemini` backend 下，若当前 session 已拿到模型状态，机器人会直接返回可用模型列表与当前模型；否则回退到基础用法提示。
 
 ---
 
@@ -427,7 +534,7 @@ backend 差异：
 
 ## 非命令消息
 
-不以以上**桥接内置命令**（含单独 `/` / `／` 唤起命令列表）形式匹配的文本，在**当前聊天/话题下已有活跃 session** 时进入正常对话流程（流式卡片、Cursor Agent 等）。**若无 session**，机器人会提示先用 `/new list` 与 `/new <序号或路径>` 创建，并说明可用 `/commands`、`/help` 或只发 `/`（全角 `／` 亦可）查看全部桥接命令。若适配器在 Cursor 侧注册了 `/plan` 等斜杠命令，通常需**整段消息**以 `/命令` 开头发送；具体以 `cursor-agent-acp` 与 Cursor CLI 行为为准，本桥接不对其做单独解析。
+不以以上**桥接内置命令**（含单独 `/` / `／` 唤起命令列表，以及启用时的 `!` / `！` bridge-native 终端命令）形式匹配的文本，在**当前聊天/话题下已有活跃 session** 时进入正常对话流程（流式卡片、Cursor Agent 等）。**若无 session**，机器人会提示先用 `/new list` 与 `/new <序号或路径>` 创建，并说明可用 `/commands`、`/help` 或只发 `/`（全角 `／` 亦可）查看全部桥接命令。若适配器在 Cursor 侧注册了 `/plan` 等斜杠命令，通常需**整段消息**以 `/命令` 开头发送；具体以 `cursor-agent-acp` 与 Cursor CLI 行为为准，本桥接不对其做单独解析。
 
 ### 用户直接发送附件/图片
 
@@ -468,12 +575,14 @@ backend 差异：
 | `BRIDGE_WORK_ALLOWLIST`（兼容 `CURSOR_WORK_ALLOWLIST`） | **必填**；逗号分隔的绝对路径，会话工作区必须落在某一允许根下；ACP 子进程 spawn 的 cwd 为列表首项。 |
 | `ACP_BACKEND` | 默认 backend；创建 session 时若未显式写 `--backend`，则使用此值。 |
 | `ACP_ENABLED_BACKENDS` | 允许通过 `/new --backend` 选择的 backend 列表（逗号分隔）。 |
+| `BRIDGE_GROUP_SESSION_SCOPE` | 设为 `shared` 时，群聊/话题内成员共享同一组 session；`/new`、`/switch`、`/close`、`/resume`、`/mode`、`/model`、`/stop` 等管理命令仅管理员可用。 |
 | `BRIDGE_WORK_PRESETS_FILE` | 可选；`/new list` 使用的快捷列表 JSON 路径。 |
 | `BRIDGE_WORK_PRESETS`（兼容 `CURSOR_WORK_PRESETS`） | 可选；列表文件为空时用于首次写入的初始路径（逗号分隔）。 |
 | `SESSION_IDLE_TIMEOUT_MS` | 可选；控制 session 空闲多久后视为过期。设为 `0` 或 `infinity` 表示永不过期。 |
 | `BRIDGE_DEBUG` | 为 `true` 时：`/status` 追加调试详情；群聊「未 @ 且未命中双人群」时在**服务端日志**输出结构化对照（见上文「群聊 @ 与调试日志」）。 |
+| `BRIDGE_ENABLE_BANG_COMMAND` | bridge-native `!<shell 命令>` 开关；默认开启。设为 `false` 可关闭。即使开启，仍仅 `BRIDGE_ADMIN_USER_IDS` 命中的管理员可用。 |
 | `BRIDGE_ENABLE_UPGRADE_COMMAND` | 为 `true` 时启用 bridge-native `/upgrade` 命令；默认关闭。 |
-| `BRIDGE_UPGRADE_ADMIN_OPEN_IDS` / `BRIDGE_UPGRADE_ADMIN_USER_IDS` / `BRIDGE_UPGRADE_ADMIN_UNION_IDS` | 允许触发 `/upgrade` 的飞书管理员 ID allowlist；至少命中一种才可执行。 |
+| `BRIDGE_UPGRADE_ADMIN_OPEN_IDS` / `BRIDGE_UPGRADE_ADMIN_USER_IDS` / `BRIDGE_UPGRADE_ADMIN_UNION_IDS` | `/upgrade` 的专用飞书管理员 ID allowlist；若显式配置任一项，则覆盖默认的 `BRIDGE_ADMIN_USER_IDS` 继承逻辑。 |
 | `BRIDGE_UPGRADE_RESULT_FILE` | 最近一次 `/upgrade` 的持久化结果 JSON；bridge 重启后仍可据此判断升级是否完成。 |
 
 更多变量见项目根目录 `.env.example`。

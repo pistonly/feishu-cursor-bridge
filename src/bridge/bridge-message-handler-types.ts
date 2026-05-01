@@ -4,6 +4,7 @@ import type {
   AcpSessionUsageState,
   BridgeAcpRuntime,
 } from "../acp/runtime-contract.js";
+import type { AcpRuntimeStatus } from "../acp/runtime.js";
 import type { Config } from "../config/index.js";
 import type { FeishuBot, FeishuMessage } from "../feishu/bot.js";
 import type { SessionManager } from "../session/manager.js";
@@ -19,6 +20,7 @@ import type {
 } from "./upgrade-result-store.js";
 import type { SlotMessageLogStore } from "./slot-message-log.js";
 import type { ConversationService } from "./conversation-service.js";
+import type { PromptCoordinator } from "./prompt-coordinator.js";
 
 export type ThreadReplyOpts = { replyInThread: true } | undefined;
 
@@ -35,7 +37,7 @@ export interface BridgeMessageHandlerDeps {
   slotMessageLog: SlotMessageLogStore | null;
   maintenanceStateStore: BridgeMaintenanceStateStore;
   upgradeResultStore: UpgradeResultStore;
-  activePrompts: Set<string>;
+  promptCoordinator: PromptCoordinator;
   ensureMaintenanceStateLoaded(): Promise<void>;
   handleUpgradeCommand(
     msg: FeishuMessage,
@@ -54,6 +56,7 @@ export interface BridgeMessageHandlerDeps {
   threadScope(msg: FeishuMessage): string | undefined;
   runtimeForBackend(backend: AcpBackend): BridgeAcpRuntime;
   runtimeForSession(session: { backend: AcpBackend }): BridgeAcpRuntime;
+  getBackendRuntimeStatuses?(): AcpRuntimeStatus[];
   conversationForBackend(backend: AcpBackend): ConversationService;
   feishuSessionKey(msg: FeishuMessage): string;
   isManagedByService(): Promise<boolean>;

@@ -1,3 +1,6 @@
+import {
+  formatCurrentModelLine,
+} from "../acp/session-display-format.js";
 import type { AcpSessionModelState } from "../acp/runtime-contract.js";
 import { formatJsonRpcLikeError } from "../utils/format-json-rpc-error.js";
 
@@ -20,19 +23,6 @@ function formatModelLine(
     return `• ${badge}${model.name} -> ${exact}`;
   }
   return `• ${badge}${exact}`;
-}
-
-function formatCurrentModel(
-  modelState: AcpSessionModelState,
-): string | undefined {
-  if (!modelState.currentModelId) return undefined;
-  const current = modelState.availableModels.find(
-    (model) => model.modelId === modelState.currentModelId,
-  );
-  if (current?.name && current.name !== current.modelId) {
-    return `当前模型：${current.name}（精确值：\`${current.modelId}\`）`;
-  }
-  return `当前模型：\`${modelState.currentModelId}\``;
 }
 
 function formatAvailableModels(
@@ -89,7 +79,7 @@ export function formatModelUsage(
     return body.join("\n");
   }
   body.push("", formatAvailableModels(modelState, options));
-  const current = formatCurrentModel(modelState);
+  const current = formatCurrentModelLine(modelState);
   if (current) {
     body.push(current);
   }
@@ -107,7 +97,7 @@ export function formatModelSwitchFailure(
     return body.join("");
   }
   body.push(`\n\n${formatAvailableModels(modelState, options)}`);
-  const current = formatCurrentModel(modelState);
+  const current = formatCurrentModelLine(modelState);
   if (current) {
     body.push(`\n${current}`);
   }

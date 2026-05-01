@@ -2,6 +2,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+  CONFIG_BACKEND_ALIAS_MAP,
+  parseBackendAlias,
+} from "../acp/backend-metadata.js";
+import {
   resolveClaudeAgentAcpDistEntry,
   resolveClaudeAgentAcpSourceEntry,
   resolveLegacyAdapterDistEntry,
@@ -25,6 +29,8 @@ export interface UpgradeAdminIds {
   userIds: Set<string>;
   unionIds: Set<string>;
 }
+
+export type GroupSessionScope = "per-user" | "shared";
 
 export interface Config {
   feishu: {
@@ -58,6 +64,9 @@ export interface Config {
     /** Codex app-server 子进程命令 */
     codexAppServerSpawnCommand?: string;
     codexAppServerSpawnArgs?: string[];
+    /** Gemini CLI ACP 子进程命令 */
+    geminiSpawnCommand?: string;
+    geminiSpawnArgs?: string[];
     /**
      * ACP 子进程 spawn 使用的 `cwd`（取 `CURSOR_WORK_ALLOWLIST` 中第一项）；
      * `session/new` 仍传入各 session 自己的工作区路径。
@@ -73,6 +82,8 @@ export interface Config {
   bridge: {
     /** 允许执行 `/restart`、`/update` 的飞书用户 ID（逗号分隔） */
     adminUserIds: string[];
+    /** 群聊 session 隔离粒度：`per-user` 或 `shared` */
+    groupSessionScope: GroupSessionScope;
     /**
      * 同一飞书用户存活 session（非空闲过期）总数上限；`0` 表示不限制。
      * @default 10
@@ -103,8 +114,18 @@ export interface Config {
     experimentalLogFilePath: string;
     /** 是否按 session/slot 落盘 prompt/chunk/reply/error 调试日志 */
     slotMessageLogEnabled: boolean;
+    /** 是否记录并持久化 slot 最近几轮 prompt/reply/error 历史 */
+    sessionHistoryEnabled: boolean;
     /** 是否在卡片中显示 ACP availableCommands */
     showAcpAvailableCommands: boolean;
+    /** prompt 无进展多久后给飞书发“等待较久”提示 */
+    promptSlowNoticeMs?: number;
+    /** prompt 无进展多久后给飞书发“疑似卡住”提示 */
+    promptStuckNoticeMs?: number;
+    /** prompt 无进展监测轮询间隔 */
+    promptProgressPollMs?: number;
+    /** 是否允许 bridge 直接执行 `!cmd` 形式的本地终端命令 */
+    enableBangCommand: boolean;
     /** 是否允许在飞书里使用 `/upgrade` 触发 bridge 自升级 */
     enableUpgradeCommand: boolean;
     /** 允许触发 `/upgrade` 的管理员飞书 ID 列表 */
@@ -125,24 +146,26 @@ export interface Config {
 }
 
 const LOG_LEVELS = new Set(["debug", "info", "warn", "error"]);
-const ACP_BACKENDS = new Set<AcpBackend>([
-  "cursor-official",
-  "cursor-legacy",
-  "claude",
-  "codex",
-  "codex-app-server",
-]);
+const BRIDGE_INSTANCE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
-const LEGACY_BACKEND_ALIASES: Record<string, AcpBackend> = {
-  official: "cursor-official",
-  legacy: "cursor-legacy",
-  claude: "claude",
-  codex: "codex",
-  "codex-app-server": "codex-app-server",
-  "codex-app": "codex-app-server",
-  appserver: "codex-app-server",
-  "app-server": "codex-app-server",
-};
+export function normalizeBridgeInstanceName(
+  raw: string | undefined,
+): string | undefined {
+  const trimmed = raw?.trim();
+  if (!trimmed) return undefined;
+  if (!BRIDGE_INSTANCE_NAME_PATTERN.test(trimmed)) {
+    throw new Error(
+      "Invalid BRIDGE_INSTANCE_NAME. Use 1-64 characters: letters, numbers, dot, underscore, or hyphen; first character must be a letter or number.",
+    );
+  }
+  return trimmed;
+}
+
+function bridgeStateDir(homeDir: string, instanceName: string | undefined): string {
+  return instanceName
+    ? path.join(homeDir, ".feishu-cursor-bridge", instanceName)
+    : path.join(homeDir, ".feishu-cursor-bridge");
+}
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -152,11 +175,15 @@ function requireEnv(name: string): string {
   return value;
 }
 
-export function expandHome(p: string): string {
+export function expandHomeWith(p: string, homeDir: string): string {
   if (p.startsWith("~/")) {
-    return path.join(os.homedir(), p.slice(2));
+    return path.join(homeDir, p.slice(2));
   }
   return p;
+}
+
+export function expandHome(p: string): string {
+  return expandHomeWith(p, os.homedir());
 }
 
 /**
@@ -225,6 +252,14 @@ function parseExtraArgs(raw: string | undefined): string[] {
   return parseShellLikeArgs(raw.trim());
 }
 
+function parseGroupSessionScope(
+  raw: string | undefined,
+): GroupSessionScope {
+  const normalized = raw?.trim().toLowerCase();
+  if (normalized === "shared") return "shared";
+  return "per-user";
+}
+
 function hasCodexConfigOverride(args: string[], key: string): boolean {
   for (let i = 0; i < args.length; i++) {
     const current = args[i];
@@ -248,10 +283,7 @@ function hasCodexConfigOverride(args: string[], key: string): boolean {
 
 function parseAcpBackend(raw: string | undefined): AcpBackend {
   const normalized = raw?.trim().toLowerCase() || "cursor-official";
-  const mapped = LEGACY_BACKEND_ALIASES[normalized] ?? normalized;
-  return ACP_BACKENDS.has(mapped as AcpBackend)
-    ? (mapped as AcpBackend)
-    : "cursor-official";
+  return parseBackendAlias(normalized, CONFIG_BACKEND_ALIAS_MAP) ?? "cursor-official";
 }
 
 function parseEnabledAcpBackends(
@@ -363,6 +395,33 @@ function resolveCodexAppServerSpawn(): { command: string; args: string[] } {
   };
 }
 
+function resolveGeminiCliAcpSpawn(): { command: string; args: string[] } {
+  const envRaw = process.env["GEMINI_CLI_ACP_COMMAND"]?.trim();
+  const extra = parseExtraArgs(process.env["GEMINI_CLI_ACP_EXTRA_ARGS"]);
+  const baseTokens = envRaw ? parseShellLikeArgs(envRaw) : ["gemini"];
+  if (baseTokens.length === 0) {
+    throw new Error("GEMINI_CLI_ACP_COMMAND 解析为空");
+  }
+  const args = [...baseTokens.slice(1)];
+  if (!args.includes("--acp")) {
+    args.push("--acp");
+  }
+  if (logLevelIsDebug()) {
+    if (!args.includes("--debug")) {
+      args.push("--debug");
+    }
+  }
+  args.push(...extra);
+  return {
+    command: baseTokens[0]!,
+    args,
+  };
+}
+
+function logLevelIsDebug(): boolean {
+  return (process.env["LOG_LEVEL"] ?? "info").trim().toLowerCase() === "debug";
+}
+
 const DEFAULT_SESSION_IDLE_TIMEOUT_MS = 7 * 24 * 60 * 60_000;
 
 const DEFAULT_MAX_SESSIONS_PER_USER = 10;
@@ -450,6 +509,10 @@ export function loadConfig(): Config {
     );
   }
 
+  const instanceName = normalizeBridgeInstanceName(
+    process.env["BRIDGE_INSTANCE_NAME"],
+  );
+  const defaultStateDir = bridgeStateDir(os.homedir(), instanceName);
   const backend = parseAcpBackend(process.env["ACP_BACKEND"]);
   const enabledBackends = parseEnabledAcpBackends(
     process.env["ACP_ENABLED_BACKENDS"],
@@ -483,11 +546,7 @@ export function loadConfig(): Config {
 
   const workspaceRoot = allowedWorkspaceRoots[0]!;
 
-  const defaultAdapterSession = path.join(
-    os.homedir(),
-    ".feishu-cursor-bridge",
-    "cursor-acp-sessions",
-  );
+  const defaultAdapterSession = path.join(defaultStateDir, "cursor-acp-sessions");
   const adapterSessionDir = path.resolve(
     expandHome(
         process.env["CURSOR_LEGACY_SESSION_DIR"]?.trim() ||
@@ -496,22 +555,14 @@ export function loadConfig(): Config {
     ),
   );
 
-  const defaultStore = path.join(
-    os.homedir(),
-    ".feishu-cursor-bridge",
-    ".feishu-bridge-sessions.json",
-  );
+  const defaultStore = path.join(defaultStateDir, ".feishu-bridge-sessions.json");
   const sessionStorePath = path.resolve(
     expandHome(
       process.env["BRIDGE_SESSION_STORE"]?.trim() || defaultStore,
     ),
   );
 
-  const defaultMaintenanceState = path.join(
-    os.homedir(),
-    ".feishu-cursor-bridge",
-    "maintenance-state.json",
-  );
+  const defaultMaintenanceState = path.join(defaultStateDir, "maintenance-state.json");
   const maintenanceStatePath = path.resolve(
     expandHome(
       process.env["BRIDGE_MAINTENANCE_STATE_FILE"]?.trim() || defaultMaintenanceState,
@@ -519,11 +570,7 @@ export function loadConfig(): Config {
   );
 
 
-  const defaultSingleInstanceLock = path.join(
-    os.homedir(),
-    ".feishu-cursor-bridge",
-    "bridge.lock",
-  );
+  const defaultSingleInstanceLock = path.join(defaultStateDir, "bridge.lock");
   const singleInstanceLockPath = path.resolve(
     expandHome(
       process.env["BRIDGE_SINGLE_INSTANCE_LOCK"]?.trim() ||
@@ -539,12 +586,7 @@ export function loadConfig(): Config {
     ) ||
     !!process.env["INVOCATION_ID"]?.trim();
 
-  const defaultExperimentalLogFile = path.join(
-    os.homedir(),
-    ".feishu-cursor-bridge",
-    "logs",
-    "bridge.log",
-  );
+  const defaultExperimentalLogFile = path.join(defaultStateDir, "logs", "bridge.log");
   const experimentalLogToFile =
     (process.env["EXPERIMENT_LOG_TO_FILE"] ?? "false").toLowerCase() === "true";
   const experimentalLogFilePath = path.resolve(
@@ -555,12 +597,14 @@ export function loadConfig(): Config {
   const showAcpAvailableCommands =
     (process.env["BRIDGE_SHOW_ACP_AVAILABLE_COMMANDS"] ?? "false").toLowerCase() ===
     "true";
+  const sessionHistoryEnabled =
+    (process.env["BRIDGE_SESSION_HISTORY_ENABLED"] ?? "true").toLowerCase() ===
+    "true";
+  const enableBangCommand =
+    (process.env["BRIDGE_ENABLE_BANG_COMMAND"] ?? "true").toLowerCase() ===
+    "true";
 
-  const defaultPresetsFile = path.join(
-    os.homedir(),
-    ".feishu-cursor-bridge",
-    "workspace-presets.json",
-  );
+  const defaultPresetsFile = path.join(defaultStateDir, "workspace-presets.json");
   const workspacePresetsPath = path.resolve(
     expandHome(
       process.env["BRIDGE_WORK_PRESETS_FILE"]?.trim() ||
@@ -587,6 +631,9 @@ export function loadConfig(): Config {
     process.env["BRIDGE_MAX_SESSIONS_PER_USER"],
   );
   const adminUserIds = parseStringList(process.env["BRIDGE_ADMIN_USER_IDS"]);
+  const groupSessionScope = parseGroupSessionScope(
+    process.env["BRIDGE_GROUP_SESSION_SCOPE"],
+  );
 
   const cardUpdateThrottleMs = Math.max(
     200,
@@ -602,11 +649,7 @@ export function loadConfig(): Config {
     DEFAULT_CARD_SPLIT_TOOL_THRESHOLD,
   );
 
-  const defaultUpgradeResultPath = path.join(
-    os.homedir(),
-    ".feishu-cursor-bridge",
-    "upgrade-result.json",
-  );
+  const defaultUpgradeResultPath = path.join(defaultStateDir, "upgrade-result.json");
   const upgradeResultPath = path.resolve(
     expandHome(
       process.env["BRIDGE_UPGRADE_RESULT_FILE"]?.trim() || defaultUpgradeResultPath,
@@ -650,6 +693,7 @@ export function loadConfig(): Config {
   const claudeSpawn = resolveClaudeAgentAcpSpawn();
   const codexSpawn = resolveCodexAgentAcpSpawn();
   const codexAppServerSpawn = resolveCodexAppServerSpawn();
+  const geminiSpawn = resolveGeminiCliAcpSpawn();
 
   return {
     feishu: {
@@ -673,12 +717,15 @@ export function loadConfig(): Config {
       codexSpawnArgs: codexSpawn.args,
       codexAppServerSpawnCommand: codexAppServerSpawn.command,
       codexAppServerSpawnArgs: codexAppServerSpawn.args,
+      geminiSpawnCommand: geminiSpawn.command,
+      geminiSpawnArgs: geminiSpawn.args,
       workspaceRoot,
       allowedWorkspaceRoots,
       adapterSessionDir,
     },
     bridge: {
       adminUserIds,
+      groupSessionScope,
       maxSessionsPerUser,
       sessionIdleTimeoutMs,
       sessionStorePath,
@@ -696,7 +743,9 @@ export function loadConfig(): Config {
       slotMessageLogEnabled:
         (process.env["BRIDGE_SLOT_LOG_ENABLED"] ?? "false").toLowerCase() ===
         "true",
+      sessionHistoryEnabled,
       showAcpAvailableCommands,
+      enableBangCommand,
       enableUpgradeCommand,
       upgradeAdmins,
       serviceScriptPath,

@@ -1,20 +1,51 @@
+import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
 /**
- * 确保 filePath 落在 root 目录内（基于已解析路径比较），返回规范化绝对路径。
+ * 确保 filePath 落在 root 目录内（基于真实路径比较，避免 symlink 逃逸），返回规范化绝对路径。
  */
 export function assertPathInWorkspace(root: string, filePath: string): string {
-  const rootReal = path.resolve(root);
+  const rootAbs = path.resolve(root);
   const target = path.resolve(filePath);
+  const rootReal = fsSync.realpathSync.native(rootAbs);
 
-  if (rootReal === target) return target;
+  let targetReal: string | undefined;
+  try {
+    targetReal = fsSync.realpathSync.native(target);
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT" && code !== "ENOTDIR") {
+      throw e;
+    }
+  }
 
-  const rel = path.relative(rootReal, target);
-  if (rel === "" || rel.startsWith("..") || path.isAbsolute(rel)) {
+  if (targetReal) {
+    if (isPathUnderRealRoot(rootReal, targetReal)) return target;
+    throw new Error(`拒绝访问工作区外路径: ${filePath}`);
+  }
+
+  const parentReal = fsSync.realpathSync.native(findExistingParent(target));
+  if (!isPathUnderRealRoot(rootReal, parentReal)) {
     throw new Error(`拒绝访问工作区外路径: ${filePath}`);
   }
   return target;
+}
+
+function findExistingParent(target: string): string {
+  let current = path.dirname(target);
+  for (;;) {
+    if (fsSync.existsSync(current)) return current;
+    const next = path.dirname(current);
+    if (next === current) return current;
+    current = next;
+  }
+}
+
+function isPathUnderRealRoot(rootReal: string, targetReal: string): boolean {
+  if (rootReal === targetReal) return true;
+  const rel = path.relative(rootReal, targetReal);
+  return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
 }
 
 export async function readTextFileSafe(
@@ -43,6 +74,7 @@ export async function writeTextFileSafe(
   requestPath: string,
   content: string,
 ): Promise<void> {
+  await fs.mkdir(path.resolve(root), { recursive: true });
   const full = assertPathInWorkspace(root, requestPath);
   await fs.mkdir(path.dirname(full), { recursive: true });
   await fs.writeFile(full, content, "utf8");

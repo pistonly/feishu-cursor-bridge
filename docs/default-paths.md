@@ -6,6 +6,7 @@
 
 | 用途 | 环境变量 | 默认 / 说明 |
 |------|----------|-------------|
+| 本机实例名 | `BRIDGE_INSTANCE_NAME` | 空；设置后默认状态目录变为 `~/.feishu-cursor-bridge/<实例名>/`，`service.sh` 服务名也会按实例隔离 |
 | 允许作为会话工作区的根路径列表（**必填**） | `BRIDGE_WORK_ALLOWLIST`（兼容 `CURSOR_WORK_ALLOWLIST`） | 无默认值；须显式配置逗号分隔绝对路径，至少一项；不存在则尝试 `mkdir -p` |
 | ACP 子进程 `spawn` 的 `cwd` | （派生） | 取 **`BRIDGE_WORK_ALLOWLIST`（兼容 `CURSOR_WORK_ALLOWLIST`） 中第一项**；与各 session 的 `cwd` 独立 |
 | ACP 后端选择 | `ACP_BACKEND` | `cursor-official` |
@@ -13,15 +14,22 @@
 | 官方 ACP 命令 | `CURSOR_AGENT_PATH` | `agent` |
 | service PATH 注入的 Conda 根目录 | `CONDA_ROOT` | 自动探测 `~/miniconda3`，否则 `~/anaconda3` |
 | service PATH 注入的 Conda 环境名 | `CONDA_ENV_NAME` | `base`；若 Conda 或对应 env 不存在则跳过 |
-| `cursor-agent-acp` 适配器会话目录（仅 `legacy`） | `CURSOR_LEGACY_SESSION_DIR`（兼容 `CURSOR_ACP_SESSION_DIR`） | `~/.feishu-cursor-bridge/cursor-acp-sessions` |
-| 飞书 ↔ ACP 会话映射持久化 JSON | `BRIDGE_SESSION_STORE` | `~/.feishu-cursor-bridge/.feishu-bridge-sessions.json` |
-| 最近一次 bridge `/upgrade` 结果 JSON | `BRIDGE_UPGRADE_RESULT_FILE` | `~/.feishu-cursor-bridge/upgrade-result.json` |
-| `/new list`、`/new <序号>` 使用的快捷工作区列表 JSON | `BRIDGE_WORK_PRESETS_FILE`（兼容 `CURSOR_WORK_PRESETS_FILE`） | `~/.feishu-cursor-bridge/workspace-presets.json` |
+| `cursor-agent-acp` 适配器会话目录（仅 `legacy`） | `CURSOR_LEGACY_SESSION_DIR`（兼容 `CURSOR_ACP_SESSION_DIR`） | `~/.feishu-cursor-bridge[/<实例名>]/cursor-acp-sessions` |
+| 飞书 ↔ ACP 会话映射持久化 JSON | `BRIDGE_SESSION_STORE` | `~/.feishu-cursor-bridge[/<实例名>]/.feishu-bridge-sessions.json` |
+| 最近一次 bridge `/upgrade` 结果 JSON | `BRIDGE_UPGRADE_RESULT_FILE` | `~/.feishu-cursor-bridge[/<实例名>]/upgrade-result.json` |
+| `/new list`、`/new <序号>` 使用的快捷工作区列表 JSON | `BRIDGE_WORK_PRESETS_FILE`（兼容 `CURSOR_WORK_PRESETS_FILE`） | `~/.feishu-cursor-bridge[/<实例名>]/workspace-presets.json` |
 | 快捷列表为空时的种子路径（仅首次初始化） | `BRIDGE_WORK_PRESETS`（兼容 `CURSOR_WORK_PRESETS`） | 无默认；不设置则不从环境变量注入种子 |
 | `cursor-agent-acp` 入口脚本（仅 `legacy`） | — | 与桥接启动方式一致，**无单独环境变量**：**`node dist/index.js`** → **`vendor/cursor-agent-acp/dist/bin/cursor-agent-acp.js`**（`npm install` 的 `postinstall` 会 `build:adapter`）；**`tsx src/index.ts`**（`npm run dev`）→ **`vendor/cursor-agent-acp/src/bin/cursor-agent-acp.ts`** + **tsx** |
 | 启动 legacy 适配器用的 Node 可执行文件 | `CURSOR_LEGACY_NODE_PATH`（兼容 `ACP_NODE_PATH`） | 当前进程的 Node（`process.execPath`） |
 
 ## 分条说明
+
+### 本机多实例 `BRIDGE_INSTANCE_NAME`
+
+- **默认兼容旧行为**：未设置时仍使用 `~/.feishu-cursor-bridge/` 下的原有默认文件，`service.sh` 仍管理 `com.feishu-cursor-bridge` / `feishu-cursor-bridge.service`。
+- **设置后自动隔离**：例如 `BRIDGE_INSTANCE_NAME=bot-a` 时，默认状态文件会落到 `~/.feishu-cursor-bridge/bot-a/`，macOS launchd 标签为 `com.feishu-cursor-bridge.bot-a`，Linux systemd 用户服务为 `feishu-cursor-bridge.bot-a.service`。
+- **命名限制**：实例名长度 1-64，只允许字母、数字、`.`、`_`、`-`，且首字符必须是字母或数字。
+- **覆盖优先级**：显式设置 `BRIDGE_SESSION_STORE`、`BRIDGE_SINGLE_INSTANCE_LOCK`、`BRIDGE_WORK_PRESETS_FILE` 等路径变量时，显式路径优先于按实例派生的默认路径。
 
 ### 工作区白名单 `BRIDGE_WORK_ALLOWLIST`（兼容 `CURSOR_WORK_ALLOWLIST`）
 
@@ -36,7 +44,7 @@
 - **`ACP_ENABLED_BACKENDS` 默认**：未设置时，仅启用 `ACP_BACKEND` 当前值
 - **`CURSOR_AGENT_PATH` 默认**：`agent`
 - **含义**：`ACP_BACKEND` 决定默认 backend；`ACP_ENABLED_BACKENDS` 决定启动时实际拉起哪些 backend，以及 `/new --backend <...>` 允许选择哪些值
-- **常见场景**：若默认仍想用 `cursor-official`，但又希望在飞书里临时切到 `cursor-legacy` / `claude` / `codex`，应显式配置 `ACP_ENABLED_BACKENDS=cursor-official,cursor-legacy,claude,codex`
+- **常见场景**：若默认仍想用 `cursor-official`，但又希望在飞书里临时切到 `cursor-legacy` / `claude` / `codex` / `codex-app-server` / `gemini`，应显式配置 `ACP_ENABLED_BACKENDS=cursor-official,cursor-legacy,claude,codex,codex-app-server,gemini`
 
 ### service PATH 的 Conda 注入 `CONDA_ROOT` / `CONDA_ENV_NAME`
 
@@ -48,23 +56,23 @@
 
 ### 适配器会话目录 `CURSOR_LEGACY_SESSION_DIR`（兼容 `CURSOR_ACP_SESSION_DIR`）
 
-- **默认**：`~/.feishu-cursor-bridge/cursor-acp-sessions`
+- **默认**：`~/.feishu-cursor-bridge[/<实例名>]/cursor-acp-sessions`
 - **含义**：仅在 `ACP_BACKEND=cursor-legacy` 时传给上游 `cursor-agent-acp` 的 `--session-dir`，用于适配器侧会话相关文件，与飞书映射文件是分开的。
 
 ### 飞书会话映射 `BRIDGE_SESSION_STORE`
 
-- **默认**：`~/.feishu-cursor-bridge/.feishu-bridge-sessions.json`
+- **默认**：`~/.feishu-cursor-bridge[/<实例名>]/.feishu-bridge-sessions.json`
 - **含义**：持久化「飞书会话 → ACP `sessionId`」等映射，便于进程重启后在支持 `loadSession` 时恢复。
 
 ### bridge 升级结果 `BRIDGE_UPGRADE_RESULT_FILE`
 
-- **默认**：`~/.feishu-cursor-bridge/upgrade-result.json`
+- **默认**：`~/.feishu-cursor-bridge[/<实例名>]/upgrade-result.json`
 - **含义**：持久化最近一次飞书 `/upgrade` 尝试的状态（如 `queued` / `running` / `succeeded` / `failed`）、请求时间、执行结果与简短输出尾部，便于 bridge 重启后仍可判断升级是否完成。
 - **用途**：当前主要用于防止重复触发升级，以及在 bridge 启动时修正已失效的 `running` 状态。
 
 ### 快捷工作区列表 `BRIDGE_WORK_PRESETS_FILE`（兼容 `CURSOR_WORK_PRESETS_FILE`） 与 `BRIDGE_WORK_PRESETS`（兼容 `CURSOR_WORK_PRESETS`）
 
-- **`BRIDGE_WORK_PRESETS_FILE`（兼容 `CURSOR_WORK_PRESETS_FILE`） 默认**：`~/.feishu-cursor-bridge/workspace-presets.json`
+- **`BRIDGE_WORK_PRESETS_FILE`（兼容 `CURSOR_WORK_PRESETS_FILE`） 默认**：`~/.feishu-cursor-bridge[/<实例名>]/workspace-presets.json`
 - **`BRIDGE_WORK_PRESETS`（兼容 `CURSOR_WORK_PRESETS`）**：逗号分隔的绝对路径；**仅在列表文件为空时**用于首次种子初始化，不设则没有来自该变量的默认列表。
 
 ### 适配器入口与 Node `CURSOR_LEGACY_NODE_PATH`（兼容 `ACP_NODE_PATH`）

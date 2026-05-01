@@ -1,18 +1,19 @@
 import { randomUUID } from "node:crypto";
 import type { Config } from "../config/index.js";
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import * as path from "node:path";
-import {
-  AcpRuntimeRegistry,
-  formatAcpBackendLabel,
-  resolveAdapterSessionTimeoutMs,
-} from "../acp/runtime.js";
+import { AcpRuntimeRegistry } from "../acp/runtime.js";
 import type {
   AcpBackend,
   AcpSessionModelState,
   AcpSessionUsageState,
   BridgeAcpRuntime,
 } from "../acp/runtime-contract.js";
+import {
+  formatSessionModelLabel,
+  formatSessionUsage as formatDisplaySessionUsage,
+} from "../acp/session-display-format.js";
 import { FeishuBot, type FeishuMessage } from "../feishu/bot.js";
 import { SessionManager } from "../session/manager.js";
 import { SessionStore } from "../session/store.js";
@@ -25,6 +26,7 @@ import {
 } from "./maintenance-state.js";
 import { UpgradeResultStore, type UpgradeAttemptRecord } from "./upgrade-result-store.js";
 import { SlotMessageLogStore } from "./slot-message-log.js";
+import { PromptCoordinator } from "./prompt-coordinator.js";
 import {
   handleBridgeMessage,
   type BridgeMessageHandlerDeps,
@@ -32,6 +34,7 @@ import {
 import { preprocessBridgeMessage } from "./bridge-message-preprocess.js";
 
 const MAINTENANCE_OUTPUT_LIMIT = 12_000;
+const SHUTDOWN_CANCEL_TIMEOUT_MS = 3_000;
 
 type RunningMaintenanceTask = {
   kind: BridgeMaintenanceCommandKind;
@@ -77,32 +80,16 @@ function formatDurationMs(ms: number): string {
   return `${Math.round(ms / 60_000)} 分钟`;
 }
 
-export function formatNumber(value: number): string {
-  return new Intl.NumberFormat("en-US").format(value);
-}
-
-export function formatPercent(value: number): string {
-  return `${value.toFixed(1).replace(/\.0$/, "")}%`;
-}
-
-export function formatSessionUsage(
+function formatSessionUsage(
   usage: AcpSessionUsageState | undefined,
 ): string | undefined {
-  if (!usage) return undefined;
-  return `${formatPercent(usage.percent)} (${formatNumber(usage.usedTokens)} / ${formatNumber(usage.maxTokens)})`;
+  return formatDisplaySessionUsage(usage);
 }
 
 function formatSessionModel(
   modelState: AcpSessionModelState | undefined,
 ): string | undefined {
-  if (!modelState?.currentModelId) return undefined;
-  const current = modelState.availableModels.find(
-    (model) => model.modelId === modelState.currentModelId,
-  );
-  if (current?.name && current.name !== current.modelId) {
-    return current.name;
-  }
-  return `\`${modelState.currentModelId}\``;
+  return formatSessionModelLabel(modelState);
 }
 
 function appendWithLimit(buffer: string, chunk: string, limit: number): string {
@@ -160,10 +147,9 @@ export class Bridge {
   private sessionManager: SessionManager;
   private presetsStore: WorkspacePresetsStore;
   private conversations: Map<AcpBackend, ConversationService>;
-  private upgradeResultStore: UpgradeResultStore;
   private slotMessageLog: SlotMessageLogStore | null;
-  /** key: `<sessionKey>:<slotIndex>` — 同一 slot 同一时刻只能有一个 prompt 在跑 */
-  private activePrompts = new Set<string>();
+  private upgradeResultStore: UpgradeResultStore;
+  private promptCoordinator: PromptCoordinator;
   private maintenanceStateStore: BridgeMaintenanceStateStore;
   private maintenanceStateReady: Promise<void> | null = null;
   private activeMaintenance: RunningMaintenanceTask | null = null;
@@ -206,9 +192,21 @@ export class Bridge {
         defaultWorkspaceRoot: config.acp.workspaceRoot,
         defaultBackend: config.acp.backend,
         maxSessionsPerUser: config.bridge.maxSessionsPerUser,
+        groupSessionScope: config.bridge.groupSessionScope,
       },
     );
     this.conversations = new Map();
+    this.promptCoordinator = new PromptCoordinator({
+      getFeishuBot: () => this.feishuBot,
+      getSessionManager: () => this.sessionManager,
+      getSlotMessageLog: () => this.slotMessageLog,
+      isSessionHistoryEnabled: () => this.config.bridge.sessionHistoryEnabled,
+      flushPendingSessionNotices: (msg) => this.flushPendingSessionNotices(msg),
+      threadReplyOpts: (msg) => this.threadReplyOpts(msg),
+      threadScope: (msg) => this.threadScope(msg),
+      conversationForBackend: (backend) => this.conversationForBackend(backend),
+      feishuSessionKey: (msg) => this.feishuSessionKey(msg),
+    });
   }
 
   async start(): Promise<void> {
@@ -229,11 +227,8 @@ export class Bridge {
     await this.sessionManager.init();
     await this.presetsStore.load(this.config.bridge.workspacePresetsSeed);
 
-    const startedRuntimes = await this.runtimeRegistry.startEnabledRuntimes();
-    for (const runtime of startedRuntimes) {
-      console.log(
-        `[bridge] ${formatAcpBackendLabel(runtime.backend)} 已连接 protocolVersion=${runtime.initializeResult?.protocolVersion} loadSession=${runtime.supportsLoadSession}`,
-      );
+    for (const backend of this.runtimeRegistry.getEnabledBackends()) {
+      const runtime = this.runtimeForBackend(backend);
       this.conversations.set(
         runtime.backend,
         new ConversationService(this.config, runtime, this.feishuBot),
@@ -256,6 +251,7 @@ export class Bridge {
     });
 
     await this.feishuBot.start();
+    this.runtimeRegistry.startEnabledRuntimesInBackground();
 
     this.cleanupInterval = setInterval(() => {
       void this.sessionManager
@@ -334,7 +330,19 @@ export class Bridge {
     }
   }
 
+  private hasExplicitUpgradeAdmins(): boolean {
+    const admins = this.config.bridge.upgradeAdmins;
+    return (
+      admins.openIds.size > 0 ||
+      admins.userIds.size > 0 ||
+      admins.unionIds.size > 0
+    );
+  }
+
   private isUpgradeAdmin(msg: FeishuMessage): boolean {
+    if (!this.hasExplicitUpgradeAdmins()) {
+      return this.isBridgeAdmin(msg.senderId);
+    }
     const admins = this.config.bridge.upgradeAdmins;
     const senderIds = msg.senderIds;
     return (
@@ -344,8 +352,19 @@ export class Bridge {
     );
   }
 
-  private launchBackgroundUpgrade(attemptId: string): void {
-    const runnerEntry = path.resolve(process.cwd(), "dist", "upgrade-runner.js");
+  private resolveUpgradeRunnerEntry(): string {
+    return path.resolve(process.cwd(), "dist", "bridge", "upgrade-runner.js");
+  }
+
+  private assertUpgradeRunnerAvailable(): string {
+    const runnerEntry = this.resolveUpgradeRunnerEntry();
+    if (!existsSync(runnerEntry)) {
+      throw new Error(`Upgrade runner not found: ${runnerEntry}`);
+    }
+    return runnerEntry;
+  }
+
+  private launchBackgroundUpgrade(attemptId: string, runnerEntry: string): void {
     const child = spawn(process.execPath, [runnerEntry, attemptId], {
       cwd: process.cwd(),
       detached: true,
@@ -368,10 +387,11 @@ export class Bridge {
       );
       return;
     }
-    if (this.activePrompts.size > 0 && !command.force) {
+    const activePromptCount = this.promptCoordinator.getActivePromptCount();
+    if (activePromptCount > 0 && !command.force) {
       await this.feishuBot.sendText(
         msg.chatId,
-        `❌ 当前仍有 ${this.activePrompts.size} 个请求在处理中。请等待完成或先中断，再执行 \`/upgrade\`；若确认要直接升级，可改用 \`/upgrade --force\`。`,
+        `❌ 当前仍有 ${activePromptCount} 个请求在处理中。请等待完成或先中断，再执行 \`/upgrade\`；若确认要直接升级，可改用 \`/upgrade --force\`。`,
         msg.messageId,
         this.threadReplyOpts(msg),
       );
@@ -390,6 +410,18 @@ export class Bridge {
       await this.feishuBot.sendText(
         msg.chatId,
         "❌ 当前未启用聊天升级命令。",
+        msg.messageId,
+        this.threadReplyOpts(msg),
+      );
+      return;
+    }
+    if (
+      !this.hasExplicitUpgradeAdmins() &&
+      this.config.bridge.adminUserIds.length === 0
+    ) {
+      await this.feishuBot.sendText(
+        msg.chatId,
+        "❌ 当前未配置升级管理员：请设置 `BRIDGE_ADMIN_USER_IDS`，或显式配置 `BRIDGE_UPGRADE_ADMIN_OPEN_IDS` / `BRIDGE_UPGRADE_ADMIN_USER_IDS` / `BRIDGE_UPGRADE_ADMIN_UNION_IDS`。",
         msg.messageId,
         this.threadReplyOpts(msg),
       );
@@ -436,13 +468,14 @@ export class Bridge {
     await this.upgradeResultStore.flush();
 
     try {
+      const runnerEntry = this.assertUpgradeRunnerAvailable();
       await this.feishuBot.sendText(
         msg.chatId,
         `✅ 已接受升级请求${command.force ? "（--force）" : ""}，正在后台执行 \`bash service.sh upgrade\`。桥接可能会短暂重启并恢复，稍后可发送 \`/status\` 验证。`,
         msg.messageId,
         this.threadReplyOpts(msg),
       );
-      this.launchBackgroundUpgrade(attemptId);
+      this.launchBackgroundUpgrade(attemptId, runnerEntry);
     } catch (err) {
       this.upgradeResultStore.setAttempt({
         ...(this.upgradeResultStore.getAttempt() ?? {
@@ -467,6 +500,10 @@ export class Bridge {
   private feishuSessionKey(msg: FeishuMessage): string {
     if (msg.chatType === "p2p") return `dm:${msg.senderId}`;
     const t = this.threadScope(msg);
+    if (this.config.bridge.groupSessionScope === "shared") {
+      if (t) return `${msg.chatId}:t:${t}`;
+      return msg.chatId;
+    }
     if (t) return `${msg.chatId}:t:${t}:${msg.senderId}`;
     return `${msg.chatId}:${msg.senderId}`;
   }
@@ -644,10 +681,11 @@ export class Bridge {
       );
       return;
     }
-    if (this.activePrompts.size > 0 && !command.force) {
+    const activePromptCount = this.promptCoordinator.getActivePromptCount();
+    if (activePromptCount > 0 && !command.force) {
       await this.feishuBot.sendText(
         msg.chatId,
-        `❌ 当前仍有 ${this.activePrompts.size} 个请求在处理中。请等待完成或先中断，再执行 \`/${command.kind}\`；若确认要直接维护，可改用 \`/${command.kind} --force\`。`,
+        `❌ 当前仍有 ${activePromptCount} 个请求在处理中。请等待完成或先中断，再执行 \`/${command.kind}\`；若确认要直接维护，可改用 \`/${command.kind} --force\`。`,
         msg.messageId,
         this.threadReplyOpts(msg),
       );
@@ -741,7 +779,7 @@ export class Bridge {
       slotMessageLog: this.slotMessageLog,
       maintenanceStateStore: this.maintenanceStateStore,
       upgradeResultStore: this.upgradeResultStore,
-      activePrompts: this.activePrompts,
+      promptCoordinator: this.promptCoordinator,
       ensureMaintenanceStateLoaded: () => this.ensureMaintenanceStateLoaded(),
       handleUpgradeCommand: (msg, command) =>
         this.handleUpgradeCommand(msg, command),
@@ -753,6 +791,11 @@ export class Bridge {
       threadScope: (msg) => this.threadScope(msg),
       runtimeForBackend: (backend) => this.runtimeForBackend(backend),
       runtimeForSession: (session) => this.runtimeForSession(session),
+      getBackendRuntimeStatuses:
+        typeof (this.runtimeRegistry as { getEnabledRuntimeStatuses?: unknown })
+          .getEnabledRuntimeStatuses === "function"
+          ? () => this.runtimeRegistry.getEnabledRuntimeStatuses()
+          : undefined,
       conversationForBackend: (backend) =>
         this.conversationForBackend(backend),
       feishuSessionKey: (msg) => this.feishuSessionKey(msg),
@@ -788,6 +831,58 @@ export class Bridge {
     await handleBridgeMessage(this.messageHandlerDeps(), msg, preprocessed);
   }
 
+  private async cancelKnownSessionsForShutdown(): Promise<void> {
+    const listKnownSessions =
+      (this.sessionManager as { listKnownSessionsForShutdown?: unknown })
+        .listKnownSessionsForShutdown;
+    if (typeof listKnownSessions !== "function") {
+      return;
+    }
+
+    const sessions = this.sessionManager.listKnownSessionsForShutdown();
+    const seen = new Set<string>();
+    const uniqueSessions = sessions.filter((session) => {
+      const key = `${session.backend}\u0000${session.sessionId}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    if (uniqueSessions.length === 0) {
+      return;
+    }
+
+    console.log(
+      `[bridge] Shutdown: best-effort cancel ${uniqueSessions.length} known session(s) before stopping runtimes`,
+    );
+    for (const session of uniqueSessions) {
+      const runtime = this.runtimeForBackend(session.backend);
+      let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          runtime.cancelSession(session.sessionId),
+          new Promise<never>((_, reject) => {
+            timeoutHandle = setTimeout(() => {
+              reject(
+                new Error(
+                  `cancel timeout after ${SHUTDOWN_CANCEL_TIMEOUT_MS}ms`,
+                ),
+              );
+            }, SHUTDOWN_CANCEL_TIMEOUT_MS);
+          }),
+        ]);
+      } catch (error) {
+        console.warn(
+          `[bridge] Shutdown cancel failed backend=${session.backend} sessionId=${session.sessionId}:`,
+          error instanceof Error ? error.message : error,
+        );
+      } finally {
+        if (timeoutHandle) {
+          clearTimeout(timeoutHandle);
+        }
+      }
+    }
+  }
+
   async stop(): Promise<void> {
     if (this.restartTimer) {
       clearTimeout(this.restartTimer);
@@ -798,6 +893,7 @@ export class Bridge {
       this.cleanupInterval = null;
     }
     await this.feishuBot.stop();
+    await this.cancelKnownSessionsForShutdown();
     await this.runtimeRegistry.stopAll();
     console.log("[bridge] Service stopped");
   }

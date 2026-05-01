@@ -36,6 +36,16 @@ interface UpgradeResultFileV1 {
 
 const MAX_OUTPUT_TAIL_CHARS = 4_000;
 
+export function appendOutputTail(
+  current: string | undefined,
+  chunk: string | undefined,
+): string | undefined {
+  if (!chunk) return current;
+  const merged = `${current ?? ""}${chunk}`;
+  if (merged.length <= MAX_OUTPUT_TAIL_CHARS) return merged;
+  return merged.slice(-MAX_OUTPUT_TAIL_CHARS);
+}
+
 export function truncateOutputTail(raw: string | undefined): string | undefined {
   if (!raw) return undefined;
   const trimmed = raw.trim();
