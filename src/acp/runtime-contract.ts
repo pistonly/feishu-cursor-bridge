@@ -6,6 +6,7 @@ export type AcpBackend =
   | "cursor-legacy"
   | "claude"
   | "codex"
+  | "codex-app-server"
   | "gemini";
 
 export type SessionRecovery =
@@ -99,7 +100,7 @@ export function isClaudeBackend(backend: AcpBackend): boolean {
 }
 
 export function isCodexBackend(backend: AcpBackend): boolean {
-  return backend === "codex";
+  return backend === "codex" || backend === "codex-app-server";
 }
 
 export function isGeminiBackend(backend: AcpBackend): boolean {

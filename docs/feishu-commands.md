@@ -118,10 +118,10 @@
 
 <!-- backend-command-syntax:start -->
 ```text
-/new <路径> --backend <cursor-official|cursor-legacy|claude|codex|gemini>
-/new <序号> --backend <cursor-official|cursor-legacy|claude|codex|gemini>
-/new <路径> -b <official|cur|legacy|claude|codex|cc|cx|gemini|gm>
-/new <序号> -b <official|cur|legacy|claude|codex|cc|cx|gemini|gm>
+/new <路径> --backend <cursor-official|cursor-legacy|claude|codex|codex-app-server|gemini>
+/new <序号> --backend <cursor-official|cursor-legacy|claude|codex|codex-app-server|gemini>
+/new <路径> -b <official|cur|legacy|claude|codex|cc|cx|codex-app-server|codex-app|cxs|gemini|gm>
+/new <序号> -b <official|cur|legacy|claude|codex|cc|cx|codex-app-server|codex-app|cxs|gemini|gm>
 ```
 <!-- backend-command-syntax:end -->
 
@@ -129,7 +129,7 @@
 
 - `-b` 是 `--backend` 的简写。
 <!-- backend-alias-guide:start -->
-- backend 值支持完整名称，也支持常用简写：`cur` = `cursor-official`、`cc` = `claude`、`cx` = `codex`、`gm` = `gemini`；`legacy` 继续使用全写，`official` 仍兼容。
+- backend 值支持完整名称，也支持常用简写：`cur` = `cursor-official`、`cc` = `claude`、`cx` = `codex`、`cxs` = `codex-app-server`、`gm` = `gemini`；`legacy` 继续使用全写，`official` 仍兼容。
 <!-- backend-alias-guide:end -->
 - `--backend` 仅对**真正创建 session** 的 `/new <路径>`、`/new <序号>` 生效。
 - `/new`、`/new list`、`/new add-list`、`/new remove-list` 不创建 session，因此不使用 `--backend`。

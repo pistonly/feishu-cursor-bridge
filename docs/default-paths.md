@@ -44,7 +44,7 @@
 - **`ACP_ENABLED_BACKENDS` 默认**：未设置时，仅启用 `ACP_BACKEND` 当前值
 - **`CURSOR_AGENT_PATH` 默认**：`agent`
 - **含义**：`ACP_BACKEND` 决定默认 backend；`ACP_ENABLED_BACKENDS` 决定启动时实际拉起哪些 backend，以及 `/new --backend <...>` 允许选择哪些值
-- **常见场景**：若默认仍想用 `cursor-official`，但又希望在飞书里临时切到 `cursor-legacy` / `claude` / `codex`，应显式配置 `ACP_ENABLED_BACKENDS=cursor-official,cursor-legacy,claude,codex`
+- **常见场景**：若默认仍想用 `cursor-official`，但又希望在飞书里临时切到 `cursor-legacy` / `claude` / `codex` / `codex-app-server` / `gemini`，应显式配置 `ACP_ENABLED_BACKENDS=cursor-official,cursor-legacy,claude,codex,codex-app-server,gemini`
 
 ### service PATH 的 Conda 注入 `CONDA_ROOT` / `CONDA_ENV_NAME`
 

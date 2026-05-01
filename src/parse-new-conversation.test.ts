@@ -104,6 +104,13 @@ test("parseNewConversationCommand 支持 /new -b 简写与 backend 别名", () =
     backend: "codex",
     name: undefined,
   });
+  assert.deepEqual(parseNewConversationCommand("/new /tmp/demo -b=cxs"), {
+    kind: "new",
+    variant: "workspace",
+    path: "/tmp/demo",
+    backend: "codex-app-server",
+    name: undefined,
+  });
 });
 
 test("parseNewConversationCommand 会把已移除的 tmux backend 标记为非法用法", () => {

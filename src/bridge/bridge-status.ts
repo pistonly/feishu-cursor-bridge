@@ -1,3 +1,4 @@
+import { isCodexBackend, isGeminiBackend } from "../acp/runtime-contract.js";
 import * as path from "node:path";
 import type { FeishuMessage } from "../feishu/bot.js";
 import type { BridgeMessageHandlerDeps } from "./bridge-message-handler-types.js";
@@ -114,12 +115,14 @@ export async function handleStatusCommand(
   ) {
     body += `\n• Official ACP sessionId：\`${activeSession.sessionId}\``;
   } else if (
-    activeSession?.backend === "gemini" &&
+    activeSession?.backend &&
+    isGeminiBackend(activeSession.backend) &&
     activeSession.sessionId
   ) {
     body += `\n• Gemini sessionId：\`${activeSession.sessionId}\``;
   } else if (
-    activeSession?.backend === "codex" &&
+    activeSession?.backend &&
+    isCodexBackend(activeSession.backend) &&
     activeSession.sessionId
   ) {
     body += `\n• Codex sessionId：\`${activeSession.sessionId}\``;

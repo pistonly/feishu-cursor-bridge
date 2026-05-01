@@ -4,7 +4,12 @@ import {
   formatSupportedBackendValues,
 } from "../acp/backend-metadata.js";
 import { captureAcpReplayDuring } from "../acp/replay-capture.js";
-import type { AcpBackend, SessionRecovery } from "../acp/runtime-contract.js";
+import {
+  isCodexBackend,
+  isGeminiBackend,
+  type AcpBackend,
+  type SessionRecovery,
+} from "../acp/runtime-contract.js";
 import {
   matchesBridgeHelpCommand,
   matchesBridgeStartCommand,
@@ -230,7 +235,7 @@ function buildResumeUsageLines(): string[] {
     "• `/resume <序号>` — 恢复到对应历史 session",
     "• `/resume <sessionId>` — 按历史列表中的 sessionId 恢复",
     "• `/resume -b <backend> <id>` — 直接按 backend 指定的恢复 ID 绑定当前槽位",
-    "• `<id>` 含义：`cursor-legacy` = CLI resume ID，`claude` = Claude resume session，`codex` / `cursor-official` / `gemini` = ACP sessionId",
+    "• `<id>` 含义：`cursor-legacy` = CLI resume ID，`claude` = Claude resume session，`codex` / `codex-app-server` / `cursor-official` / `gemini` = ACP sessionId",
   ];
 }
 
@@ -1316,8 +1321,8 @@ async function handleModelCommand(
       runtime.getSessionModelState(activeSessionForModel.sessionId)
         ?.currentModelId ?? resolved.modelId;
     if (
-      activeSessionForModel.backend === "codex" ||
-      activeSessionForModel.backend === "gemini"
+      isCodexBackend(activeSessionForModel.backend) ||
+      isGeminiBackend(activeSessionForModel.backend)
     ) {
       ctx.sessionManager.setActiveSessionPreferredModel(
         msg.chatId,

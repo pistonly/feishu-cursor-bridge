@@ -1,13 +1,11 @@
 import * as path from "node:path";
-import type {
-  AcpBackend,
-  AcpRuntimeResolver,
-  BridgeAcpRuntime,
-  SessionRecovery,
-} from "../acp/runtime-contract.js";
 import {
   isCodexBackend,
   isGeminiBackend,
+  type AcpBackend,
+  type AcpRuntimeResolver,
+  type BridgeAcpRuntime,
+  type SessionRecovery,
 } from "../acp/runtime-contract.js";
 import type { GroupSessionScope } from "../config/index.js";
 import type {

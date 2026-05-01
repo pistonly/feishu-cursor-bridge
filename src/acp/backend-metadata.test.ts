@@ -13,7 +13,14 @@ import {
 } from "./backend-metadata.js";
 
 test("backend metadata keeps canonical backend ids ordered", () => {
-  assert.deepEqual(ACP_BACKENDS, ["cursor-official", "cursor-legacy", "claude", "codex", "gemini"]);
+  assert.deepEqual(ACP_BACKENDS, [
+    "cursor-official",
+    "cursor-legacy",
+    "claude",
+    "codex",
+    "codex-app-server",
+    "gemini",
+  ]);
 });
 
 test("backend metadata aliases do not collide across backends", () => {
@@ -42,10 +49,11 @@ test("backend metadata aliases do not collide across backends", () => {
 });
 
 test("backend metadata formatters expose current supported backend text", () => {
-  assert.equal(formatSupportedBackendValues(), "`cursor-official` / `cursor-legacy` / `claude` / `codex` / `gemini`");
-  assert.equal(formatSupportedBackendValuePattern(), "cursor-official|cursor-legacy|claude|codex|gemini");
-  assert.equal(formatPreferredBackendShortcuts(), "`cur` / `legacy` / `cc` / `cx` / `gm`");
+  assert.equal(formatSupportedBackendValues(), "`cursor-official` / `cursor-legacy` / `claude` / `codex` / `codex-app-server` / `gemini`");
+  assert.equal(formatSupportedBackendValuePattern(), "cursor-official|cursor-legacy|claude|codex|codex-app-server|gemini");
+  assert.equal(formatPreferredBackendShortcuts(), "`cur` / `legacy` / `cc` / `cx` / `cxs` / `gm`");
   assert.equal(formatCompatibleBackendAliases(), "`official`");
   assert.equal(getBackendShortcut("cursor-official"), "cur");
+  assert.equal(getBackendShortcut("codex-app-server"), "cxs");
   assert.equal(getBackendShortcut("gemini"), "gm");
 });

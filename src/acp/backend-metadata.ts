@@ -48,6 +48,20 @@ export const BACKEND_METADATA = [
     documentedFlagValues: ["codex", "cx"],
   },
   {
+    id: "codex-app-server",
+    label: "Codex（app-server）",
+    description: "Codex app-server 后端",
+    preferredShortcut: "cxs",
+    commandAliases: ["codex-app-server", "codex-app", "cxs"],
+    configAliases: [
+      "codex-app-server",
+      "codex-app",
+      "appserver",
+      "app-server",
+    ],
+    documentedFlagValues: ["codex-app-server", "codex-app", "cxs"],
+  },
+  {
     id: "gemini",
     label: "Gemini CLI（gemini --acp）",
     description: "Gemini CLI ACP 后端",
@@ -92,6 +106,9 @@ const DOCUMENTED_BACKEND_FLAG_VALUES = [
   "codex",
   "cc",
   "cx",
+  "codex-app-server",
+  "codex-app",
+  "cxs",
   "gemini",
   "gm",
 ] as const;
@@ -163,7 +180,7 @@ export function buildBackendCommandSyntaxDocSnippet(): string {
 }
 
 export function buildBackendAliasGuideSnippet(): string {
-  return `- backend 值支持完整名称，也支持常用简写：\`${getBackendShortcut("cursor-official")}\` = \`cursor-official\`、\`${getBackendShortcut("claude")}\` = \`claude\`、\`${getBackendShortcut("codex")}\` = \`codex\`、\`${getBackendShortcut("gemini")}\` = \`gemini\`；\`${getBackendShortcut("cursor-legacy")}\` 继续使用全写，${formatCompatibleBackendAliases()} 仍兼容。`;
+  return `- backend 值支持完整名称，也支持常用简写：\`${getBackendShortcut("cursor-official")}\` = \`cursor-official\`、\`${getBackendShortcut("claude")}\` = \`claude\`、\`${getBackendShortcut("codex")}\` = \`codex\`、\`${getBackendShortcut("codex-app-server")}\` = \`codex-app-server\`、\`${getBackendShortcut("gemini")}\` = \`gemini\`；\`${getBackendShortcut("cursor-legacy")}\` 继续使用全写，${formatCompatibleBackendAliases()} 仍兼容。`;
 }
 
 export function buildReadmeBackendSwitchSnippet(language: "en" | "zh"): string {

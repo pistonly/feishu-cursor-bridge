@@ -75,6 +75,11 @@ async function main() {
       `[main] Codex ACP command: ${config.acp.codexSpawnCommand} ${config.acp.codexSpawnArgs.join(" ")}`.trim(),
     );
   }
+  if (config.acp.enabledBackends.includes("codex-app-server")) {
+    console.log(
+      `[main] Codex app-server command: ${config.acp.codexAppServerSpawnCommand ?? "codex"} ${(config.acp.codexAppServerSpawnArgs ?? []).join(" ")}`.trim(),
+    );
+  }
   if (config.acp.enabledBackends.includes("gemini")) {
     const geminiArgs = config.acp.geminiSpawnArgs ?? ["--acp"];
     console.log(

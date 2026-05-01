@@ -2,7 +2,6 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
-  ACP_BACKENDS,
   CONFIG_BACKEND_ALIAS_MAP,
   parseBackendAlias,
 } from "../acp/backend-metadata.js";
@@ -62,6 +61,9 @@ export interface Config {
     /** Codex ACP 子进程命令 */
     codexSpawnCommand: string;
     codexSpawnArgs: string[];
+    /** Codex app-server 子进程命令 */
+    codexAppServerSpawnCommand?: string;
+    codexAppServerSpawnArgs?: string[];
     /** Gemini CLI ACP 子进程命令 */
     geminiSpawnCommand?: string;
     geminiSpawnArgs?: string[];
@@ -373,6 +375,26 @@ function resolveCodexAgentAcpSpawn(): { command: string; args: string[] } {
   };
 }
 
+function resolveCodexAppServerSpawn(): { command: string; args: string[] } {
+  const envRaw = process.env["CODEX_APP_SERVER_COMMAND"]?.trim();
+  const extra = parseExtraArgs(process.env["CODEX_APP_SERVER_EXTRA_ARGS"]);
+  if (envRaw) {
+    const tokens = parseShellLikeArgs(envRaw);
+    if (tokens.length === 0) {
+      throw new Error("CODEX_APP_SERVER_COMMAND 解析为空");
+    }
+    const baseArgs = [...tokens.slice(1), ...extra];
+    return {
+      command: tokens[0]!,
+      args: baseArgs[0] === "app-server" ? baseArgs : ["app-server", ...baseArgs],
+    };
+  }
+  return {
+    command: "codex",
+    args: ["app-server", "--analytics-default-enabled", ...extra],
+  };
+}
+
 function resolveGeminiCliAcpSpawn(): { command: string; args: string[] } {
   const envRaw = process.env["GEMINI_CLI_ACP_COMMAND"]?.trim();
   const extra = parseExtraArgs(process.env["GEMINI_CLI_ACP_EXTRA_ARGS"]);
@@ -670,6 +692,7 @@ export function loadConfig(): Config {
 
   const claudeSpawn = resolveClaudeAgentAcpSpawn();
   const codexSpawn = resolveCodexAgentAcpSpawn();
+  const codexAppServerSpawn = resolveCodexAppServerSpawn();
   const geminiSpawn = resolveGeminiCliAcpSpawn();
 
   return {
@@ -692,6 +715,8 @@ export function loadConfig(): Config {
       claudeSpawnArgs: claudeSpawn.args,
       codexSpawnCommand: codexSpawn.command,
       codexSpawnArgs: codexSpawn.args,
+      codexAppServerSpawnCommand: codexAppServerSpawn.command,
+      codexAppServerSpawnArgs: codexAppServerSpawn.args,
       geminiSpawnCommand: geminiSpawn.command,
       geminiSpawnArgs: geminiSpawn.args,
       workspaceRoot,

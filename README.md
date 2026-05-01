@@ -1,6 +1,6 @@
 # feishu-cursor-bridge
 
-> Standalone service that controls multiple ACP backends from a Feishu bot. The bridge runs as an **ACP Client** and can route each session slot to **`cursor-official`**, **`cursor-legacy`**, **`claude`**, **`codex`**, or **`gemini`**.
+> Standalone service that controls multiple ACP backends from a Feishu bot. The bridge runs as an **ACP Client** and can route each session slot to **`cursor-official`**, **`cursor-legacy`**, **`claude`**, **`codex`**, **`codex-app-server`**, or **`gemini`**.
 
 **[中文文档](#中文文档)**
 
@@ -39,7 +39,7 @@ Feishu user ──(WebSocket)──> FeishuBot ──> Bridge
 ## Prerequisites
 
 1. **Node.js 18+**
-2. Install the runtime(s) you plan to use: Cursor official uses `agent`; `cursor-legacy` still shells out to `cursor-agent`; `claude` uses `claude-agent-acp` / Claude Code authentication; `codex` uses `@zed-industries/codex-acp`; `gemini` uses `gemini --acp` / Gemini CLI authentication. On Linux, confirm `npx -y @zed-industries/codex-acp --help` works on the host first before enabling `codex`; the current tested Linux x64 package requires OpenSSL 3 and `glibc >= 2.34`
+2. Install the runtime(s) you plan to use: Cursor official uses `agent`; `cursor-legacy` still shells out to `cursor-agent`; `claude` uses `claude-agent-acp` / Claude Code authentication; `codex` uses `@zed-industries/codex-acp`; `codex-app-server` uses `codex app-server`; `gemini` uses `gemini --acp` / Gemini CLI authentication. On Linux, confirm `npx -y @zed-industries/codex-acp --help` works on the host first before enabling `codex`; the current tested Linux x64 package requires OpenSSL 3 and `glibc >= 2.34`
 3. Feishu enterprise app: bot, `im:message`, **`im:message.group_msg`** (required for group messages), `im:message:send_as_bot`, `im:chat`; for “one user + bot” no-@ logic, grant read chat / member APIs as needed (`im:chat` related)
 
 ## Quick Start
@@ -72,6 +72,7 @@ npm run build && npm start
 | `cursor-legacy` | Node.js + in-repo `vendor/cursor-agent-acp/` | Local `cursor-agent` / Cursor CLI must still be usable | `ACP_BACKEND=cursor-legacy`, optional `CURSOR_LEGACY_NODE_PATH`, `CURSOR_LEGACY_SESSION_DIR`, `CURSOR_LEGACY_EXTRA_ARGS` | Confirm `npm run dev` / `npm run build` succeeds, then use `/new --backend cursor-legacy ...` |
 | `claude` | `claude-agent-acp` or bundled dist / `npx` fallback | Claude Code auth must already be valid on the host; file send-back needs the bridge extension path to remain available | `ACP_BACKEND=claude`, optional `CLAUDE_AGENT_ACP_COMMAND`, `CLAUDE_AGENT_ACP_EXTRA_ARGS` | `docker-compose -f docker/compose.yaml run --rm claude-acp-smoke`, then a real `/new --backend claude ...` check |
 | `codex` | `npx` or local `codex-acp` command | Codex auth must already be valid on the host; usually `OPENAI_API_KEY` or `CODEX_API_KEY`. On Linux x64, the current tested `@zed-industries/codex-acp@0.11.1` also needs OpenSSL 3 (`libssl.so.3` / `libcrypto.so.3`) and `glibc >= 2.34` | `ACP_BACKEND=codex`, optional `CODEX_AGENT_ACP_COMMAND`, `CODEX_AGENT_ACP_EXTRA_ARGS` | Confirm `npx @zed-industries/codex-acp` works locally, then use `/new --backend codex ...` |
+| `codex-app-server` | `codex` | Codex CLI auth must already be valid on the host; the CLI must support `app-server` | `ACP_BACKEND=codex-app-server`, optional `CODEX_APP_SERVER_COMMAND`, `CODEX_APP_SERVER_EXTRA_ARGS` | Confirm `codex app-server --help` works locally, then use `/new --backend codex-app-server ...` |
 | `gemini` | `gemini` | Gemini CLI auth must already be valid on the host; the CLI must support `--acp` | `ACP_BACKEND=gemini`, optional `GEMINI_CLI_ACP_COMMAND`, `GEMINI_CLI_ACP_EXTRA_ARGS` | Confirm `gemini --acp` works locally, then use `/new --backend gemini ...` |
 
 Notes:
@@ -194,7 +195,7 @@ Notes:
 | `FEISHU_APP_SECRET` | Feishu App Secret (required) | — |
 | `FEISHU_DOMAIN` | `feishu` / `lark` / custom URL | `feishu` |
 | `BRIDGE_INSTANCE_NAME` | Optional local instance name. When set, default state paths and `service.sh` launchd/systemd names are isolated so multiple bots can run on one machine. Use letters, numbers, `.`, `_`, `-`. | empty |
-| `ACP_BACKEND` | Default backend: `cursor-official` / `cursor-legacy` / `claude` / `codex` / `gemini` | `cursor-official` |
+| `ACP_BACKEND` | Default backend: `cursor-official` / `cursor-legacy` / `claude` / `codex` / `codex-app-server` / `gemini` | `cursor-official` |
 | `CURSOR_AGENT_PATH` | Official ACP command path | `agent` |
 | `CURSOR_API_KEY` | Official ACP API key (optional) | empty |
 | `CURSOR_AUTH_TOKEN` | Official ACP auth token (optional) | empty |
@@ -204,6 +205,8 @@ Notes:
 | `CLAUDE_AGENT_ACP_EXTRA_ARGS` | Extra args appended to Claude ACP child command | empty |
 | `CODEX_AGENT_ACP_COMMAND` | Codex ACP child command; override this when the default `npx` binary is not ABI-compatible with the host | `npx -y @zed-industries/codex-acp` |
 | `CODEX_AGENT_ACP_EXTRA_ARGS` | Extra args appended to Codex ACP child command | empty |
+| `CODEX_APP_SERVER_COMMAND` | Codex app-server child command | `codex app-server --analytics-default-enabled` |
+| `CODEX_APP_SERVER_EXTRA_ARGS` | Extra args appended to Codex app-server child command | empty |
 | `GEMINI_CLI_ACP_COMMAND` | Gemini CLI ACP child command | `gemini` |
 | `GEMINI_CLI_ACP_EXTRA_ARGS` | Extra args appended to Gemini CLI ACP child command | empty |
 | `BRIDGE_WORK_ALLOWLIST` | **Required.** Comma-separated absolute workspace roots; compatible with `CURSOR_WORK_ALLOWLIST`; ACP child `cwd` = first entry | — |
@@ -234,7 +237,7 @@ Proxy precedence: `wss_proxy` / `ws_proxy` > `https_proxy` / `http_proxy` / `all
 - **DM / group**: after you **create a session** with `/new list` then `/new <index or path>` (paths must fall under `BRIDGE_WORK_ALLOWLIST`), normal messages go to Cursor; without a session the bot asks you to `/new` first
 - **Incoming attachments**: when a session is active, files/images/audio/video sent from Feishu are downloaded into `.feishu-incoming/` under the current workspace and then described to the Agent as local paths; `/fileback` is the opposite direction, for asking the Agent to send workspace files back to Feishu
 <!-- backend-readme-switch-en:start -->
-- **Switch backend**: use `/new <index or path> --backend <cursor-official|cursor-legacy|claude|codex|gemini>` to select the backend for a new session; `-b <official|cur|legacy|claude|codex|cc|cx|gemini|gm>` is also supported. The backend must be included in `ACP_ENABLED_BACKENDS`, or it will not be available.
+- **Switch backend**: use `/new <index or path> --backend <cursor-official|cursor-legacy|claude|codex|codex-app-server|gemini>` to select the backend for a new session; `-b <official|cur|legacy|claude|codex|cc|cx|codex-app-server|codex-app|cxs|gemini|gm>` is also supported. The backend must be included in `ACP_ENABLED_BACKENDS`, or it will not be available.
 <!-- backend-readme-switch-en:end -->
 - **Group**: @ the bot + content ( **`im:message.group_msg`** must be enabled or group events won’t arrive); in **topic** groups, each `thread_id` always stays isolated from the main group chat. With `BRIDGE_GROUP_SESSION_SCOPE=shared`, members in the same group/thread share the same session set and only admins may run session-management commands.
 - **Multi-session**: `/new <index or path>` creates and switches (old session stays connected); bare `/new` lists presets; `/sessions` lists; `/switch <index or name>` switches active (no arg → last used); `/close` closes one; `/rename` helps name-based switching. Full syntax: `docs/feishu-commands.md`
@@ -307,7 +310,7 @@ Proxy precedence: `wss_proxy` / `ws_proxy` > `https_proxy` / `http_proxy` / `all
 ## 前置条件
 
 1. **Node.js 18+**
-2. 已安装 **Cursor CLI / Agent CLI**（`agent` 在 PATH 中，并已完成登录；若使用 **`ACP_BACKEND=cursor-legacy`**，内嵌适配器会调用 **`cursor-agent`**，需本机可用；若使用 **`ACP_BACKEND=gemini`**，则需本机可用 **`gemini --acp`**）
+2. 已安装 **Cursor CLI / Agent CLI**（`agent` 在 PATH 中，并已完成登录；若使用 **`ACP_BACKEND=cursor-legacy`**，内嵌适配器会调用 **`cursor-agent`**，需本机可用；若使用 **`ACP_BACKEND=codex-app-server`**，则需本机可用 **`codex app-server`**；若使用 **`ACP_BACKEND=gemini`**，则需本机可用 **`gemini --acp`**）
 3. 飞书企业自建应用：机器人、`im:message`、**`im:message.group_msg`**（群聊收消息必需）、`im:message:send_as_bot`、`im:chat`；若使用「仅 1 用户 + 1 机器人」免 @ 等需拉群信息的逻辑，还需按需开通 `im:chat` 相关只读权限（如查看群成员）
 
 ## 快速开始
@@ -340,6 +343,7 @@ npm run build && npm start
 | `cursor-legacy` | Node.js + 仓库内 `vendor/cursor-agent-acp/` | 宿主机上的 `cursor-agent` / Cursor CLI 仍需可用 | `ACP_BACKEND=cursor-legacy`，可选 `CURSOR_LEGACY_NODE_PATH`、`CURSOR_LEGACY_SESSION_DIR`、`CURSOR_LEGACY_EXTRA_ARGS` | 先确认 `npm run dev` / `npm run build` 正常，再用 `/new --backend cursor-legacy ...` |
 | `claude` | `claude-agent-acp`，或 bundled dist / `npx` 回退 | 宿主机需已有有效 Claude Code 认证；文件回传依赖 bridge 扩展链路可用 | `ACP_BACKEND=claude`，可选 `CLAUDE_AGENT_ACP_COMMAND`、`CLAUDE_AGENT_ACP_EXTRA_ARGS` | `docker-compose -f docker/compose.yaml run --rm claude-acp-smoke`，再补一次真实 `/new --backend claude ...` |
 | `codex` | `npx` 或本地 `codex-acp` 命令 | 宿主机需已有有效 Codex/OpenAI 认证；通常依赖 `OPENAI_API_KEY` 或 `CODEX_API_KEY`。当前实测的 Linux x64 包 `@zed-industries/codex-acp@0.11.1` 还要求 OpenSSL 3（`libssl.so.3` / `libcrypto.so.3`）以及 `glibc >= 2.34` | `ACP_BACKEND=codex`，可选 `CODEX_AGENT_ACP_COMMAND`、`CODEX_AGENT_ACP_EXTRA_ARGS` | 先确认 `npx @zed-industries/codex-acp` 可用，再补一次真实 `/new --backend codex ...` |
+| `codex-app-server` | `codex` | Codex CLI 认证必须可用；CLI 需支持 `app-server` | `ACP_BACKEND=codex-app-server`，可选 `CODEX_APP_SERVER_COMMAND`、`CODEX_APP_SERVER_EXTRA_ARGS` | 先确认 `codex app-server --help` 可用，再补一次真实 `/new --backend codex-app-server ...` |
 | `gemini` | `gemini` | Gemini CLI 认证必须可用；CLI 需支持 `--acp` | `ACP_BACKEND=gemini`，可选 `GEMINI_CLI_ACP_COMMAND`、`GEMINI_CLI_ACP_EXTRA_ARGS` | 先确认 `gemini --acp` 可用，再补一次真实 `/new --backend gemini ...` |
 
 说明：
@@ -462,7 +466,7 @@ docker-compose -f docker/compose.yaml run --rm claude-acp-smoke
 | `FEISHU_APP_SECRET` | 飞书 App Secret（必填） | — |
 | `FEISHU_DOMAIN` | `feishu` / `lark` / 自定义 URL | `feishu` |
 | `BRIDGE_INSTANCE_NAME` | 本机实例名；设置后默认状态路径与 `service.sh` 的 launchd/systemd 服务名会自动隔离，便于同机多 bot 并存。可用字母、数字、`.`、`_`、`-`。 | 空 |
-| `ACP_BACKEND` | ACP 后端：`cursor-official` / `cursor-legacy` / `claude` / `codex` / `gemini` | `cursor-official` |
+| `ACP_BACKEND` | ACP 后端：`cursor-official` / `cursor-legacy` / `claude` / `codex` / `codex-app-server` / `gemini` | `cursor-official` |
 | `CURSOR_AGENT_PATH` | 官方 ACP 命令路径 | `agent` |
 | `CURSOR_API_KEY` | 官方 ACP API key（可选） | 空 |
 | `CURSOR_AUTH_TOKEN` | 官方 ACP auth token（可选） | 空 |
@@ -470,6 +474,8 @@ docker-compose -f docker/compose.yaml run --rm claude-acp-smoke
 | `CLAUDE_AGENT_ACP_EXTRA_ARGS` | 追加到 Claude ACP 子进程命令后的额外参数 | 空 |
 | `CODEX_AGENT_ACP_COMMAND` | Codex ACP 子进程命令；若默认 `npx` 二进制与宿主机 ABI 不兼容，可在这里覆盖 | `npx -y @zed-industries/codex-acp` |
 | `CODEX_AGENT_ACP_EXTRA_ARGS` | 追加到 Codex ACP 子进程命令后的额外参数 | 空 |
+| `CODEX_APP_SERVER_COMMAND` | Codex app-server 子进程命令 | `codex app-server --analytics-default-enabled` |
+| `CODEX_APP_SERVER_EXTRA_ARGS` | 追加到 Codex app-server 子进程命令后的额外参数 | 空 |
 | `GEMINI_CLI_ACP_COMMAND` | Gemini CLI ACP 子进程命令 | `gemini` |
 | `GEMINI_CLI_ACP_EXTRA_ARGS` | 追加到 Gemini CLI ACP 子进程命令后的额外参数 | 空 |
 | `BRIDGE_WORK_ALLOWLIST` | **必填**，逗号分隔的绝对路径根；兼容 `CURSOR_WORK_ALLOWLIST`；ACP 子进程 `cwd` 取列表首项 | — |
@@ -500,7 +506,7 @@ docker-compose -f docker/compose.yaml run --rm claude-acp-smoke
 
 - **私聊 / 群聊**：须先用 **`/new list`** 再 **`/new <序号或路径>`** 创建 session（路径须在 `BRIDGE_WORK_ALLOWLIST` 下），之后普通消息才会进 Agent；无 session 时机器人会提示先 `/new`
 <!-- backend-readme-switch-zh:start -->
-- **切换 backend**：可用 `/new <序号或路径> --backend <cursor-official|cursor-legacy|claude|codex|gemini>` 为新 session 指定 backend；也支持 `-b <official|cur|legacy|claude|codex|cc|cx|gemini|gm>`；但该 backend 必须已包含在 `ACP_ENABLED_BACKENDS` 中，否则不会被启动
+- **切换 backend**：可用 `/new <序号或路径> --backend <cursor-official|cursor-legacy|claude|codex|codex-app-server|gemini>` 为新 session 指定 backend；也支持 `-b <official|cur|legacy|claude|codex|cc|cx|codex-app-server|codex-app|cxs|gemini|gm>`；但该 backend 必须已包含在 `ACP_ENABLED_BACKENDS` 中，否则不会被启动
 <!-- backend-readme-switch-zh:end -->
 - **飞书附件入站**：有活跃 session 时，用户直接发送的文件 / 图片 / 音频 / 视频会先下载到当前工作区的 `.feishu-incoming/`，再把相对路径说明交给 Agent；`/fileback` 则是反方向，用于让 Agent 把工作区文件回传到飞书
 - **群聊**：@机器人 + 内容（开发平台须为应用开通 **`im:message.group_msg`**，否则群消息事件不会投递到机器人）；**话题群**内不同话题（`thread_id`）始终与群主页会话互不共享。若设 `BRIDGE_GROUP_SESSION_SCOPE=shared`，同一群/同一话题内所有成员共享同一组 session，且仅管理员可执行 session 管理命令

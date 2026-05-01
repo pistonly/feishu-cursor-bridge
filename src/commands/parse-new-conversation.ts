@@ -2,7 +2,6 @@ import { COMMAND_BACKEND_ALIAS_MAP, parseBackendAlias } from "../acp/backend-met
 import { parseShellLikeArgs } from "../config/index.js";
 import type { AcpBackend } from "../acp/runtime-contract.js";
 
-
 type NewCommandCommon = {
   backend?: AcpBackend;
   invalidUsage?: boolean;
