@@ -2,6 +2,7 @@ import type { Config } from "../config/index.js";
 import { FeishuBridgeClient } from "./feishu-bridge-client.js";
 import { ClaudeAcpRuntime } from "./claude-runtime.js";
 import { CodexAcpRuntime } from "./codex-runtime.js";
+import { GeminiAcpRuntime } from "./gemini-runtime.js";
 import { OfficialAcpRuntime } from "./official-runtime.js";
 import type {
   AcpBackend,
@@ -176,6 +177,9 @@ export function createAcpRuntime(
   if (config.acp.backend === "codex") {
     return new CodexAcpRuntime(config, handler);
   }
+  if (config.acp.backend === "gemini") {
+    return new GeminiAcpRuntime(config, handler);
+  }
   return new AcpRuntime(config, handler);
 }
 
@@ -274,8 +278,12 @@ export class AcpRuntimeRegistry {
 
     entry.startPromise = (async () => {
       try {
-        await entry.runtime.start();
-        await entry.runtime.initializeAndAuth();
+        if (typeof entry.runtime.ensureStarted === "function") {
+          await entry.runtime.ensureStarted();
+        } else {
+          await entry.runtime.start();
+          await entry.runtime.initializeAndAuth();
+        }
         entry.state = "ready";
         entry.readyAt = Date.now();
         console.log(
@@ -321,5 +329,6 @@ export function formatAcpBackendLabel(backend: AcpBackend): string {
   if (backend === "cursor-official") return "Cursor 官方 ACP";
   if (backend === "claude") return "Claude Code（claude-agent-acp）";
   if (backend === "codex") return "Codex（@zed-industries/codex-acp）";
+  if (backend === "gemini") return "Gemini CLI（gemini --acp）";
   return "第三方 Cursor ACP 适配器";
 }

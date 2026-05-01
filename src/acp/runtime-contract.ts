@@ -5,7 +5,8 @@ export type AcpBackend =
   | "cursor-official"
   | "cursor-legacy"
   | "claude"
-  | "codex";
+  | "codex"
+  | "gemini";
 
 export type SessionRecovery =
   | { kind: "cursor-cli"; cursorCliChatId: string }
@@ -60,6 +61,7 @@ export interface BridgeAcpRuntime {
   readonly supportsSetSessionMode: boolean;
   readonly supportsSetSessionModel: boolean;
 
+  ensureStarted?(): Promise<void>;
   start(): Promise<void>;
   initializeAndAuth(): Promise<void>;
   newSession(
@@ -97,4 +99,8 @@ export function isClaudeBackend(backend: AcpBackend): boolean {
 
 export function isCodexBackend(backend: AcpBackend): boolean {
   return backend === "codex";
+}
+
+export function isGeminiBackend(backend: AcpBackend): boolean {
+  return backend === "gemini";
 }
