@@ -187,7 +187,7 @@ ${lines.join("\n\n")}
 • \`/reply [编号或名称]\` — 重发上一轮缓存回复
 • \`/history [条数]\` — 查看当前槽位最近几条 prompt
 • \`/fileback <说明>\` — 向 Agent 附带「用 FEISHU_SEND_FILE 发文件」说明后再发你的任务
-• \`/stop\` / \`/cancel\` — 中断**当前活跃**槽位正在生成的回复，并撤销该槽位排队消息（不关 session）
+• \`/stop\` / \`/cancel\` — 若当前槽位有排队消息则先撤销排队；否则中断正在生成的回复（不关 session）
 • \`/resume\` — 列出当前 project 可恢复的历史 session
 • \`/resume 0\` — 对当前 session 执行 ACP \`session/load\`
 • \`/resume <序号或sessionId>\` — 恢复到指定历史 session
@@ -1388,19 +1388,21 @@ async function handleInterruptCommand(
     sessionKey,
     active.slotIndex,
   );
-  if (!hasActivePrompt && !hadQueuedPrompt) {
+  if (hadQueuedPrompt) {
     await ctx.feishuBot.sendText(
       msg.chatId,
-      "ℹ️ 当前活跃 session 既没有正在生成的回复，也没有排队中的消息。其它槽位若在生成，请先 `/switch` 到该槽位再发 `/stop`。",
+      hasActivePrompt
+        ? `✅ 已撤销当前槽位中的排队消息（${formatSessionLabel(active)}）。正在生成的回复未中断；如需中断当前生成，请再次发送 \`/stop\`。`
+        : `✅ 已撤销当前槽位中的排队消息（${formatSessionLabel(active)}）。`,
       msg.messageId,
       ctx.threadReplyOpts(msg),
     );
     return true;
   }
-  if (!hasActivePrompt && hadQueuedPrompt) {
+  if (!hasActivePrompt) {
     await ctx.feishuBot.sendText(
       msg.chatId,
-      `✅ 已撤销当前槽位中的排队消息（${formatSessionLabel(active)}）。`,
+      "ℹ️ 当前活跃 session 既没有正在生成的回复，也没有排队中的消息。其它槽位若在生成，请先 `/switch` 到该槽位再发 `/stop`。",
       msg.messageId,
       ctx.threadReplyOpts(msg),
     );
@@ -1416,9 +1418,7 @@ async function handleInterruptCommand(
     );
   }
   const label = formatSessionLabel(active);
-  let body = hadQueuedPrompt
-    ? `✅ 已向进行中的任务发送中断请求（${label}），并撤销该槽位中的排队消息；session 仍保留，可继续对话。`
-    : `✅ 已向进行中的任务发送中断请求（${label}），效果与在 Cursor / Cursor Agent 侧中断本轮生成类似；session 仍保留，可继续对话。`;
+  let body = `✅ 已向进行中的任务发送中断请求（${label}），效果与在 Cursor / Cursor Agent 侧中断本轮生成类似；session 仍保留，可继续对话。`;
   if (errors.length > 0) {
     body += `\n\n⚠️ 中断失败：\n${errors.join("\n")}`;
   }

@@ -2746,6 +2746,80 @@ test("/cancel 在仅有排队消息时会撤销排队", async () => {
   assert.match(sentTexts[0] ?? "", /已撤销当前槽位中的排队消息/);
 });
 
+test("/stop 在有排队消息时只撤销排队，不中断当前生成", async () => {
+  const bridge = new Bridge(createTestConfig());
+  const sentTexts: string[] = [];
+  let cancelCalled = false;
+
+  const slot = {
+    slotIndex: 1,
+    name: "main",
+    session: {
+      backend: "cursor-official" as const,
+      sessionId: "session-1",
+      workspaceRoot: "/tmp/project",
+      chatId: "chat-1",
+      userId: "user-1",
+      chatType: "p2p" as const,
+      createdAt: 0,
+      lastActiveAt: 0,
+    },
+  };
+
+  (bridge as any).ensureMaintenanceStateLoaded = async () => {};
+  (bridge as any).sessionManager = {
+    getSessionSnapshot() {
+      return {
+        sessionKey: "dm:user-1",
+        group: { slots: [slot], activeSlotIndex: 1, nextSlotIndex: 2 },
+        activeSlot: slot,
+        idleExpiresInMs: 60_000,
+      };
+    },
+  };
+  ((bridge as any).promptCoordinator as any).activePrompts = new Set([
+    "dm:user-1:1",
+  ]);
+  ((bridge as any).promptCoordinator as any).queuedPrompts = new Map([
+    [
+      "dm:user-1:1",
+      {
+        msg: createMessage("queued", { messageId: "msg-q" }),
+        content: "queued",
+        hasPostEmbeddedImages: false,
+        slotIndex: 1,
+      },
+    ],
+  ]);
+  (bridge as any).runtimeRegistry = {
+    getRuntime() {
+      return {
+        async cancelSession(): Promise<void> {
+          cancelCalled = true;
+        },
+      };
+    },
+  };
+  (bridge as any).feishuBot = {
+    stripBotMentionKeepLines(content: string) {
+      return content;
+    },
+    async sendText(_chatId: string, body: string): Promise<void> {
+      sentTexts.push(body);
+    },
+  };
+
+  await (bridge as any).handleFeishuMessage(createMessage("/stop"));
+
+  assert.equal(
+    ((bridge as any).promptCoordinator as any).queuedPrompts.size,
+    0,
+  );
+  assert.equal(cancelCalled, false);
+  assert.match(sentTexts[0] ?? "", /已撤销当前槽位中的排队消息/);
+  assert.match(sentTexts[0] ?? "", /正在生成的回复未中断/);
+});
+
 test("/close 会拒绝关闭仍在回复中的 slot", async () => {
   const bridge = new Bridge(createTestConfig());
   const sentTexts: string[] = [];
