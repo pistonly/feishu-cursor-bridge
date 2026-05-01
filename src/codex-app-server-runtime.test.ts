@@ -4,6 +4,19 @@ import test from "node:test";
 import { CodexAppServerRuntime } from "./acp/codex-app-server-runtime.js";
 import type { Config } from "./config/index.js";
 
+function createBridgeClient(): EventEmitter & {
+  setSessionWorkspace: (_sessionId: string, _workspaceRoot: string) => void;
+  removeSessionWorkspace: (_sessionId: string) => void;
+} {
+  const bridgeClient = new EventEmitter() as EventEmitter & {
+    setSessionWorkspace: (_sessionId: string, _workspaceRoot: string) => void;
+    removeSessionWorkspace: (_sessionId: string) => void;
+  };
+  bridgeClient.setSessionWorkspace = () => {};
+  bridgeClient.removeSessionWorkspace = () => {};
+  return bridgeClient;
+}
+
 function createTestConfig(): Config {
   return {
     feishu: {
@@ -70,7 +83,7 @@ function createTestConfig(): Config {
 test("CodexAppServerRuntime initializeAndAuth can initialize before runtime is marked initialized", async () => {
   const runtime = new CodexAppServerRuntime(
     createTestConfig(),
-    new EventEmitter() as any,
+    createBridgeClient() as any,
   );
   const calls: string[] = [];
 
@@ -107,4 +120,229 @@ test("CodexAppServerRuntime initializeAndAuth can initialize before runtime is m
   assert.deepEqual(calls, ["initialize", "model/list"]);
   assert.equal(runtime.initializeResult?.protocolVersion, "codex-app-server/v2");
   assert.deepEqual(runtime.getSessionModelState("missing"), undefined);
+});
+
+test("CodexAppServerRuntime keeps current model when thread/started omits model", async () => {
+  const runtime = new CodexAppServerRuntime(
+    createTestConfig(),
+    createBridgeClient() as any,
+  );
+
+  (runtime as any).rpc = {
+    async request(method: string): Promise<unknown> {
+      if (method === "initialize") {
+        return {};
+      }
+      if (method === "model/list") {
+        return {
+          data: [
+            {
+              id: "gpt-5.4",
+              model: "gpt-5.4",
+              displayName: "GPT-5.4",
+              isDefault: true,
+              supportedReasoningEfforts: [
+                { reasoningEffort: "low" },
+                { reasoningEffort: "medium" },
+              ],
+              defaultReasoningEffort: "medium",
+            },
+          ],
+          nextCursor: null,
+        };
+      }
+      if (method === "thread/start") {
+        return {
+          thread: { id: "thread-1" },
+          model: "gpt-5.4",
+          reasoningEffort: "medium",
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    },
+  };
+
+  await runtime.initializeAndAuth();
+  const created = await runtime.newSession("/tmp");
+  assert.equal(created.sessionId, "thread-1");
+  assert.equal(
+    runtime.getSessionModelState("thread-1")?.currentModelId,
+    "gpt-5.4/medium",
+  );
+
+  await (runtime as any).handleServerNotification("thread/started", {
+    thread: { id: "thread-1" },
+  });
+
+  assert.equal(
+    runtime.getSessionModelState("thread-1")?.currentModelId,
+    "gpt-5.4/medium",
+  );
+});
+
+test("CodexAppServerRuntime uses default model selector when thread response omits model", async () => {
+  const runtime = new CodexAppServerRuntime(
+    createTestConfig(),
+    createBridgeClient() as any,
+  );
+
+  (runtime as any).rpc = {
+    async request(method: string): Promise<unknown> {
+      if (method === "initialize") {
+        return {};
+      }
+      if (method === "model/list") {
+        return {
+          data: [
+            {
+              id: "gpt-5.5",
+              model: "gpt-5.5",
+              displayName: "GPT-5.5",
+              isDefault: false,
+              supportedReasoningEfforts: [{ reasoningEffort: "medium" }],
+              defaultReasoningEffort: "medium",
+            },
+            {
+              id: "gpt-5.4",
+              model: "gpt-5.4",
+              displayName: "GPT-5.4",
+              isDefault: true,
+              supportedReasoningEfforts: [
+                { reasoningEffort: "low" },
+                { reasoningEffort: "high" },
+              ],
+              defaultReasoningEffort: "high",
+            },
+          ],
+          nextCursor: null,
+        };
+      }
+      if (method === "thread/start") {
+        return {
+          thread: { id: "thread-1" },
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    },
+  };
+
+  await runtime.initializeAndAuth();
+  await runtime.newSession("/tmp");
+
+  assert.equal(
+    runtime.getSessionModelState("thread-1")?.currentModelId,
+    "gpt-5.4/high",
+  );
+});
+
+test("CodexAppServerRuntime compactSession calls thread/compact/start", async () => {
+  const runtime = new CodexAppServerRuntime(
+    createTestConfig(),
+    createBridgeClient() as any,
+  );
+  const calls: Array<{ method: string; params: unknown }> = [];
+
+  (runtime as any).initialized = true;
+  (runtime as any).rpc = {
+    async request(method: string, params: unknown): Promise<unknown> {
+      calls.push({ method, params });
+      return {};
+    },
+  };
+
+  await runtime.compactSession("thread-1");
+
+  assert.deepEqual(calls, [
+    { method: "thread/compact/start", params: { threadId: "thread-1" } },
+  ]);
+});
+
+test("CodexAppServerRuntime maps contextCompaction item to tool progress events", async () => {
+  const bridgeClient = createBridgeClient();
+  const events: unknown[] = [];
+  bridgeClient.on("acp", (event) => {
+    events.push(event);
+  });
+  const runtime = new CodexAppServerRuntime(
+    createTestConfig(),
+    bridgeClient as any,
+  );
+
+  await (runtime as any).handleServerNotification("item/started", {
+    threadId: "thread-1",
+    turnId: "turn-1",
+    item: { type: "contextCompaction", id: "item-1" },
+  });
+  await (runtime as any).handleServerNotification("item/completed", {
+    threadId: "thread-1",
+    turnId: "turn-1",
+    item: { type: "contextCompaction", id: "item-1" },
+  });
+
+  assert.deepEqual(events, [
+    {
+      type: "tool_call",
+      sessionId: "thread-1",
+      toolCallId: "context-compaction:thread-1",
+      title: "Codex app-server compact",
+      status: "in_progress",
+    },
+    {
+      type: "tool_call_update",
+      sessionId: "thread-1",
+      toolCallId: "context-compaction:thread-1",
+      title: "Codex app-server compact",
+      status: "completed",
+    },
+  ]);
+});
+
+test("CodexAppServerRuntime uses last input tokens for approximate context usage", async () => {
+  const bridgeClient = createBridgeClient();
+  const events: unknown[] = [];
+  bridgeClient.on("acp", (event) => {
+    events.push(event);
+  });
+  const runtime = new CodexAppServerRuntime(
+    createTestConfig(),
+    bridgeClient as any,
+  );
+
+  await (runtime as any).handleServerNotification("thread/tokenUsage/updated", {
+    threadId: "thread-1",
+    turnId: "turn-1",
+    tokenUsage: {
+      total: {
+        totalTokens: 1_250_000,
+        inputTokens: 900_000,
+        cachedInputTokens: 0,
+        outputTokens: 300_000,
+        reasoningOutputTokens: 50_000,
+      },
+      last: {
+        totalTokens: 260_000,
+        inputTokens: 250_000,
+        cachedInputTokens: 0,
+        outputTokens: 8_000,
+        reasoningOutputTokens: 2_000,
+      },
+      modelContextWindow: 1_000_000,
+    },
+  });
+
+  assert.deepEqual(runtime.getSessionUsageState("thread-1"), {
+    usedTokens: 250_000,
+    maxTokens: 1_000_000,
+    percent: 25,
+  });
+  assert.deepEqual(events.at(-1), {
+    type: "usage_update",
+    sessionId: "thread-1",
+    summary: "用量统计已更新（25%）",
+    usage: {
+      usedTokens: 250_000,
+      maxTokens: 1_000_000,
+      percent: 25,
+    },
+  });
 });

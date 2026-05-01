@@ -4,6 +4,8 @@
 
 补充说明：在 `codex` session 中，`/compact`、`/clear` 都**不是 bridge 内置命令**，而是未命中后按普通 prompt 透传给 Codex backend。根据 2026-04-15 的真实探针，`/compact` 是 `codex-acp` 明确宣告的命令；`/clear` 当前环境下会表现出“清空上下文”的效果，但不是 `codex-acp` 已宣告的稳定命令。详见 `docs/codex-backend-notes.md`。
 
+补充说明：在 `codex-app-server` session 中，`/compact` 是 bridge 内置命令，会调用 app-server 原生 `thread/compact/start`；不会把 `/compact` 文本发给模型。其它 backend 的 `/compact` 行为仍按各自说明处理。
+
 补充说明：在 `cursor-official` session 中，`/compact`、`/clear`、`/summary`、`/summarize` 也都**不是 bridge 内置命令**。根据 2026-04-15 与 2026-04-16 的真实探针，它们也不是 official backend 已宣告的稳定命令；透传后通常只会被 Agent 当作普通 prompt 或本地 skill 入口来理解，不应当当成真实“压缩上下文 / 清空上下文 / 固定摘要命令”依赖。详见 `docs/official-backend-notes.md`。
 
 补充说明：在 `cursor-legacy` session 中，`/compact`、`/clear`、`/summary`、`/summarize` 同样**不是 bridge 内置命令**。根据 2026-04-16 的真实探针，legacy backend 当前只宣告 `plan`、`model` 两个命令；上述四个 slash 透传后都会被底层 `cursor-agent` 当作普通 prompt 理解，不应当当成真实“压缩上下文 / 清空上下文 / 固定摘要命令”依赖。详见 `docs/legacy-backend-notes.md`。
@@ -21,7 +23,7 @@
 
 默认情况下，同一用户在同一聊天中可以同时持有**多个** session（最多 5 个），每个 session 对应一个独立的 Cursor Agent 上下文与工作区。可以在多个 session 之间自由切换，切走的 session 保持 ACP 连接，不会被关闭。
 
-若设置 `BRIDGE_GROUP_SESSION_SCOPE=shared`，则群聊或话题内所有成员共享同一组 session 槽位；此时 `/new`、`/switch`、`/close`、`/rename`、`/resume`、`/mode`、`/model`、`/stop` 等 session 管理命令仅 `BRIDGE_ADMIN_USER_IDS` 中的管理员可用，普通成员仍可继续向当前共享 session 发普通消息。
+若设置 `BRIDGE_GROUP_SESSION_SCOPE=shared`，则群聊或话题内所有成员共享同一组 session 槽位；此时 `/new`、`/switch`、`/close`、`/rename`、`/resume`、`/mode`、`/model`、`/compact`、`/stop` 等 session 管理命令仅 `BRIDGE_ADMIN_USER_IDS` 中的管理员可用，普通成员仍可继续向当前共享 session 发普通消息。
 
 此外，同一飞书用户**跨所有私聊、按用户隔离的群/话题**的存活 session 总数有默认上限（**10**，可用环境变量 `BRIDGE_MAX_SESSIONS_PER_USER` 调整；设为 `0` 表示不限制），与「单聊天最多 5 个」是两层独立限制。共享群 session 不占用创建者的个人配额。
 
@@ -288,7 +290,23 @@
 
 ---
 
-### 7. 关闭 session（`/close`）
+### 7. 压缩 Codex app-server 上下文（`/compact`）
+
+```text
+/compact
+```
+
+**作用**：当当前活跃 session 的 backend 是 `codex-app-server` 时，bridge 调用 app-server 原生 `thread/compact/start` 压缩当前上下文；不会把 `/compact` 文本发给模型。
+
+限制：
+
+- 仅 `codex-app-server` 由 bridge 接管；`codex` ACP backend 的 `/compact` 仍按后端 slash command 透传处理。
+- 若当前槽位仍有回复在进行或排队，bridge 会拒绝执行，并提示先等待完成或发送 `/stop` / `/cancel`。
+- 若当前群聊启用了 `BRIDGE_GROUP_SESSION_SCOPE=shared`，则 `/compact` 仅管理员可执行。
+
+---
+
+### 8. 关闭 session（`/close`）
 
 ```text
 /close <编号或名称>
@@ -309,7 +327,7 @@
 
 ---
 
-### 8. 重命名 session（`/rename`）
+### 9. 重命名 session（`/rename`）
 
 ```text
 /rename <新名字>
@@ -333,7 +351,7 @@
 
 ---
 
-### 9. 切换模式（`/mode`）
+### 10. 切换模式（`/mode`）
 
 ```text
 /mode
@@ -363,7 +381,7 @@ backend 差异：
 
 ---
 
-### 10. 通过飞书发文件（`/fileback`）
+### 11. 通过飞书发文件（`/fileback`）
 
 ```text
 /fileback <任务说明>
@@ -380,7 +398,7 @@ backend 差异：
 
 ---
 
-### 11. Bridge 内置终端命令（`!<shell 命令>`）
+### 12. Bridge 内置终端命令（`!<shell 命令>`）
 
 ```text
 !pwd
@@ -414,7 +432,7 @@ backend 差异：
 
 ---
 
-### 12. 查询当前用户 ID（`/whoami`）
+### 13. 查询当前用户 ID（`/whoami`）
 
 ```text
 /whoami
@@ -428,7 +446,7 @@ backend 差异：
 
 ---
 
-### 13. 从 GitHub 升级（`/upgrade`）
+### 14. 从 GitHub 升级（`/upgrade`）
 
 ```text
 /upgrade
@@ -456,7 +474,7 @@ backend 差异：
 
 ---
 
-### 14. 状态（`/status`）
+### 15. 状态（`/status`）
 
 **等价命令**：`/status`、`/状态`
 
@@ -483,7 +501,7 @@ backend 差异：
 
 ---
 
-### 15. 切换模型（`/model`）
+### 16. 切换模型（`/model`）
 
 **格式**：
 
@@ -575,7 +593,7 @@ backend 差异：
 | `BRIDGE_WORK_ALLOWLIST`（兼容 `CURSOR_WORK_ALLOWLIST`） | **必填**；逗号分隔的绝对路径，会话工作区必须落在某一允许根下；ACP 子进程 spawn 的 cwd 为列表首项。 |
 | `ACP_BACKEND` | 默认 backend；创建 session 时若未显式写 `--backend`，则使用此值。 |
 | `ACP_ENABLED_BACKENDS` | 允许通过 `/new --backend` 选择的 backend 列表（逗号分隔）。 |
-| `BRIDGE_GROUP_SESSION_SCOPE` | 设为 `shared` 时，群聊/话题内成员共享同一组 session；`/new`、`/switch`、`/close`、`/resume`、`/mode`、`/model`、`/stop` 等管理命令仅管理员可用。 |
+| `BRIDGE_GROUP_SESSION_SCOPE` | 设为 `shared` 时，群聊/话题内成员共享同一组 session；`/new`、`/switch`、`/close`、`/resume`、`/mode`、`/model`、`/compact`、`/stop` 等管理命令仅管理员可用。 |
 | `BRIDGE_WORK_PRESETS_FILE` | 可选；`/new list` 使用的快捷列表 JSON 路径。 |
 | `BRIDGE_WORK_PRESETS`（兼容 `CURSOR_WORK_PRESETS`） | 可选；列表文件为空时用于首次写入的初始路径（逗号分隔）。 |
 | `SESSION_IDLE_TIMEOUT_MS` | 可选；控制 session 空闲多久后视为过期。设为 `0` 或 `infinity` 表示永不过期。 |

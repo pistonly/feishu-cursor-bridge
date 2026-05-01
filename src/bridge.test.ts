@@ -1016,6 +1016,118 @@ test("/model 成功后提示会回显运行时确认的当前模型", async () =
   assert.match(sentTexts[0] ?? "", /已切换模型为 `claude-opus-4-6`/);
 });
 
+test("/compact 在 codex-app-server backend 调用原生 compact RPC", async () => {
+  const bridge = new Bridge(createTestConfig());
+  const sentCards: string[] = [];
+  const updatedCards: string[] = [];
+  const compactCalls: string[] = [];
+  const bridgeClient = new EventEmitter();
+
+  (bridge as any).ensureMaintenanceStateLoaded = async () => {};
+  (bridge as any).runtimeRegistry = {
+    getRuntime() {
+      return {
+        bridgeClient,
+        async compactSession(sessionId: string): Promise<void> {
+          compactCalls.push(sessionId);
+          bridgeClient.emit("acp", {
+            type: "tool_call_update",
+            sessionId,
+            toolCallId: `context-compaction:${sessionId}`,
+            title: "Codex app-server compact",
+            status: "completed",
+          });
+        },
+      };
+    },
+  };
+  (bridge as any).sessionManager = {
+    getSessionSnapshot() {
+      return {
+        sessionKey: "dm:user-1",
+        activeSlot: {
+          slotIndex: 1,
+          session: {
+            backend: "codex-app-server",
+            sessionId: "thread-1",
+            workspaceRoot: "/tmp/project",
+            chatId: "chat-1",
+            userId: "user-1",
+            chatType: "p2p",
+            createdAt: 0,
+            lastActiveAt: 0,
+          },
+        },
+      };
+    },
+  };
+  (bridge as any).promptCoordinator = {
+    getSlotPromptState() {
+      return { hasActivePrompt: false, hasQueuedPrompt: false };
+    },
+  };
+  (bridge as any).feishuBot = {
+    stripBotMentionKeepLines(content: string) {
+      return content;
+    },
+    async sendCard(_chatId: string, body: string): Promise<string> {
+      sentCards.push(body);
+      return "card-1";
+    },
+    async updateCard(_messageId: string, body: string): Promise<void> {
+      updatedCards.push(body);
+    },
+  };
+  (bridge as any).flushPendingSessionNotices = async () => {};
+
+  await (bridge as any).handleFeishuMessage(createMessage("/compact"));
+
+  assert.deepEqual(compactCalls, ["thread-1"]);
+  assert.match(sentCards[0] ?? "", /Codex app-server compact — in_progress/);
+  assert.match(updatedCards[0] ?? "", /Codex app-server compact — completed/);
+});
+
+test("/compact 在非 codex-app-server backend 不被桥接拦截", async () => {
+  const bridge = new Bridge(createTestConfig());
+  const prompts: string[] = [];
+
+  (bridge as any).ensureMaintenanceStateLoaded = async () => {};
+  (bridge as any).sessionManager = {
+    getSessionSnapshot() {
+      return {
+        sessionKey: "dm:user-1",
+        activeSlot: {
+          slotIndex: 1,
+          session: {
+            backend: "codex",
+            sessionId: "session-1",
+            workspaceRoot: "/tmp/project",
+            chatId: "chat-1",
+            userId: "user-1",
+            chatType: "p2p",
+            createdAt: 0,
+            lastActiveAt: 0,
+          },
+        },
+      };
+    },
+  };
+  (bridge as any).promptCoordinator = {
+    async handlePromptMessage(_msg: FeishuMessage, content: string): Promise<void> {
+      prompts.push(content);
+    },
+  };
+  (bridge as any).feishuBot = {
+    stripBotMentionKeepLines(content: string) {
+      return content;
+    },
+  };
+
+  await (bridge as any).handleFeishuMessage(createMessage("/compact"));
+
+  assert.deepEqual(prompts, ["/compact"]);
+});
+
 test("/history 会像终端 history 一样只显示 prompt", async () => {
   const bridge = new Bridge(createTestConfig());
   const sentTexts: string[] = [];

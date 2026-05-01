@@ -4,6 +4,7 @@ import {
   formatSupportedBackendValues,
 } from "../acp/backend-metadata.js";
 import { captureAcpReplayDuring } from "../acp/replay-capture.js";
+import type { BridgeAcpEvent } from "../acp/types.js";
 import {
   isCodexBackend,
   isGeminiBackend,
@@ -29,6 +30,7 @@ import {
 import { resolveAllowedWorkspaceDir } from "../session/workspace-policy.js";
 import { formatJsonRpcLikeError } from "../utils/format-json-rpc-error.js";
 import type { FeishuMessage } from "../feishu/bot.js";
+import { FeishuCardState } from "../feishu/renderer.js";
 import {
   buildWorkspaceWithBackendSelectCardMarkdown,
   buildWelcomeCardMarkdown,
@@ -269,6 +271,25 @@ function buildDirectResumeRecoveryLines(recovery: SessionRecovery | undefined): 
     return [`• 实际 Claude 恢复会话：\`${recovery.resumeSessionId}\``];
   }
   return [];
+}
+
+function matchesCompactCommand(content: string): boolean {
+  const normalized = content
+    .replace(/^\uFEFF/, "")
+    .replace(/\uFF0F/g, "/")
+    .trim();
+  return normalized.toLowerCase() === "/compact";
+}
+
+function compactToolCallId(sessionId: string): string {
+  return `context-compaction:${sessionId}`;
+}
+
+function renderCompactCard(state: FeishuCardState): string {
+  return state.toCardMarkdownChunks({
+    maxMarkdownLength: Number.MAX_SAFE_INTEGER,
+    maxTools: Number.MAX_SAFE_INTEGER,
+  })[0]!;
 }
 
 async function handleDirectResumeCommand(
@@ -1367,12 +1388,19 @@ async function handleInterruptCommand(
     return true;
   }
 
-  const snap = ctx.sessionManager.getSessionSnapshot(
+  const snap =
+    ctx.sessionManager.getSessionSnapshot(
+      msg.chatId,
+      msg.senderId,
+      msg.chatType,
+      ctx.threadScope(msg),
+    ) ??
+    (await ctx.sessionManager.getSessionSnapshotLoaded(
     msg.chatId,
     msg.senderId,
     msg.chatType,
     ctx.threadScope(msg),
-  );
+    ));
   if (!snap) {
     await ctx.feishuBot.sendText(
       msg.chatId,
@@ -1436,6 +1464,120 @@ async function handleInterruptCommand(
   return true;
 }
 
+async function handleCompactCommand(
+  ctx: BridgeMessageHandlerDeps,
+  msg: FeishuMessage,
+  contentMultiline: string,
+): Promise<boolean> {
+  if (!matchesCompactCommand(contentMultiline)) return false;
+
+  const snap = ctx.sessionManager.getSessionSnapshot(
+    msg.chatId,
+    msg.senderId,
+    msg.chatType,
+    ctx.threadScope(msg),
+  );
+  if (snap?.activeSlot.session.backend !== "codex-app-server") {
+    return false;
+  }
+  if (!(await requireSharedGroupSessionAdmin(ctx, msg, "`/compact`"))) {
+    return true;
+  }
+
+  const active = snap.activeSlot;
+  const promptState = ctx.promptCoordinator.getSlotPromptState(
+    snap.sessionKey,
+    active.slotIndex,
+  );
+  if (promptState.hasActivePrompt || promptState.hasQueuedPrompt) {
+    await ctx.feishuBot.sendText(
+      msg.chatId,
+      "⏳ 当前活跃 session 仍有回复在进行或排队。请等待完成，或先发送 `/stop` / `/cancel` 后再执行 `/compact`。",
+      msg.messageId,
+      ctx.threadReplyOpts(msg),
+    );
+    return true;
+  }
+
+  const runtime = ctx.runtimeForSession(active.session);
+  if (typeof runtime.compactSession !== "function") {
+    await ctx.feishuBot.sendText(
+      msg.chatId,
+      "❌ 当前 backend 未提供原生 compact 接口。",
+      msg.messageId,
+      ctx.threadReplyOpts(msg),
+    );
+    return true;
+  }
+
+  await ctx.flushPendingSessionNotices(msg);
+  const replyOpts = ctx.threadReplyOpts(msg);
+  const toolCallId = compactToolCallId(active.session.sessionId);
+  const cardState = new FeishuCardState();
+  cardState.apply({
+    type: "tool_call",
+    sessionId: active.session.sessionId,
+    toolCallId,
+    title: "Codex app-server compact",
+    status: "in_progress",
+  });
+  const cardMessageId = await ctx.feishuBot.sendCard(
+    msg.chatId,
+    renderCompactCard(cardState),
+    msg.messageId,
+    replyOpts,
+  );
+  let finalized = false;
+  const cleanupCompactListener = (): void => {
+    runtime.bridgeClient.off("acp", onCompactEvent);
+    clearTimeout(cleanupTimer);
+  };
+  const updateCompactCard = async (
+    event: Extract<BridgeAcpEvent, { type: "tool_call" | "tool_call_update" }>,
+  ): Promise<void> => {
+    if (event.sessionId !== active.session.sessionId) return;
+    if (event.toolCallId !== toolCallId) return;
+    cardState.apply(event);
+    await ctx.feishuBot.updateCard(cardMessageId, renderCompactCard(cardState));
+    if (event.type === "tool_call_update" && event.status !== "in_progress") {
+      finalized = true;
+      cleanupCompactListener();
+    }
+  };
+  const onCompactEvent = (event: BridgeAcpEvent): void => {
+    if (event.type !== "tool_call" && event.type !== "tool_call_update") return;
+    void updateCompactCard(event).catch((err) => {
+      console.warn(
+        `[bridge] compact card update failed sessionId=${active.session.sessionId}`,
+        err instanceof Error ? err.message : err,
+      );
+    });
+  };
+  const cleanupTimer = setTimeout(cleanupCompactListener, 10 * 60_000);
+  cleanupTimer.unref?.();
+  runtime.bridgeClient.on("acp", onCompactEvent);
+
+  try {
+    await runtime.compactSession(active.session.sessionId);
+  } catch (err) {
+    cleanupCompactListener();
+    cardState.apply({
+      type: "tool_call_update",
+      sessionId: active.session.sessionId,
+      toolCallId,
+      title: "Codex app-server compact",
+      status: "failed",
+    });
+    await ctx.feishuBot.updateCard(
+      cardMessageId,
+      `${renderCompactCard(cardState)}\n\n❌ Codex app-server compact 请求失败：${formatJsonRpcLikeError(err)}`,
+    );
+    return true;
+  }
+  if (finalized) return true;
+  return true;
+}
+
 export async function handleBridgeCommand(
   ctx: BridgeMessageHandlerDeps,
   msg: FeishuMessage,
@@ -1460,6 +1602,10 @@ export async function handleBridgeCommand(
   }
 
   if (await handleInterruptCommand(ctx, msg, contentMultiline)) {
+    return true;
+  }
+
+  if (await handleCompactCommand(ctx, msg, contentMultiline)) {
     return true;
   }
 

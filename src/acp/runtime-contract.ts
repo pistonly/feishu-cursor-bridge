@@ -76,6 +76,7 @@ export interface BridgeAcpRuntime {
   setSessionModel(sessionId: string, modelId: string): Promise<void>;
   getSessionModelState(sessionId: string): AcpSessionModelState | undefined;
   getSessionUsageState(sessionId: string): AcpSessionUsageState | undefined;
+  compactSession?(sessionId: string): Promise<void>;
   cancelSession(sessionId: string): Promise<void>;
   closeSession(sessionId: string): Promise<void>;
   supportsCloseSession(): boolean;

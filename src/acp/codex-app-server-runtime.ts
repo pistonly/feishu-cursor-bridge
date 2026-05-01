@@ -85,6 +85,7 @@ export class CodexAppServerRuntime implements BridgeAcpRuntime {
 
   private availableModels: AcpModelInfo[] = [];
   private modelCatalog = new Map<string, ModelCatalogEntry>();
+  private defaultModelSelector: string | undefined;
 
   constructor(config: Config, bridgeClient: FeishuBridgeClient) {
     this.config = config;
@@ -370,6 +371,11 @@ export class CodexAppServerRuntime implements BridgeAcpRuntime {
     }
   }
 
+  async compactSession(sessionId: string): Promise<void> {
+    const rpc = this.requireRpc();
+    await rpc.request("thread/compact/start", { threadId: sessionId });
+  }
+
   async closeSession(sessionId: string): Promise<void> {
     const rpc = this.rpc;
     this.pendingTurns.delete(sessionId);
@@ -450,6 +456,7 @@ export class CodexAppServerRuntime implements BridgeAcpRuntime {
     const rpc = this.requireRpc();
     const availableModels: AcpModelInfo[] = [];
     const catalog = new Map<string, ModelCatalogEntry>();
+    let defaultModelSelector: string | undefined;
     let cursor: string | undefined;
 
     while (true) {
@@ -460,6 +467,7 @@ export class CodexAppServerRuntime implements BridgeAcpRuntime {
           id?: string;
           model?: string;
           displayName?: string;
+          isDefault?: boolean;
           defaultReasoningEffort?: string;
           supportedReasoningEfforts?: Array<{
             reasoningEffort?: string;
@@ -507,9 +515,17 @@ export class CodexAppServerRuntime implements BridgeAcpRuntime {
               ...(displayName ? { name: displayName } : {}),
             });
           }
+          if (item.isDefault === true) {
+            defaultModelSelector = selector;
+          }
           continue;
         }
 
+        const defaultEffort =
+          typeof item.defaultReasoningEffort === "string" &&
+          item.defaultReasoningEffort.trim()
+            ? item.defaultReasoningEffort.trim()
+            : supportedEfforts[0];
         for (const effort of supportedEfforts) {
           const selector = composeModelSelector(baseModel, effort);
           if (catalog.has(selector)) continue;
@@ -522,6 +538,9 @@ export class CodexAppServerRuntime implements BridgeAcpRuntime {
             name,
           });
           availableModels.push({ modelId: selector, name });
+          if (item.isDefault === true && effort === defaultEffort) {
+            defaultModelSelector = selector;
+          }
         }
       }
 
@@ -531,6 +550,7 @@ export class CodexAppServerRuntime implements BridgeAcpRuntime {
 
     this.availableModels = availableModels;
     this.modelCatalog = catalog;
+    this.defaultModelSelector = defaultModelSelector ?? availableModels[0]?.modelId;
   }
 
   private resolveModelSelector(input: string): {
@@ -572,12 +592,20 @@ export class CodexAppServerRuntime implements BridgeAcpRuntime {
     sessionId: string,
     response: ThreadResponseShape,
   ): void {
-    const modelState: AcpSessionModelState = {
-      currentModelId: this.normalizeCurrentModelId(
+    const current = this.sessionModelStates.get(sessionId);
+    const nextCurrentModelId =
+      this.normalizeCurrentModelId(
         response.model,
         response.reasoningEffort,
-      ),
-      availableModels: this.availableModels.map((model) => ({ ...model })),
+      ) ??
+      current?.currentModelId ??
+      this.defaultModelSelector;
+    const modelState: AcpSessionModelState = {
+      currentModelId: nextCurrentModelId,
+      availableModels:
+        this.availableModels.length > 0
+          ? this.availableModels.map((model) => ({ ...model }))
+          : current?.availableModels.map((model) => ({ ...model })) ?? [],
     };
     this.sessionModelStates.set(sessionId, modelState);
   }
@@ -667,19 +695,19 @@ export class CodexAppServerRuntime implements BridgeAcpRuntime {
     const data = params as {
       threadId?: unknown;
       tokenUsage?: {
-        total?: { totalTokens?: unknown };
+        last?: { inputTokens?: unknown };
         modelContextWindow?: unknown;
       };
     };
     const threadId =
       typeof data.threadId === "string" ? data.threadId.trim() : "";
-    const totalTokens = data.tokenUsage?.total?.totalTokens;
+    const inputTokens = data.tokenUsage?.last?.inputTokens;
     const modelContextWindow = data.tokenUsage?.modelContextWindow;
     if (
       !threadId ||
-      typeof totalTokens !== "number" ||
-      !Number.isFinite(totalTokens) ||
-      totalTokens < 0 ||
+      typeof inputTokens !== "number" ||
+      !Number.isFinite(inputTokens) ||
+      inputTokens < 0 ||
       typeof modelContextWindow !== "number" ||
       !Number.isFinite(modelContextWindow) ||
       modelContextWindow <= 0
@@ -687,9 +715,9 @@ export class CodexAppServerRuntime implements BridgeAcpRuntime {
       return;
     }
     const usage: AcpSessionUsageState = {
-      usedTokens: totalTokens,
+      usedTokens: inputTokens,
       maxTokens: modelContextWindow,
-      percent: (totalTokens / modelContextWindow) * 100,
+      percent: (inputTokens / modelContextWindow) * 100,
     };
     this.sessionUsageStates.set(threadId, usage);
     this.emitEvent({
@@ -1018,6 +1046,14 @@ export class CodexAppServerRuntime implements BridgeAcpRuntime {
           title: "imageGeneration",
           status,
         };
+      case "contextCompaction":
+        return {
+          type: eventType,
+          sessionId: threadId,
+          toolCallId: contextCompactionToolCallId(threadId),
+          title: "Codex app-server compact",
+          status: eventType === "tool_call_update" ? "completed" : "in_progress",
+        };
       default:
         return undefined;
     }
@@ -1104,6 +1140,10 @@ function normalizeToolStatus(status: unknown): string {
     default:
       return status.trim();
   }
+}
+
+function contextCompactionToolCallId(threadId: string): string {
+  return `context-compaction:${threadId}`;
 }
 
 function parseModelSelector(input: string): {
