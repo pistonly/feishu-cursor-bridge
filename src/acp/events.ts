@@ -6,6 +6,7 @@ import type {
 } from "@agentclientprotocol/sdk";
 import type {
   BridgeAcpEvent,
+  BridgeConfigOptionSelectValue,
   BridgeConfigOptionValue,
 } from "./types.js";
 import type { AcpSessionUsageState } from "./runtime-contract.js";
@@ -20,7 +21,47 @@ function summarizePlan(entries: Array<PlanEntry>): string {
     .join("\n");
 }
 
-function normalizeConfigOptionValues(
+function normalizeConfigSelectOption(
+  raw: unknown,
+): BridgeConfigOptionSelectValue | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const item = raw as { value?: unknown; name?: unknown };
+  const value = typeof item.value === "string" ? item.value.trim() : "";
+  if (!value) return undefined;
+  const name = typeof item.name === "string" ? item.name.trim() : "";
+  return name ? { value, name } : { value };
+}
+
+function normalizeConfigSelectOptions(
+  raw: unknown,
+): BridgeConfigOptionSelectValue[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: BridgeConfigOptionSelectValue[] = [];
+  const seen = new Set<string>();
+  const push = (option: BridgeConfigOptionSelectValue | undefined) => {
+    if (!option || seen.has(option.value)) return;
+    seen.add(option.value);
+    out.push(option);
+  };
+
+  for (const item of raw) {
+    const option = normalizeConfigSelectOption(item);
+    if (option) {
+      push(option);
+      continue;
+    }
+    if (!item || typeof item !== "object") continue;
+    const group = item as { options?: unknown };
+    if (!Array.isArray(group.options)) continue;
+    for (const child of group.options) {
+      push(normalizeConfigSelectOption(child));
+    }
+  }
+
+  return out.length > 0 ? out : undefined;
+}
+
+export function normalizeConfigOptionValues(
   raw: unknown,
 ): BridgeConfigOptionValue[] | undefined {
   if (!Array.isArray(raw)) return undefined;
@@ -31,18 +72,24 @@ function normalizeConfigOptionValues(
       id?: unknown;
       currentValue?: unknown;
       category?: unknown;
+      options?: unknown;
     };
     const id = typeof option.id === "string" ? option.id.trim() : "";
     const currentValue =
       typeof option.currentValue === "string" ? option.currentValue.trim() : "";
     if (!id || !currentValue) continue;
-    out.push({
+    const selectOptions = normalizeConfigSelectOptions(option.options);
+    const normalized: BridgeConfigOptionValue = {
       id,
       currentValue,
       ...(typeof option.category === "string" && option.category.trim()
         ? { category: option.category.trim() }
         : {}),
-    });
+    };
+    if (selectOptions) {
+      normalized.options = selectOptions;
+    }
+    out.push(normalized);
   }
   return out.length > 0 ? out : undefined;
 }

@@ -10,6 +10,7 @@ import {
 } from "@agentclientprotocol/sdk";
 import type { Config } from "../config/index.js";
 import { FeishuBridgeClient } from "./feishu-bridge-client.js";
+import { normalizeConfigOptionValues } from "./events.js";
 import type {
   AcpBackend,
   AcpModeInfo,
@@ -22,7 +23,10 @@ import type {
   AcpSessionUsageState,
   BridgeAcpRuntime,
 } from "./runtime-contract.js";
-import type { BridgeConfigOptionValue } from "./types.js";
+import type {
+  BridgeConfigOptionSelectValue,
+  BridgeConfigOptionValue,
+} from "./types.js";
 
 type PromptParams = Parameters<ClientSideConnection["prompt"]>[0];
 type NewSessionParams = Parameters<ClientSideConnection["newSession"]>[0];
@@ -36,6 +40,13 @@ interface SpawnSpec {
   cwd: string;
   env?: NodeJS.ProcessEnv;
   label: string;
+}
+
+interface ConfigOptionModelSelection {
+  modelConfigId: string;
+  modelValue: string;
+  reasoningConfigId?: string;
+  reasoningValue?: string;
 }
 
 function normalizePositiveTokenCount(value: unknown): number | undefined {
@@ -76,6 +87,24 @@ function formatTraceValue(value: unknown, maxLen = 6000): string {
   }
 }
 
+function cloneConfigOptionValue(
+  option: BridgeConfigOptionValue,
+): BridgeConfigOptionValue {
+  return {
+    id: option.id,
+    currentValue: option.currentValue,
+    ...(option.category ? { category: option.category } : {}),
+    ...(option.options
+      ? { options: option.options.map((selectOption) => ({ ...selectOption })) }
+      : {}),
+  };
+}
+
+function hasSelectorSuffix(modelId: string): boolean {
+  const slash = modelId.lastIndexOf("/");
+  return slash > 0 && slash < modelId.length - 1;
+}
+
 export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
   private static readonly STDERR_HISTORY_LIMIT = 20;
   readonly bridgeClient: FeishuBridgeClient;
@@ -90,6 +119,7 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
   private lastExitSignal: NodeJS.Signals | null | undefined;
   private readonly sessionModeStates = new Map<string, AcpSessionModeState>();
   private readonly sessionModelStates = new Map<string, AcpSessionModelState>();
+  private readonly sessionConfigOptionStates = new Map<string, BridgeConfigOptionValue[]>();
   private readonly sessionUsageStates = new Map<string, AcpSessionUsageState>();
   private readonly sessionPromptUsageFallbacks = new Map<string, number>();
 
@@ -469,16 +499,37 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
     this.sessionModeStates.delete(sessionId);
   }
 
+  protected deleteSessionConfigOptionState(sessionId: string): void {
+    this.sessionConfigOptionStates.delete(sessionId);
+  }
+
+  private updateSessionConfigOptionState(
+    sessionId: string,
+    rawOptions: unknown,
+    traceSource?: string,
+  ): void {
+    const configOptions = normalizeConfigOptionValues(rawOptions);
+    if (!configOptions) return;
+    this.applyConfigOptionUpdate(sessionId, configOptions, traceSource);
+  }
+
   private applyConfigOptionUpdate(
     sessionId: string,
     options: BridgeConfigOptionValue[],
+    traceSource = "config_option_update",
   ): void {
-    const pick = (predicate: (option: BridgeConfigOptionValue) => boolean) =>
-      options.find((option) => predicate(option))?.currentValue;
+    this.sessionConfigOptionStates.set(
+      sessionId,
+      options.map((option) => cloneConfigOptionValue(option)),
+    );
 
-    const nextModeId = pick(
+    const pickOption = (predicate: (option: BridgeConfigOptionValue) => boolean) =>
+      options.find((option) => predicate(option));
+
+    const modeOption = pickOption(
       (option) => option.id === "mode" || option.category === "mode",
     );
+    const nextModeId = modeOption?.currentValue;
     if (nextModeId) {
       const current = this.sessionModeStates.get(sessionId);
       this.sessionModeStates.set(sessionId, {
@@ -487,22 +538,36 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
       });
     }
 
-    const modelBase = pick(
+    const modelOption = pickOption(
       (option) => option.id === "model" || option.category === "model",
     );
-    const reasoningEffort = pick(
+    const reasoningEffortOption = pickOption(
       (option) =>
         option.id === "reasoning_effort" || option.category === "thought_level",
     );
+    const modelBase = modelOption?.currentValue;
+    const reasoningEffort = reasoningEffortOption?.currentValue;
     const current = this.sessionModelStates.get(sessionId);
-    const nextModelId = this.resolveModelIdFromConfigOptions(
+    const availableModelsFromConfig =
+      this.normalizeModelOptionsFromConfig(modelOption, reasoningEffortOption);
+    const availableModels = this.resolveAvailableModelsForConfigUpdate(
       current,
+      availableModelsFromConfig,
+    );
+    const resolutionState = modelBase || reasoningEffort || availableModelsFromConfig
+      ? this.transformSessionModelState({
+          currentModelId: current?.currentModelId ?? modelBase,
+          availableModels: availableModels.map((model) => ({ ...model })),
+        })
+      : current;
+    const nextModelId = this.resolveModelIdFromConfigOptions(
+      resolutionState,
       modelBase,
       reasoningEffort,
     );
     if (!nextModelId) {
       if (modelBase || reasoningEffort) {
-        this.logOfficialModelTrace("config_option_update", sessionId, {
+        this.logOfficialModelTrace(traceSource, sessionId, {
           options,
           modelBase: modelBase ?? null,
           reasoningEffort: reasoningEffort ?? null,
@@ -512,11 +577,11 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
       }
       return;
     }
-    this.sessionModelStates.set(sessionId, {
+    this.sessionModelStates.set(sessionId, this.transformSessionModelState({
       currentModelId: nextModelId,
-      availableModels: current?.availableModels.map((model) => ({ ...model })) ?? [],
-    });
-    this.logOfficialModelTrace("config_option_update", sessionId, {
+      availableModels,
+    }));
+    this.logOfficialModelTrace(traceSource, sessionId, {
       options,
       modelBase: modelBase ?? null,
       reasoningEffort: reasoningEffort ?? null,
@@ -524,6 +589,77 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
       resolvedModelId: nextModelId,
       next: this.summarizeModelStateForTrace(this.sessionModelStates.get(sessionId)),
     });
+  }
+
+  protected shouldExpandConfigModelOptionsWithReasoningEffort(
+    _modelOption: BridgeConfigOptionValue | undefined,
+    _reasoningEffortOption: BridgeConfigOptionValue | undefined,
+  ): boolean {
+    return false;
+  }
+
+  private normalizeReasoningEffortOptions(
+    reasoningEffortOption: BridgeConfigOptionValue | undefined,
+  ): BridgeConfigOptionSelectValue[] {
+    return reasoningEffortOption?.options?.filter((option) => option.value) ?? [];
+  }
+
+  private resolveAvailableModelsForConfigUpdate(
+    current: AcpSessionModelState | undefined,
+    availableModelsFromConfig: AcpModelInfo[] | undefined,
+  ): AcpModelInfo[] {
+    if (!availableModelsFromConfig) {
+      return current?.availableModels.map((model) => ({ ...model })) ?? [];
+    }
+    if (!current?.availableModels.length) {
+      return availableModelsFromConfig.map((model) => ({ ...model }));
+    }
+    const currentHasSelectors = current.availableModels.some((model) =>
+      hasSelectorSuffix(model.modelId),
+    );
+    const configHasSelectors = availableModelsFromConfig.some((model) =>
+      hasSelectorSuffix(model.modelId),
+    );
+    if (currentHasSelectors && !configHasSelectors) {
+      return current.availableModels.map((model) => ({ ...model }));
+    }
+    return availableModelsFromConfig.map((model) => ({ ...model }));
+  }
+
+  protected normalizeModelOptionsFromConfig(
+    modelOption: BridgeConfigOptionValue | undefined,
+    reasoningEffortOption: BridgeConfigOptionValue | undefined,
+  ): AcpModelInfo[] | undefined {
+    if (!modelOption?.options?.length) return undefined;
+    const out: AcpModelInfo[] = [];
+    const seen = new Set<string>();
+    const effortOptions = this.shouldExpandConfigModelOptionsWithReasoningEffort(
+      modelOption,
+      reasoningEffortOption,
+    )
+      ? this.normalizeReasoningEffortOptions(reasoningEffortOption)
+      : [];
+    const pushModel = (modelId: string, name?: string) => {
+      if (!modelId || seen.has(modelId)) return;
+      seen.add(modelId);
+      out.push({
+        modelId,
+        ...(name && name !== modelId ? { name } : {}),
+      });
+    };
+    for (const option of modelOption.options) {
+      const modelId = option.value.trim();
+      if (!modelId || seen.has(modelId)) continue;
+      if (effortOptions.length > 0 && !hasSelectorSuffix(modelId)) {
+        const baseName = option.name?.trim() || modelId;
+        for (const effort of effortOptions) {
+          pushModel(`${modelId}/${effort.value}`, `${baseName} (${effort.value})`);
+        }
+        continue;
+      }
+      pushModel(modelId, option.name);
+    }
+    return out.length > 0 ? out : undefined;
   }
 
   private resolveModelIdFromConfigOptions(
@@ -539,16 +675,24 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
     const currentModelId = current?.currentModelId;
     const [currentBase, currentReasoning] = currentModelId?.split("/", 2) ?? [];
 
-    const candidate =
-      modelBase && reasoningEffort
-        ? `${modelBase}/${reasoningEffort}`
+    if (modelBase && reasoningEffort) {
+      const combined = `${modelBase}/${reasoningEffort}`;
+      if (knownModels.size === 0 || knownModels.has(combined)) {
+        return combined;
+      }
+      if (knownModels.has(modelBase)) {
+        return modelBase;
+      }
+      return currentModelId;
+    }
+
+    const candidate = modelBase
+      ? currentReasoning && knownModels.has(`${modelBase}/${currentReasoning}`)
+        ? `${modelBase}/${currentReasoning}`
         : modelBase
-          ? currentReasoning && knownModels.has(`${modelBase}/${currentReasoning}`)
-            ? `${modelBase}/${currentReasoning}`
-            : modelBase
-          : currentBase
-            ? `${currentBase}/${reasoningEffort}`
-            : undefined;
+      : currentBase
+        ? `${currentBase}/${reasoningEffort}`
+        : undefined;
 
     if (!candidate) return undefined;
     if (knownModels.size === 0 || knownModels.has(candidate)) {
@@ -778,6 +922,11 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
       (res as { models?: unknown }).models,
       "session/new",
     );
+    this.updateSessionConfigOptionState(
+      res.sessionId,
+      (res as { configOptions?: unknown }).configOptions,
+      "session/new",
+    );
     return this.extractNewSessionResult(res, options);
   }
 
@@ -799,6 +948,11 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
       this.updateSessionModelState(
         sessionId,
         (res as { models?: unknown }).models,
+        "session/load",
+      );
+      this.updateSessionConfigOptionState(
+        sessionId,
+        (res as { configOptions?: unknown }).configOptions,
         "session/load",
       );
       if (this.config.acpReloadTraceLog) {
@@ -857,46 +1011,206 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
     });
   }
 
+  private findSessionConfigOption(
+    sessionId: string,
+    predicate: (option: BridgeConfigOptionValue) => boolean,
+  ): BridgeConfigOptionValue | undefined {
+    return this.sessionConfigOptionStates.get(sessionId)?.find(predicate);
+  }
+
+  private configOptionHasValue(
+    option: BridgeConfigOptionValue,
+    value: string,
+  ): boolean {
+    return option.options?.some((selectOption) => selectOption.value === value) ?? false;
+  }
+
+  private splitModelReasoningSelector(
+    modelId: string,
+  ): { base: string; reasoning: string } | undefined {
+    const slash = modelId.lastIndexOf("/");
+    if (slash <= 0 || slash >= modelId.length - 1) return undefined;
+    return {
+      base: modelId.slice(0, slash),
+      reasoning: modelId.slice(slash + 1),
+    };
+  }
+
+  private resolveConfigOptionModelSelection(
+    sessionId: string,
+    modelId: string,
+  ): ConfigOptionModelSelection | undefined {
+    const modelOption = this.findSessionConfigOption(
+      sessionId,
+      (option) => option.id === "model" || option.category === "model",
+    );
+    if (!modelOption) return undefined;
+
+    if (this.configOptionHasValue(modelOption, modelId)) {
+      return {
+        modelConfigId: modelOption.id,
+        modelValue: modelId,
+      };
+    }
+
+    const parsed = this.splitModelReasoningSelector(modelId);
+    if (!parsed || !this.configOptionHasValue(modelOption, parsed.base)) {
+      return undefined;
+    }
+
+    const reasoningOption = this.findSessionConfigOption(
+      sessionId,
+      (option) =>
+        option.id === "reasoning_effort" || option.category === "thought_level",
+    );
+    if (
+      !reasoningOption ||
+      !this.configOptionHasValue(reasoningOption, parsed.reasoning)
+    ) {
+      return undefined;
+    }
+
+    return {
+      modelConfigId: modelOption.id,
+      modelValue: parsed.base,
+      reasoningConfigId: reasoningOption.id,
+      reasoningValue: parsed.reasoning,
+    };
+  }
+
+  private applySetSessionConfigOptionResponse(
+    sessionId: string,
+    response: unknown,
+  ): boolean {
+    const configOptions = normalizeConfigOptionValues(
+      (response as { configOptions?: unknown } | null | undefined)?.configOptions,
+    );
+    if (!configOptions) return false;
+    this.applyConfigOptionUpdate(sessionId, configOptions, "set_config_option");
+    return true;
+  }
+
+  private async setSessionModelViaConfigOptions(
+    conn: ClientSideConnection,
+    sessionId: string,
+    selection: ConfigOptionModelSelection,
+  ): Promise<boolean> {
+    const modelResponse = await conn.setSessionConfigOption({
+      sessionId,
+      configId: selection.modelConfigId,
+      value: selection.modelValue,
+    });
+    let appliedResponse = this.applySetSessionConfigOptionResponse(
+      sessionId,
+      modelResponse,
+    );
+
+    if (selection.reasoningConfigId && selection.reasoningValue) {
+      const reasoningResponse = await conn.setSessionConfigOption({
+        sessionId,
+        configId: selection.reasoningConfigId,
+        value: selection.reasoningValue,
+      });
+      appliedResponse =
+        this.applySetSessionConfigOptionResponse(sessionId, reasoningResponse) ||
+        appliedResponse;
+    }
+
+    return appliedResponse;
+  }
+
+  private updateLocalModelStateAfterSetSessionModel(
+    sessionId: string,
+    modelId: string,
+  ): boolean {
+    const current = this.sessionModelStates.get(sessionId);
+    if (!current) return false;
+    if (!current.availableModels.some((model) => model.modelId === modelId)) {
+      return false;
+    }
+    this.sessionModelStates.set(sessionId, {
+      currentModelId: modelId,
+      availableModels: current.availableModels.map((model) => ({ ...model })),
+    });
+    return true;
+  }
+
   async setSessionModel(sessionId: string, modelId: string): Promise<void> {
     const conn = await this.requireReadyConnection();
     this.logOfficialModelTrace("set_model_begin", sessionId, {
       requestedModelId: modelId,
       cached: this.summarizeModelStateForTrace(this.sessionModelStates.get(sessionId)),
     });
+    const configSelection = this.resolveConfigOptionModelSelection(sessionId, modelId);
+    let configOptionError: unknown;
+    if (configSelection) {
+      this.logOfficialModelTrace("set_model_config_option_begin", sessionId, {
+        requestedModelId: modelId,
+        selection: configSelection,
+        cached: this.summarizeModelStateForTrace(this.sessionModelStates.get(sessionId)),
+      });
+      try {
+        const appliedResponse = await this.setSessionModelViaConfigOptions(
+          conn,
+          sessionId,
+          configSelection,
+        );
+        const localCacheUpdated = appliedResponse
+          ? true
+          : this.updateLocalModelStateAfterSetSessionModel(sessionId, modelId);
+        this.logOfficialModelTrace("set_model_config_option_ok", sessionId, {
+          requestedModelId: modelId,
+          selection: configSelection,
+          cached: this.summarizeModelStateForTrace(this.sessionModelStates.get(sessionId)),
+          localCacheUpdated,
+        });
+        return;
+      } catch (error) {
+        configOptionError = error;
+        this.logOfficialModelTrace("set_model_config_option_error", sessionId, {
+          requestedModelId: modelId,
+          selection: configSelection,
+          cached: this.summarizeModelStateForTrace(this.sessionModelStates.get(sessionId)),
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
     try {
       await conn.unstable_setSessionModel({ sessionId, modelId });
     } catch (error) {
       this.logOfficialModelTrace("set_model_error", sessionId, {
         requestedModelId: modelId,
         cached: this.summarizeModelStateForTrace(this.sessionModelStates.get(sessionId)),
+        ...(configOptionError
+          ? {
+              configOptionError:
+                configOptionError instanceof Error
+                  ? configOptionError.message
+                  : String(configOptionError),
+            }
+          : {}),
         error: error instanceof Error ? error.message : String(error),
       });
+      if (configOptionError) {
+        throw new Error(
+          `session/set_config_option failed: ${
+            configOptionError instanceof Error
+              ? configOptionError.message
+              : String(configOptionError)
+          }; unstable_setSessionModel failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
       throw error;
     }
-    const current = this.sessionModelStates.get(sessionId);
-    if (!current) {
-      this.logOfficialModelTrace("set_model_ok", sessionId, {
-        requestedModelId: modelId,
-        cached: null,
-      });
-      return;
-    }
-    if (!current.availableModels.some((model) => model.modelId === modelId)) {
-      this.logOfficialModelTrace("set_model_ok", sessionId, {
-        requestedModelId: modelId,
-        cached: this.summarizeModelStateForTrace(current),
-        localCacheUpdated: false,
-      });
-      return;
-    }
-    this.sessionModelStates.set(sessionId, {
-      currentModelId: modelId,
-      availableModels: current.availableModels.map((model) => ({ ...model })),
-    });
+    const localCacheUpdated =
+      this.updateLocalModelStateAfterSetSessionModel(sessionId, modelId);
     this.logOfficialModelTrace("set_model_ok", sessionId, {
       requestedModelId: modelId,
       cached: this.summarizeModelStateForTrace(this.sessionModelStates.get(sessionId)),
-      localCacheUpdated: true,
+      localCacheUpdated,
     });
   }
 
@@ -910,6 +1224,7 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
     const conn = this.connection;
     this.deleteSessionModeState(sessionId);
     this.deleteSessionModelState(sessionId);
+    this.deleteSessionConfigOptionState(sessionId);
     this.deleteSessionUsageState(sessionId);
     if (!conn || !this.supportsCloseSession()) return;
     try {

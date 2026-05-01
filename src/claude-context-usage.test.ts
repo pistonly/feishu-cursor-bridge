@@ -68,6 +68,34 @@ function createTestConfig(
   };
 }
 
+function codexConfigOptions(
+  currentModel = "gpt-5.5",
+  currentEffort = "medium",
+) {
+  return [
+    {
+      id: "model",
+      category: "model",
+      currentValue: currentModel,
+      options: [
+        { value: "gpt-5.5", name: "gpt-5.5" },
+        { value: "gpt-5.4", name: "gpt-5.4" },
+      ],
+    },
+    {
+      id: "reasoning_effort",
+      category: "thought_level",
+      currentValue: currentEffort,
+      options: [
+        { value: "low", name: "Low" },
+        { value: "medium", name: "Medium" },
+        { value: "high", name: "High" },
+        { value: "xhigh", name: "Extra high" },
+      ],
+    },
+  ];
+}
+
 test("Claude runtime does not fall back to prompt totalTokens when usage_update reports zero", () => {
   const handler = new EventEmitter() as any;
   const runtime = new ClaudeAcpRuntime(createTestConfig("claude"), handler);
@@ -165,6 +193,49 @@ test("Non-Claude runtimes keep updating model state when setSessionModel uses a 
   });
 });
 
+test("Runtime preserves selector-rich model list when config options only contain base models", () => {
+  const handler = new EventEmitter() as any;
+  const runtime = new ClaudeAcpRuntime(createTestConfig("claude"), handler);
+
+  (runtime as any).sessionModelStates.set("session-1", {
+    currentModelId: "claude-opus-4-6/medium",
+    availableModels: [
+      { modelId: "claude-opus-4-6", name: "Claude Opus 4.6" },
+      { modelId: "claude-opus-4-6/high", name: "Claude Opus 4.6 / high" },
+    ],
+  });
+
+  handler.emit("acp", {
+    type: "config_option_update",
+    sessionId: "session-1",
+    summary: "配置项已更新",
+    configOptions: [
+      {
+        id: "model",
+        category: "model",
+        currentValue: "claude-opus-4-6",
+        options: [
+          { value: "claude-opus-4-6", name: "Claude Opus 4.6" },
+        ],
+      },
+      {
+        id: "reasoning_effort",
+        category: "thought_level",
+        currentValue: "high",
+        options: [{ value: "high", name: "High" }],
+      },
+    ],
+  });
+
+  assert.deepEqual(runtime.getSessionModelState("session-1"), {
+    currentModelId: "claude-opus-4-6/high",
+    availableModels: [
+      { modelId: "claude-opus-4-6", name: "Claude Opus 4.6" },
+      { modelId: "claude-opus-4-6/high", name: "Claude Opus 4.6 / high" },
+    ],
+  });
+});
+
 test("Codex runtime enriches gpt-5.5 with effort selectors when ACP omits them", () => {
   const handler = new EventEmitter() as any;
   const runtime = new CodexAcpRuntime(createTestConfig("codex"), handler);
@@ -187,4 +258,109 @@ test("Codex runtime enriches gpt-5.5 with effort selectors when ACP omits them",
       { modelId: "gpt-5.4/low", name: "gpt-5.4 (low)" },
     ],
   });
+});
+
+test("Codex runtime derives gpt-5.5 effort selectors from config option updates", () => {
+  const handler = new EventEmitter() as any;
+  const runtime = new CodexAcpRuntime(createTestConfig("codex"), handler);
+
+  handler.emit("acp", {
+    type: "config_option_update",
+    sessionId: "session-1",
+    summary: "配置项已更新",
+    configOptions: codexConfigOptions("gpt-5.5", "high"),
+  });
+
+  assert.deepEqual(runtime.getSessionModelState("session-1"), {
+    currentModelId: "gpt-5.5/high",
+    availableModels: [
+      { modelId: "gpt-5.5/low", name: "gpt-5.5 (low)" },
+      { modelId: "gpt-5.5/medium", name: "gpt-5.5 (medium)" },
+      { modelId: "gpt-5.5/high", name: "gpt-5.5 (high)" },
+      { modelId: "gpt-5.5/xhigh", name: "gpt-5.5 (xhigh)" },
+      { modelId: "gpt-5.4/low", name: "gpt-5.4 (low)" },
+      { modelId: "gpt-5.4/medium", name: "gpt-5.4 (medium)" },
+      { modelId: "gpt-5.4/high", name: "gpt-5.4 (high)" },
+      { modelId: "gpt-5.4/xhigh", name: "gpt-5.4 (xhigh)" },
+    ],
+  });
+});
+
+test("Codex runtime consumes config options from session/new responses", async () => {
+  const handler = new EventEmitter() as any;
+  const runtime = new CodexAcpRuntime(createTestConfig("codex"), handler);
+
+  (runtime as any).connection = {
+    async newSession(): Promise<unknown> {
+      return {
+        sessionId: "session-1",
+        configOptions: codexConfigOptions("gpt-5.5", "medium"),
+      };
+    },
+  };
+  (runtime as any).initResult = {};
+
+  await runtime.newSession("/tmp");
+
+  assert.deepEqual(runtime.getSessionModelState("session-1"), {
+    currentModelId: "gpt-5.5/medium",
+    availableModels: [
+      { modelId: "gpt-5.5/low", name: "gpt-5.5 (low)" },
+      { modelId: "gpt-5.5/medium", name: "gpt-5.5 (medium)" },
+      { modelId: "gpt-5.5/high", name: "gpt-5.5 (high)" },
+      { modelId: "gpt-5.5/xhigh", name: "gpt-5.5 (xhigh)" },
+      { modelId: "gpt-5.4/low", name: "gpt-5.4 (low)" },
+      { modelId: "gpt-5.4/medium", name: "gpt-5.4 (medium)" },
+      { modelId: "gpt-5.4/high", name: "gpt-5.4 (high)" },
+      { modelId: "gpt-5.4/xhigh", name: "gpt-5.4 (xhigh)" },
+    ],
+  });
+});
+
+test("Codex runtime sets non-default model effort through config options when available", async () => {
+  const handler = new EventEmitter() as any;
+  const runtime = new CodexAcpRuntime(createTestConfig("codex"), handler);
+  const calls: Array<{ configId: string; value: string }> = [];
+  let currentModel = "gpt-5.5";
+  let currentEffort = "medium";
+
+  handler.emit("acp", {
+    type: "config_option_update",
+    sessionId: "session-1",
+    summary: "配置项已更新",
+    configOptions: codexConfigOptions(currentModel, currentEffort),
+  });
+
+  (runtime as any).connection = {
+    async setSessionConfigOption(params: {
+      configId: string;
+      value: string;
+    }): Promise<unknown> {
+      calls.push({ configId: params.configId, value: params.value });
+      if (params.configId === "model") {
+        currentModel = params.value;
+      }
+      if (params.configId === "reasoning_effort") {
+        currentEffort = params.value;
+      }
+      return {
+        configOptions: codexConfigOptions(currentModel, currentEffort),
+      };
+    },
+    async unstable_setSessionModel(): Promise<void> {
+      throw new Error("unstable_setSessionModel should not be called");
+    },
+  };
+  (runtime as any).initResult = {};
+
+  await runtime.setSessionModel("session-1", "gpt-5.4/high");
+
+  assert.deepEqual(calls, [
+    { configId: "model", value: "gpt-5.4" },
+    { configId: "reasoning_effort", value: "high" },
+  ]);
+  assert.equal(
+    runtime.getSessionModelState("session-1")?.currentModelId,
+    "gpt-5.4/high",
+  );
 });

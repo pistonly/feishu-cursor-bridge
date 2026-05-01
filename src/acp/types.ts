@@ -1,10 +1,16 @@
 import type { ToolKind } from "@agentclientprotocol/sdk";
 import type { AcpSessionUsageState } from "./runtime-contract.js";
 
+export interface BridgeConfigOptionSelectValue {
+  value: string;
+  name?: string;
+}
+
 export interface BridgeConfigOptionValue {
   id: string;
   currentValue: string;
   category?: string;
+  options?: BridgeConfigOptionSelectValue[];
 }
 
 /**

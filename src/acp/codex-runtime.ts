@@ -2,6 +2,7 @@ import type { Config } from "../config/index.js";
 import { FeishuBridgeClient } from "./feishu-bridge-client.js";
 import type { AcpModelInfo, AcpSessionModelState } from "./runtime-contract.js";
 import { SdkAcpRuntimeBase } from "./sdk-runtime-base.js";
+import type { BridgeConfigOptionValue } from "./types.js";
 
 const CODEX_GPT_55_EFFORT_LEVELS = ["low", "medium", "high", "xhigh"] as const;
 
@@ -80,6 +81,13 @@ export class CodexAcpRuntime extends SdkAcpRuntimeBase {
     state: AcpSessionModelState,
   ): AcpSessionModelState {
     return enrichCodexGpt55EffortModels(state);
+  }
+
+  protected override shouldExpandConfigModelOptionsWithReasoningEffort(
+    _modelOption: BridgeConfigOptionValue | undefined,
+    reasoningEffortOption: BridgeConfigOptionValue | undefined,
+  ): boolean {
+    return (reasoningEffortOption?.options?.length ?? 0) > 0;
   }
 
   protected createSpawnSpec() {
