@@ -56,17 +56,20 @@ export class ContentLengthJsonRpcPeer {
   private nextId = 1;
   private buffer = Buffer.alloc(0);
   private disposed = false;
+  private useContentLengthFraming = false;
 
   constructor(options: {
     stdin: Writable;
     stdout: Readable;
     requestHandler: (method: string, params: unknown) => Promise<unknown>;
     notificationHandler: (method: string, params: unknown) => Promise<void>;
+    useContentLengthFraming?: boolean;
   }) {
     this.stdin = options.stdin;
     this.stdout = options.stdout;
     this.requestHandler = options.requestHandler;
     this.notificationHandler = options.notificationHandler;
+    this.useContentLengthFraming = options.useContentLengthFraming ?? false;
 
     this.stdout.on("data", (chunk: Buffer | string) => {
       this.onData(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
@@ -106,45 +109,63 @@ export class ContentLengthJsonRpcPeer {
   }
 
   private writeMessage(message: Record<string, unknown>): void {
-    const payload = JSON.stringify(message);
-    const contentLength = Buffer.byteLength(payload, "utf8");
-    const frame = `Content-Length: ${contentLength}\r\n\r\n${payload}`;
-    this.stdin.write(frame);
+    const payload = JSON.stringify({ jsonrpc: "2.0", ...message });
+    if (this.useContentLengthFraming) {
+      const contentLength = Buffer.byteLength(payload, "utf8");
+      const frame = `Content-Length: ${contentLength}\r\n\r\n${payload}`;
+      this.stdin.write(frame);
+    } else {
+      this.stdin.write(payload + "\n");
+    }
   }
 
   private onData(chunk: Buffer): void {
     if (this.disposed) return;
     this.buffer = Buffer.concat([this.buffer, chunk]);
     while (true) {
+      // Try LSP framing first
       const headerEnd = this.buffer.indexOf("\r\n\r\n");
-      if (headerEnd === -1) {
-        return;
+      if (headerEnd !== -1) {
+        const headerText = this.buffer.subarray(0, headerEnd).toString("utf8");
+        const contentLength = this.parseContentLength(headerText);
+        if (contentLength != null) {
+          const frameEnd = headerEnd + 4 + contentLength;
+          if (this.buffer.length < frameEnd) {
+            return;
+          }
+          const payload = this.buffer
+            .subarray(headerEnd + 4, frameEnd)
+            .toString("utf8");
+          this.buffer = this.buffer.subarray(frameEnd);
+          this.handlePayload(payload);
+          continue;
+        }
       }
-      const headerText = this.buffer.subarray(0, headerEnd).toString("utf8");
-      const contentLength = this.parseContentLength(headerText);
-      if (contentLength == null) {
-        this.dispose(
-          new Error(`Codex app-server frame missing Content-Length header`),
-        );
-        return;
+
+      // If no LSP frame, look for NDJSON (newline)
+      const lineEnd = this.buffer.indexOf("\n");
+      if (lineEnd !== -1) {
+        const line = this.buffer.subarray(0, lineEnd).toString("utf8").trim();
+        this.buffer = this.buffer.subarray(lineEnd + 1);
+        if (line) {
+          this.handlePayload(line);
+        }
+        continue;
       }
-      const frameEnd = headerEnd + 4 + contentLength;
-      if (this.buffer.length < frameEnd) {
-        return;
-      }
-      const payload = this.buffer
-        .subarray(headerEnd + 4, frameEnd)
-        .toString("utf8");
-      this.buffer = this.buffer.subarray(frameEnd);
-      let message: JsonRpcIncomingMessage;
-      try {
-        message = JSON.parse(payload) as JsonRpcIncomingMessage;
-      } catch (error) {
-        this.dispose(error);
-        return;
-      }
-      void this.handleMessage(message);
+
+      return;
     }
+  }
+
+  private handlePayload(payload: string): void {
+    let message: JsonRpcIncomingMessage;
+    try {
+      message = JSON.parse(payload) as JsonRpcIncomingMessage;
+    } catch (error) {
+      this.dispose(error);
+      return;
+    }
+    void this.handleMessage(message);
   }
 
   private parseContentLength(headerText: string): number | null {
@@ -180,6 +201,7 @@ export class ContentLengthJsonRpcPeer {
       pending.resolve(message.result);
     }
   }
+
 
   private async handleIncomingRequest(
     message: JsonRpcRequestMessage,
