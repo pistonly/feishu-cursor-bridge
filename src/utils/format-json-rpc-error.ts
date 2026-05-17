@@ -1,3 +1,5 @@
+import { inspect } from "node:util";
+
 /**
  * ClientSideConnection 对失败请求 reject 的是 JSON-RPC error 对象，而非 Error 实例。
  * message 常为泛化的 "Internal error"，具体原因在 data（如 data.details）。
@@ -30,17 +32,35 @@ export function formatJsonRpcLikeError(err: unknown): string {
   }
 
   try {
-    return JSON.stringify(err, null, 2);
+    const json = JSON.stringify(err, null, 2);
+    if (typeof json === "string" && json.length > 0) {
+      return json;
+    }
   } catch {
-    return String(err);
+    // fall through to util.inspect below
   }
+  return inspect(err, {
+    depth: 8,
+    breakLength: 120,
+    maxArrayLength: 100,
+    compact: false,
+  });
 }
 
 function stringifyData(data: unknown): string {
   if (typeof data === "string") return data;
   try {
-    return JSON.stringify(data, null, 2);
+    const json = JSON.stringify(data, null, 2);
+    if (typeof json === "string" && json.length > 0) {
+      return json;
+    }
   } catch {
-    return String(data);
+    // fall through to util.inspect below
   }
+  return inspect(data, {
+    depth: 8,
+    breakLength: 120,
+    maxArrayLength: 100,
+    compact: false,
+  });
 }

@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import {
+  isClaudeBackend,
   isCodexBackend,
   isGeminiBackend,
   type AcpBackend,
@@ -18,6 +19,23 @@ import type {
 
 const MAX_SLOT_HISTORY_TURNS = 20;
 const MAX_SLOT_HISTORY_TEXT_CHARS = 4_000;
+
+function isClaudeRecoveryNotFoundError(error: unknown): boolean {
+  if (error instanceof Error) {
+    return (
+      error.message.includes("Resource not found") ||
+      error.message.includes("No conversation found")
+    );
+  }
+  if (!error || typeof error !== "object") return false;
+  const maybe = error as { message?: unknown; code?: unknown };
+  return (
+    maybe.code === -32002 ||
+    (typeof maybe.message === "string" &&
+      (maybe.message.includes("Resource not found") ||
+        maybe.message.includes("No conversation found")))
+  );
+}
 
 export interface UserSession {
   backend: AcpBackend;
@@ -1209,11 +1227,45 @@ export class SessionManager {
     slotIndex: number,
     noticeKey?: string,
   ): Promise<{ sessionId: string; recovery?: SessionRecovery }> {
-    const fresh = await this.runtimeForBackend(backend).newSession(
-      cwd,
-      previousRecovery ? { recovery: previousRecovery } : undefined,
-    );
+    const runtime = this.runtimeForBackend(backend);
+    let fellBackFromMissingClaudeRecovery = false;
+    let fresh;
+    try {
+      fresh = await runtime.newSession(
+        cwd,
+        previousRecovery ? { recovery: previousRecovery } : undefined,
+      );
+    } catch (error) {
+      if (
+        !(
+          isClaudeBackend(backend) &&
+          previousRecovery?.kind === "claude-session" &&
+          isClaudeRecoveryNotFoundError(error)
+        )
+      ) {
+        throw error;
+      }
+      fresh = await runtime.newSession(cwd);
+      fellBackFromMissingClaudeRecovery = true;
+      if (noticeKey) {
+        const nextResume =
+          fresh.recovery?.kind === "claude-session"
+            ? fresh.recovery.resumeSessionId
+            : fresh.sessionId;
+        this.pushPendingNotice(
+          noticeKey,
+          [
+            "⚠️ 检测到已保存的 Claude 恢复会话已不存在，桥接已自动改为创建新的 Claude 会话。",
+            `• Session：#${slotIndex}`,
+            `• 工作区：\`${cwd}\``,
+            `• 失效的 Claude session：\`${previousRecovery.resumeSessionId}\``,
+            `• 新 Claude session：\`${nextResume}\``,
+          ].join("\n"),
+        );
+      }
+    }
     if (
+      !fellBackFromMissingClaudeRecovery &&
       noticeKey &&
       previousRecovery &&
       JSON.stringify(fresh.recovery) !== JSON.stringify(previousRecovery)

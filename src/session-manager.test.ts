@@ -3,7 +3,11 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AcpRuntimeResolver, BridgeAcpRuntime } from "./acp/runtime-contract.js";
+import type {
+  AcpRuntimeResolver,
+  BridgeAcpRuntime,
+  SessionRecovery,
+} from "./acp/runtime-contract.js";
 import { SessionManager } from "./session/manager.js";
 import { SessionStore, type PersistedSessionGroup } from "./session/store.js";
 
@@ -59,6 +63,31 @@ function createPersistedCodexGroup(
         backend: "codex",
         sessionId: "codex-old",
         preferredModelId,
+        workspaceRoot: WORKSPACE_ROOT,
+        lastActiveAt: Date.now(),
+      },
+    ],
+  };
+}
+
+function createPersistedClaudeGroup(
+  resumeSessionId = "resume-old",
+): PersistedSessionGroup {
+  return {
+    chatId: CHAT_ID,
+    userId: USER_ID,
+    chatType: "p2p",
+    activeSlotIndex: 1,
+    nextSlotIndex: 2,
+    slots: [
+      {
+        slotIndex: 1,
+        backend: "claude",
+        sessionId: "claude-acp-old",
+        recovery: {
+          kind: "claude-session",
+          resumeSessionId,
+        },
         workspaceRoot: WORKSPACE_ROOT,
         lastActiveAt: Date.now(),
       },
@@ -209,6 +238,80 @@ test("无法保留旧 CLI resume ID 时会生成绑定变更提醒", async () =>
   assert.equal(notices.length, 1);
   assert.match(notices[0] ?? "", /旧 CLI resume ID：`cli-old`/);
   assert.match(notices[0] ?? "", /新 CLI resume ID：`cli-new`/);
+  await waitForFlushes();
+});
+
+test("Claude 恢复会话已失效时会自动降级为新的会话", async () => {
+  const storeFile = await createStoreFile(createPersistedClaudeGroup("resume-missing"));
+
+  const newSessionCalls: Array<{ cwd: string; recovery?: SessionRecovery }> = [];
+  const acp: FakeAcpRuntime = {
+    supportsLoadSession: true,
+    supportsSetSessionMode: false,
+    supportsSetSessionModel: false,
+    async newSession(
+      cwd?: string,
+      options?: { recovery?: SessionRecovery },
+    ): Promise<{ sessionId: string; recovery?: SessionRecovery }> {
+      const resolvedCwd = path.resolve(cwd ?? WORKSPACE_ROOT);
+      newSessionCalls.push({
+        cwd: resolvedCwd,
+        recovery: options?.recovery,
+      });
+      if (options?.recovery?.kind === "claude-session") {
+        throw {
+          code: -32002,
+          message: `Resource not found: ${options.recovery.resumeSessionId}`,
+          data: { uri: options.recovery.resumeSessionId },
+        };
+      }
+      return { sessionId: "claude-fresh" };
+    },
+    async loadSession(): Promise<void> {
+      throw {
+        code: -32002,
+        message: "Resource not found: claude-acp-old",
+        data: { uri: "claude-acp-old" },
+      };
+    },
+    async cancelSession(): Promise<void> {},
+    async closeSession(): Promise<void> {},
+  };
+
+  const store = new SessionStore(storeFile);
+  const waitForFlushes = trackPendingFlushes(store);
+  const manager = new SessionManager(
+    acp as BridgeAcpRuntime,
+    store,
+    60_000,
+    { defaultWorkspaceRoot: WORKSPACE_ROOT, defaultBackend: "cursor-official" },
+  );
+
+  await manager.init();
+  const session = await manager.getActiveSession(CHAT_ID, USER_ID, "p2p");
+  assert.ok(session);
+
+  assert.equal(session.sessionId, "claude-fresh");
+  assert.equal(session.recovery, undefined);
+  assert.deepEqual(newSessionCalls, [
+    {
+      cwd: WORKSPACE_ROOT,
+      recovery: { kind: "claude-session", resumeSessionId: "resume-missing" },
+    },
+    {
+      cwd: WORKSPACE_ROOT,
+      recovery: undefined,
+    },
+  ]);
+
+  const notices = manager.consumePendingNotices(CHAT_ID, USER_ID, "p2p");
+  assert.equal(notices.length, 1);
+  assert.match(
+    notices[0] ?? "",
+    /已保存的 Claude 恢复会话已不存在，桥接已自动改为创建新的 Claude 会话/,
+  );
+  assert.match(notices[0] ?? "", /失效的 Claude session：`resume-missing`/);
+  assert.match(notices[0] ?? "", /新 Claude session：`claude-fresh`/);
   await waitForFlushes();
 });
 

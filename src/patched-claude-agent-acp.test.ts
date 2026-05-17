@@ -217,6 +217,34 @@ test("Claude effort model state and config options include effort variants", () 
   });
 });
 
+test("Claude effort config options omit reasoning selector when current effort is unknown", () => {
+  const configOptions = buildClaudeEffortConfigOptions(
+    [],
+    {
+      baseModels: [
+        {
+          modelId: "claude-sonnet-4-6",
+          name: "Claude Sonnet 4.6",
+          supportedEffortLevels: ["low", "medium", "high"],
+        },
+      ],
+      currentBaseModelId: "claude-sonnet-4-6",
+    },
+  );
+
+  assert.deepEqual(configOptions, [
+    {
+      id: "model",
+      name: "Model",
+      description: "AI model to use",
+      category: "model",
+      type: "select",
+      currentValue: "claude-sonnet-4-6",
+      options: [{ value: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" }],
+    },
+  ]);
+});
+
 function createClaudeEffortAgentFixture(initial?: {
   modelId?: string;
   effort?: "low" | "medium" | "high" | "max";

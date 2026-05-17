@@ -876,6 +876,10 @@ export function buildClaudeEffortConfigOptions(
   previous: ClaudeSessionConfigOption[],
   state: ClaudeEffortState,
 ): ClaudeSessionConfigOption[] {
+  const previousEffortOption = previous.find(
+    (option) =>
+      option.id === "reasoning_effort" || option.category === "thought_level",
+  );
   const next = previous
     .filter(
       (option) =>
@@ -908,14 +912,21 @@ export function buildClaudeEffortConfigOptions(
     });
   }
   const effortLevels = getModelEffortLevels(state, currentBaseModelId);
-  if (effortLevels.length > 0) {
+  const currentEffort =
+    state.currentEffort && effortLevels.includes(state.currentEffort)
+      ? state.currentEffort
+      : isClaudeEffortLevel(previousEffortOption?.currentValue) &&
+          effortLevels.includes(previousEffortOption.currentValue)
+        ? previousEffortOption.currentValue
+        : undefined;
+  if (effortLevels.length > 0 && currentEffort) {
     next.push({
       id: "reasoning_effort",
       name: "Reasoning Effort",
       description: "Claude reasoning effort level",
       category: "thought_level",
       type: "select",
-      currentValue: state.currentEffort,
+      currentValue: currentEffort,
       options: effortLevels.map((level) => ({
         value: level,
         name: capitalizeLabel(level),

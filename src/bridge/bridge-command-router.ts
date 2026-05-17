@@ -1265,9 +1265,10 @@ async function handleBridgeManagedCommand(
       return true;
     }
   } catch (err) {
+    const errorText = formatJsonRpcLikeError(err);
     await ctx.feishuBot.sendText(
       msg.chatId,
-      `❌ ${err instanceof Error ? err.message : String(err)}`,
+      `❌ ${errorText}`,
       msg.messageId,
       ctx.threadReplyOpts(msg),
     );
@@ -1446,8 +1447,9 @@ async function handleInterruptCommand(
   try {
     await ctx.runtimeForSession(active.session).cancelSession(active.session.sessionId);
   } catch (err) {
+    const errorText = formatJsonRpcLikeError(err);
     errors.push(
-      `#${active.slotIndex}: ${err instanceof Error ? err.message : String(err)}`,
+      `#${active.slotIndex}: ${errorText}`,
     );
   }
   const label = formatSessionLabel(active);
