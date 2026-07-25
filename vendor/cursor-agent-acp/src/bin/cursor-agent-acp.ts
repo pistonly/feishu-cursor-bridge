@@ -88,11 +88,15 @@ program
     'session storage directory',
     '~/.cursor-sessions'
   )
-  .option('-t, --timeout <ms>', 'cursor-agent timeout in milliseconds', '120000')
+  .option(
+    '-t, --timeout <ms>',
+    'cursor-agent timeout in milliseconds',
+    '18000000'
+  )
   .option(
     '-r, --retries <count>',
     'number of retries for cursor-agent commands',
-    '3'
+    '0'
   )
   .option(
     '--max-sessions <count>',

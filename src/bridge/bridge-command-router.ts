@@ -1165,9 +1165,13 @@ async function handleNewCommand(
   );
   await ctx.flushPendingSessionNotices(msg);
   const nameLabel = result.name ? ` (${result.name})` : "";
+  const currentModelLabel = ctx.formatSessionModel(
+    ctx.runtimeForBackend(result.backend).getSessionModelState(result.sessionId),
+  );
+  const modelLine = currentModelLabel ? `\n当前模型：${currentModelLabel}` : "";
   await ctx.feishuBot.sendText(
     msg.chatId,
-    `✅ 已新建并切换到 session #${result.slotIndex}${nameLabel}\nBackend：\`${result.backend}\`\n工作区：\`${result.workspaceRoot}\`\n\n发送 \`/sessions\` 查看所有 session。`,
+    `✅ 已新建并切换到 session #${result.slotIndex}${nameLabel}\nBackend：\`${result.backend}\`${modelLine}\n工作区：\`${result.workspaceRoot}\`\n\n发送 \`/sessions\` 查看所有 session。`,
     msg.messageId,
     ctx.threadReplyOpts(msg),
   );

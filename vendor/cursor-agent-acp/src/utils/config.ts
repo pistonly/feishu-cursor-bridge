@@ -62,7 +62,7 @@ const CONFIG_VALIDATION_RULES: ConfigValidationRule[] = [
     type: 'number',
     required: true,
     min: 5000, // 5 seconds
-    max: 300000, // 5 minutes
+    max: 86400000, // 24 hours
   },
   {
     path: 'cursor.retries',
@@ -165,12 +165,12 @@ function performCustomValidations(config: AdapterConfig): string[] {
     errors.push('Session timeout should be at least 1 minute');
   }
 
-  // Validate cursor timeout vs retries
+  // Keep a bounded total budget while allowing deliberately long-running jobs.
   const totalTimeout = config.cursor.timeout * (config.cursor.retries + 1);
-  if (totalTimeout > 600000) {
-    // 10 minutes
+  if (totalTimeout > 86400000) {
+    // 24 hours
     errors.push(
-      'Total cursor command timeout (timeout * retries) should not exceed 10 minutes'
+      'Total cursor command timeout (timeout * retries) should not exceed 24 hours'
     );
   }
 

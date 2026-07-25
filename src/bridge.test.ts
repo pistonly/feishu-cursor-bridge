@@ -3142,6 +3142,18 @@ test("共享群 session 管理命令允许管理员 /new", async () => {
       };
     },
   };
+  (bridge as any).runtimeRegistry = {
+    getRuntime() {
+      return {
+        getSessionModelState() {
+          return {
+            currentModelId: "gpt-5.4",
+            availableModels: [{ modelId: "gpt-5.4", name: "GPT-5.4" }],
+          };
+        },
+      };
+    },
+  };
   (bridge as any).feishuBot = {
     stripBotMentionKeepLines(content: string) {
       return content;
@@ -3178,4 +3190,5 @@ test("共享群 session 管理命令允许管理员 /new", async () => {
     threadId: undefined,
   });
   assert.match(sentTexts[0] ?? "", /已新建并切换到 session #1/);
+  assert.match(sentTexts[0] ?? "", /当前模型：GPT-5\.4/);
 });
