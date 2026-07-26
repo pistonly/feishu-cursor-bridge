@@ -1236,8 +1236,8 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
 
   async stop(): Promise<void> {
     if (this.child) {
-      this.child.stdin?.end();
-      this.child.kill();
+      try { this.child.stdin?.end(); } catch { /* stdin may already be closed */ }
+      try { this.child.kill(); } catch { /* process may have already exited */ }
       this.child = null;
     }
     this.ensureStartedPromise = null;

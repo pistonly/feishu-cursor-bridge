@@ -402,8 +402,8 @@ export class CodexAppServerRuntime implements BridgeAcpRuntime {
     this.rpc?.dispose(new Error("Codex app-server runtime stopped"));
     this.rpc = null;
     if (this.child) {
-      this.child.stdin?.end();
-      this.child.kill();
+      try { this.child.stdin?.end(); } catch { /* stdin may already be closed */ }
+      try { this.child.kill(); } catch { /* process may have already exited */ }
       this.child = null;
     }
     this.initialized = false;

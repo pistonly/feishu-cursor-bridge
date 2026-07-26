@@ -38,7 +38,11 @@ type JsonRpcIncomingMessage =
 type PendingRequest = {
   resolve: (value: unknown) => void;
   reject: (reason: unknown) => void;
+  timer?: ReturnType<typeof setTimeout>;
 };
+
+/** Default timeout for RPC requests (30s). Prevents permanent hangs. */
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
 export class ContentLengthJsonRpcPeer {
   private readonly stdin: Writable;
@@ -88,21 +92,41 @@ export class ContentLengthJsonRpcPeer {
     }
     const id = this.nextId++;
     const result = new Promise<unknown>((resolve, reject) => {
-      this.pendingRequests.set(id, { resolve, reject });
+      const pending: PendingRequest = { resolve, reject };
+      pending.timer = setTimeout(() => {
+        if (this.pendingRequests.delete(id)) {
+          reject(new Error(`Codex app-server RPC '${method}' timed out after ${DEFAULT_REQUEST_TIMEOUT_MS}ms`));
+        }
+      }, DEFAULT_REQUEST_TIMEOUT_MS);
+      this.pendingRequests.set(id, pending);
     });
-    this.writeMessage({ id, method, params });
+    try {
+      this.writeMessage({ id, method, params });
+    } catch (error) {
+      const pending = this.pendingRequests.get(id);
+      if (pending) {
+        if (pending.timer) clearTimeout(pending.timer);
+        this.pendingRequests.delete(id);
+        pending.reject(error);
+      }
+    }
     return await result;
   }
 
   notify(method: string, params?: unknown): void {
     if (this.disposed) return;
-    this.writeMessage({ method, params });
+    try {
+      this.writeMessage({ method, params });
+    } catch {
+      // Best-effort: notifications don't have a caller to reject to.
+    }
   }
 
   dispose(error?: unknown): void {
     if (this.disposed) return;
     this.disposed = true;
     for (const pending of this.pendingRequests.values()) {
+      if (pending.timer) clearTimeout(pending.timer);
       pending.reject(error ?? new Error("Codex app-server transport closed"));
     }
     this.pendingRequests.clear();
@@ -121,7 +145,17 @@ export class ContentLengthJsonRpcPeer {
 
   private onData(chunk: Buffer): void {
     if (this.disposed) return;
-    this.buffer = Buffer.concat([this.buffer, chunk]);
+    // Efficiently append without copying the full old buffer each time:
+    // keep a simple growable buffer and trim consumed bytes.
+    const remaining = this.buffer.length;
+    if (remaining === 0) {
+      this.buffer = Buffer.from(chunk);
+    } else {
+      const combined = Buffer.allocUnsafe(remaining + chunk.length);
+      this.buffer.copy(combined, 0);
+      chunk.copy(combined, remaining);
+      this.buffer = Buffer.from(combined);
+    }
     while (true) {
       // Try LSP framing first
       const headerEnd = this.buffer.indexOf("\r\n\r\n");
@@ -161,11 +195,18 @@ export class ContentLengthJsonRpcPeer {
     let message: JsonRpcIncomingMessage;
     try {
       message = JSON.parse(payload) as JsonRpcIncomingMessage;
-    } catch (error) {
-      this.dispose(error);
+    } catch {
+      // In NDJSON mode, the server may emit non-JSON lines (logs, banners).
+      // Only warn and skip instead of disposing the entire connection.
+      console.warn(
+        "[rpc] failed to parse payload, skipping:",
+        payload.slice(0, 200),
+      );
       return;
     }
-    void this.handleMessage(message);
+    void this.handleMessage(message).catch((err) => {
+      console.warn("[rpc] handleMessage failed:", err instanceof Error ? err.message : err);
+    });
   }
 
   private parseContentLength(headerText: string): number | null {
@@ -190,6 +231,7 @@ export class ContentLengthJsonRpcPeer {
     if (this.isIncomingErrorResponse(message)) {
       const pending = this.pendingRequests.get(message.id);
       if (!pending) return;
+      if (pending.timer) clearTimeout(pending.timer);
       this.pendingRequests.delete(message.id);
       pending.reject(message.error);
       return;
@@ -197,6 +239,7 @@ export class ContentLengthJsonRpcPeer {
     if (this.isIncomingSuccessResponse(message)) {
       const pending = this.pendingRequests.get(message.id);
       if (!pending) return;
+      if (pending.timer) clearTimeout(pending.timer);
       this.pendingRequests.delete(message.id);
       pending.resolve(message.result);
     }

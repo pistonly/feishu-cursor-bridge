@@ -345,11 +345,24 @@ export class PromptCoordinator {
         continue;
       }
       this.queuedPrompts.delete(promptKey);
+
+      // Re-read the active slot index in case the user switched slots
+      // while the previous prompt was still running. If the active slot
+      // changed, route the queued message to the new active slot instead
+      // of the stale slotIndex captured at enqueue time.
+      const freshSnap = this.deps.getSessionManager().getSessionSnapshot(
+        queued.msg.chatId,
+        queued.msg.senderId,
+        queued.msg.chatType,
+        this.deps.threadScope(queued.msg),
+      );
+      const freshSlotIndex = freshSnap?.activeSlot.slotIndex ?? queued.slotIndex;
+
       nextDispatch = {
         msg: queued.msg,
         content: queued.content,
         hasPostEmbeddedImages: queued.hasPostEmbeddedImages,
-        slotIndex: queued.slotIndex,
+        slotIndex: freshSlotIndex,
       };
       await this.deps.getFeishuBot().sendText(
         nextDispatch.msg.chatId,

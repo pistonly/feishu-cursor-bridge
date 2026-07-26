@@ -264,6 +264,13 @@ export class ConversationService {
             );
           }
         }
+      }).catch((err) => {
+        // Prevent a single render failure from permanently breaking all
+        // subsequent card updates for this session.
+        console.warn(
+          `${label} sessionId=${session.sessionId} cardPatchChain rejected`,
+          err instanceof Error ? err.message : err,
+        );
       });
     };
 

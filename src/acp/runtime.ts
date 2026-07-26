@@ -327,6 +327,11 @@ export class AcpRuntimeRegistry {
 
   async stopAll(): Promise<void> {
     for (const entry of this.runtimes.values()) {
+      // Wait for any in-flight start to finish (or fail) before stopping,
+      // so that a concurrent initializeAndAuth doesn't resurrect state after stop().
+      if (entry.startPromise) {
+        await entry.startPromise.catch(() => {});
+      }
       await entry.runtime.stop();
       entry.state = "idle";
       delete entry.startedAt;

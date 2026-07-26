@@ -129,6 +129,11 @@ export class SessionManager {
   private readonly maxSlots: number;
   private readonly maxSessionsPerUser: number;
   private readonly groupSessionScope: GroupSessionScope;
+  /**
+   * Per-key async mutex chain. Prevents concurrent session mutations
+   * (e.g. two /new at once racing past maxSlots check).
+   */
+  private keyLocks = new Map<string, Promise<void>>();
 
   constructor(
     resolver: AcpRuntimeResolver | BridgeAcpRuntime,
@@ -147,6 +152,25 @@ export class SessionManager {
     this.maxSlots = options.maxSlotsPerKey ?? 5;
     this.maxSessionsPerUser = options.maxSessionsPerUser ?? 10;
     this.groupSessionScope = options.groupSessionScope ?? "per-user";
+  }
+
+  /**
+   * Serialize mutations under a given session key so that concurrent
+   * /new, /switch, /close, /rename calls don't race on group state.
+   */
+  private withKeyLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.keyLocks.get(key) ?? Promise.resolve();
+    const next = prev.then(fn, fn);
+    const cleanup = next.then(
+      () => {
+        if (this.keyLocks.get(key) === cleanup) this.keyLocks.delete(key);
+      },
+      () => {
+        if (this.keyLocks.get(key) === cleanup) this.keyLocks.delete(key);
+      },
+    );
+    this.keyLocks.set(key, cleanup);
+    return next;
   }
 
   async init(): Promise<void> {
@@ -225,71 +249,73 @@ export class SessionManager {
   }> {
     const chatType = this.chatType(chatTypeRaw);
     const key = this.makeKey(chatId, userId, chatType, threadId);
-    const now = Date.now();
+    return this.withKeyLock(key, async () => {
+      const now = Date.now();
 
-    let group = this.groups.get(key);
-    if (!group) {
-      group = await this.restoreGroupFromStore(
-        key,
+      let group = this.groups.get(key);
+      if (!group) {
+        group = await this.restoreGroupFromStore(
+          key,
+          chatId,
+          userId,
+          chatType,
+          now,
+          threadId,
+        );
+      }
+      if (!this.usesSharedGroupSessions(chatType)) {
+        this.assertCanAddUserSession(userId, now);
+      }
+      if (group && group.slots.length >= this.maxSlots) {
+        throw new Error(
+          `已达到最多 ${this.maxSlots} 个 session 的上限，请先用 /close <编号> 关闭一个。`,
+        );
+      }
+
+      const normalizedName = this.normalizeSlotName(name);
+      if (group && normalizedName) {
+        this.ensureSlotNameAvailable(group, normalizedName);
+      }
+
+      const trimmedRoot = workspaceRoot.trim();
+      if (!trimmedRoot) {
+        throw new Error(
+          "创建 session 必须指定工作区。请发送 `/new list` 查看列表后使用 `/new <序号>`，或使用 `/new <目录绝对路径>`。",
+        );
+      }
+      const cwd = path.resolve(trimmedRoot);
+      const runtime = this.runtimeForBackend(backend);
+      const { sessionId, recovery } = await runtime.newSession(cwd);
+      const session = this.makeSession(
+        backend,
+        sessionId,
+        cwd,
         chatId,
         userId,
         chatType,
         now,
+        recovery,
         threadId,
       );
-    }
-    if (!this.usesSharedGroupSessions(chatType)) {
-      this.assertCanAddUserSession(userId, now);
-    }
-    if (group && group.slots.length >= this.maxSlots) {
-      throw new Error(
-        `已达到最多 ${this.maxSlots} 个 session 的上限，请先用 /close <编号> 关闭一个。`,
-      );
-    }
 
-    const normalizedName = this.normalizeSlotName(name);
-    if (group && normalizedName) {
-      this.ensureSlotNameAvailable(group, normalizedName);
-    }
+      let slotIndex: number;
+      if (!group) {
+        slotIndex = 1;
+        group = {
+          slots: [{ slotIndex, name: normalizedName, session }],
+          activeSlotIndex: slotIndex,
+          nextSlotIndex: 2,
+        };
+      } else {
+        slotIndex = group.nextSlotIndex++;
+        group.slots.push({ slotIndex, name: normalizedName, session });
+        group.activeSlotIndex = slotIndex;
+      }
 
-    const trimmedRoot = workspaceRoot.trim();
-    if (!trimmedRoot) {
-      throw new Error(
-        "创建 session 必须指定工作区。请发送 `/new list` 查看列表后使用 `/new <序号>`，或使用 `/new <目录绝对路径>`。",
-      );
-    }
-    const cwd = path.resolve(trimmedRoot);
-    const runtime = this.runtimeForBackend(backend);
-    const { sessionId, recovery } = await runtime.newSession(cwd);
-    const session = this.makeSession(
-      backend,
-      sessionId,
-      cwd,
-      chatId,
-      userId,
-      chatType,
-      now,
-      recovery,
-      threadId,
-    );
-
-    let slotIndex: number;
-    if (!group) {
-      slotIndex = 1;
-      group = {
-        slots: [{ slotIndex, name: normalizedName, session }],
-        activeSlotIndex: slotIndex,
-        nextSlotIndex: 2,
-      };
-    } else {
-      slotIndex = group.nextSlotIndex++;
-      group.slots.push({ slotIndex, name: normalizedName, session });
-      group.activeSlotIndex = slotIndex;
-    }
-
-    this.groups.set(key, group);
-    this.persistGroup(key, group);
-    return { slotIndex, name: normalizedName, backend, sessionId, workspaceRoot: cwd };
+      this.groups.set(key, group);
+      this.persistGroup(key, group);
+      return { slotIndex, name: normalizedName, backend, sessionId, workspaceRoot: cwd };
+    });
   }
 
   async switchSlot(
@@ -301,38 +327,40 @@ export class SessionManager {
   ): Promise<SessionSlot> {
     const chatType = this.chatType(chatTypeRaw);
     const key = this.makeKey(chatId, userId, chatType, threadId);
-    const now = Date.now();
+    return this.withKeyLock(key, async () => {
+      const now = Date.now();
 
-    let group = this.groups.get(key);
-    let restoredFromStore = false;
-    if (!group) {
-      group = await this.restoreGroupFromStore(
-        key,
-        chatId,
-        userId,
-        chatType,
-        now,
-        threadId,
-      );
-      restoredFromStore = group != null;
-    }
-    if (!group || group.slots.length === 0) {
-      throw new Error(
-        "当前没有任何 session。请先使用 `/new list` 查看工作区列表，再用 `/new <序号>` 或 `/new <路径>` 创建。",
-      );
-    }
+      let group = this.groups.get(key);
+      let restoredFromStore = false;
+      if (!group) {
+        group = await this.restoreGroupFromStore(
+          key,
+          chatId,
+          userId,
+          chatType,
+          now,
+          threadId,
+        );
+        restoredFromStore = group != null;
+      }
+      if (!group || group.slots.length === 0) {
+        throw new Error(
+          "当前没有任何 session。请先使用 `/new list` 查看工作区列表，再用 `/new <序号>` 或 `/new <路径>` 创建。",
+        );
+      }
 
-    const slot = this.resolveSlot(group, target);
-    if (!slot) {
-      throw new Error(
-        typeof target === "number"
-          ? `找不到编号 #${target} 的 session。`
-          : `找不到名称为 "${target}" 的 session。`,
-      );
-    }
+      const slot = this.resolveSlot(group, target);
+      if (!slot) {
+        throw new Error(
+          typeof target === "number"
+            ? `找不到编号 #${target} 的 session。`
+            : `找不到名称为 "${target}" 的 session。`,
+        );
+      }
 
-    return this.activateSlot(key, group, slot, {
-      probeAvailability: !restoredFromStore,
+      return this.activateSlot(key, group, slot, {
+        probeAvailability: !restoredFromStore,
+      });
     });
   }
 
@@ -344,34 +372,36 @@ export class SessionManager {
   ): Promise<SessionSlot> {
     const chatType = this.chatType(chatTypeRaw);
     const key = this.makeKey(chatId, userId, chatType, threadId);
-    const now = Date.now();
+    return this.withKeyLock(key, async () => {
+      const now = Date.now();
 
-    let group = this.groups.get(key);
-    let restoredFromStore = false;
-    if (!group) {
-      group = await this.restoreGroupFromStore(
-        key,
-        chatId,
-        userId,
-        chatType,
-        now,
-        threadId,
-      );
-      restoredFromStore = group != null;
-    }
-    if (!group || group.slots.length === 0) {
-      throw new Error(
-        "当前没有任何 session。请先使用 `/new list` 查看工作区列表，再用 `/new <序号>` 或 `/new <路径>` 创建。",
-      );
-    }
+      let group = this.groups.get(key);
+      let restoredFromStore = false;
+      if (!group) {
+        group = await this.restoreGroupFromStore(
+          key,
+          chatId,
+          userId,
+          chatType,
+          now,
+          threadId,
+        );
+        restoredFromStore = group != null;
+      }
+      if (!group || group.slots.length === 0) {
+        throw new Error(
+          "当前没有任何 session。请先使用 `/new list` 查看工作区列表，再用 `/new <序号>` 或 `/new <路径>` 创建。",
+        );
+      }
 
-    const slot = this.findPreviousSlot(group);
-    if (!slot) {
-      throw new Error("当前没有上一个可切换的 session。发送 /sessions 查看所有 session。");
-    }
+      const slot = this.findPreviousSlot(group);
+      if (!slot) {
+        throw new Error("当前没有上一个可切换的 session。发送 /sessions 查看所有 session。");
+      }
 
-    return this.activateSlot(key, group, slot, {
-      probeAvailability: !restoredFromStore,
+      return this.activateSlot(key, group, slot, {
+        probeAvailability: !restoredFromStore,
+      });
     });
   }
 
@@ -385,47 +415,49 @@ export class SessionManager {
   ): Promise<SessionSlot> {
     const chatType = this.chatType(chatTypeRaw);
     const key = this.makeKey(chatId, userId, chatType, threadId);
-    const now = Date.now();
+    return this.withKeyLock(key, async () => {
+      const now = Date.now();
 
-    let group = this.groups.get(key);
-    if (!group) {
-      group = await this.restoreGroupFromStore(
-        key,
-        chatId,
-        userId,
-        chatType,
-        now,
-        threadId,
-      );
-    }
-    if (!group || group.slots.length === 0) {
-      throw new Error("当前没有任何 session。");
-    }
-
-    const slot =
-      target === null
-        ? this.findSlot(group, group.activeSlotIndex)
-        : this.resolveSlot(group, target);
-    if (!slot) {
-      if (target === null) {
-        throw new Error("当前没有可重命名的活跃 session。");
+      let group = this.groups.get(key);
+      if (!group) {
+        group = await this.restoreGroupFromStore(
+          key,
+          chatId,
+          userId,
+          chatType,
+          now,
+          threadId,
+        );
       }
-      throw new Error(
-        typeof target === "number"
-          ? `找不到编号 #${target} 的 session。`
-          : `找不到名称为 "${target}" 的 session。`,
-      );
-    }
+      if (!group || group.slots.length === 0) {
+        throw new Error("当前没有任何 session。");
+      }
 
-    const normalizedName = this.normalizeSlotName(newName);
-    if (!normalizedName) {
-      throw new Error("新名字不能为空。");
-    }
+      const slot =
+        target === null
+          ? this.findSlot(group, group.activeSlotIndex)
+          : this.resolveSlot(group, target);
+      if (!slot) {
+        if (target === null) {
+          throw new Error("当前没有可重命名的活跃 session。");
+        }
+        throw new Error(
+          typeof target === "number"
+            ? `找不到编号 #${target} 的 session。`
+            : `找不到名称为 "${target}" 的 session。`,
+        );
+      }
 
-    this.ensureSlotNameAvailable(group, normalizedName, slot.slotIndex);
-    slot.name = normalizedName;
-    this.persistGroup(key, group);
-    return slot;
+      const normalizedName = this.normalizeSlotName(newName);
+      if (!normalizedName) {
+        throw new Error("新名字不能为空。");
+      }
+
+      this.ensureSlotNameAvailable(group, normalizedName, slot.slotIndex);
+      slot.name = normalizedName;
+      this.persistGroup(key, group);
+      return slot;
+    });
   }
 
   async closeSlot(
@@ -437,56 +469,58 @@ export class SessionManager {
   ): Promise<{ closed: SessionSlot; removedEntireGroup: boolean }> {
     const chatType = this.chatType(chatTypeRaw);
     const key = this.makeKey(chatId, userId, chatType, threadId);
-    const now = Date.now();
+    return this.withKeyLock(key, async () => {
+      const now = Date.now();
 
-    let group = this.groups.get(key);
-    if (!group) {
-      group = await this.restoreGroupFromStore(
-        key,
-        chatId,
-        userId,
-        chatType,
-        now,
-        threadId,
-      );
-    }
-    if (!group || group.slots.length === 0) {
-      throw new Error("当前没有任何 session。");
-    }
+      let group = this.groups.get(key);
+      if (!group) {
+        group = await this.restoreGroupFromStore(
+          key,
+          chatId,
+          userId,
+          chatType,
+          now,
+          threadId,
+        );
+      }
+      if (!group || group.slots.length === 0) {
+        throw new Error("当前没有任何 session。");
+      }
 
-    const slot = this.resolveSlot(group, target);
-    if (!slot) {
-      throw new Error(
-        typeof target === "number"
-          ? `找不到编号 #${target} 的 session。`
-          : `找不到名称为 "${target}" 的 session。`,
-      );
-    }
+      const slot = this.resolveSlot(group, target);
+      if (!slot) {
+        throw new Error(
+          typeof target === "number"
+            ? `找不到编号 #${target} 的 session。`
+            : `找不到名称为 "${target}" 的 session。`,
+        );
+      }
 
-    const runtime = this.runtimeForSlot(slot);
-    await runtime.cancelSession(slot.session.sessionId);
-    await runtime.closeSession(slot.session.sessionId);
-    this.removeResumeHistoryForSession(slot.session);
+      const runtime = this.runtimeForSlot(slot);
+      await runtime.cancelSession(slot.session.sessionId);
+      await runtime.closeSession(slot.session.sessionId);
+      this.removeResumeHistoryForSession(slot.session);
 
-    group.slots = group.slots.filter((s) => s.slotIndex !== slot.slotIndex);
+      group.slots = group.slots.filter((s) => s.slotIndex !== slot.slotIndex);
 
-    if (group.slots.length === 0) {
-      this.groups.delete(key);
-      this.store.delete(key);
-      void this.store.flush().catch(() => {});
-      return { closed: slot, removedEntireGroup: true };
-    }
+      if (group.slots.length === 0) {
+        this.groups.delete(key);
+        this.store.delete(key);
+        void this.store.flush().catch(() => {});
+        return { closed: slot, removedEntireGroup: true };
+      }
 
-    if (group.activeSlotIndex === slot.slotIndex) {
-      const best = group.slots.reduce((a, b) =>
-        b.session.lastActiveAt > a.session.lastActiveAt ? b : a,
-      );
-      group.activeSlotIndex = best.slotIndex;
-    }
+      if (group.activeSlotIndex === slot.slotIndex) {
+        const best = group.slots.reduce((a, b) =>
+          b.session.lastActiveAt > a.session.lastActiveAt ? b : a,
+        );
+        group.activeSlotIndex = best.slotIndex;
+      }
 
-    this.groups.set(key, group);
-    this.persistGroup(key, group);
-    return { closed: slot, removedEntireGroup: false };
+      this.groups.set(key, group);
+      this.persistGroup(key, group);
+      return { closed: slot, removedEntireGroup: false };
+    });
   }
 
   async closeAllSlots(
@@ -497,35 +531,37 @@ export class SessionManager {
   ): Promise<{ closed: SessionSlot[] }> {
     const chatType = this.chatType(chatTypeRaw);
     const key = this.makeKey(chatId, userId, chatType, threadId);
-    const now = Date.now();
+    return this.withKeyLock(key, async () => {
+      const now = Date.now();
 
-    let group = this.groups.get(key);
-    if (!group) {
-      group = await this.restoreGroupFromStore(
-        key,
-        chatId,
-        userId,
-        chatType,
-        now,
-        threadId,
-      );
-    }
-    if (!group || group.slots.length === 0) {
-      throw new Error("当前没有任何 session。");
-    }
+      let group = this.groups.get(key);
+      if (!group) {
+        group = await this.restoreGroupFromStore(
+          key,
+          chatId,
+          userId,
+          chatType,
+          now,
+          threadId,
+        );
+      }
+      if (!group || group.slots.length === 0) {
+        throw new Error("当前没有任何 session。");
+      }
 
-    const toClose = [...group.slots];
-    for (const slot of toClose) {
-      const runtime = this.runtimeForSlot(slot);
-      await runtime.cancelSession(slot.session.sessionId);
-      await runtime.closeSession(slot.session.sessionId);
-      this.removeResumeHistoryForSession(slot.session);
-    }
+      const toClose = [...group.slots];
+      for (const slot of toClose) {
+        const runtime = this.runtimeForSlot(slot);
+        await runtime.cancelSession(slot.session.sessionId);
+        await runtime.closeSession(slot.session.sessionId);
+        this.removeResumeHistoryForSession(slot.session);
+      }
 
-    this.groups.delete(key);
-    this.store.delete(key);
-    void this.store.flush().catch(() => {});
-    return { closed: toClose };
+      this.groups.delete(key);
+      this.store.delete(key);
+      void this.store.flush().catch(() => {});
+      return { closed: toClose };
+    });
   }
 
   async listSlots(

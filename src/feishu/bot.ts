@@ -495,8 +495,24 @@ export class FeishuBot extends EventEmitter {
   }
 
   async stop(): Promise<void> {
-    // The SDK WSClient doesn't expose a close method in all versions —
-    // null out the reference so GC can reclaim it.
+    // The SDK WSClient doesn't expose a stable close() in all versions,
+    // but we should at least try to clean up the long connection.
+    const client = this.wsClient as unknown as {
+      close?: () => void;
+      disconnect?: () => void;
+      end?: () => void;
+    } | null;
+    try {
+      if (typeof client?.close === "function") {
+        client.close();
+      } else if (typeof client?.disconnect === "function") {
+        client.disconnect();
+      } else if (typeof client?.end === "function") {
+        client.end();
+      }
+    } catch {
+      // Best-effort: ignore errors during teardown.
+    }
     this.wsClient = null;
   }
 
