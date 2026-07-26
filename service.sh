@@ -348,6 +348,8 @@ ensure_remote_exists() {
 
 cmd_upgrade() {
     local remote branch local_head remote_head merge_base
+    local pre_upgrade_head=""
+    local dist_backup=""
 
     require_command git "请先安装 Git 并确保其在 PATH 中。"
     ensure_git_repository
@@ -361,6 +363,12 @@ cmd_upgrade() {
     echo "  🌐 远端: $remote"
     echo "  🌿 分支: $branch"
 
+    # Record pre-upgrade HEAD for potential rollback
+    pre_upgrade_head="$(git -C "$BOT_DIR" rev-parse HEAD)"
+
+    # Set up trap for safe cleanup on interruption
+    trap 'upgrade_trap_handler "$pre_upgrade_head" "$dist_backup"' SIGTERM SIGINT
+
     git -C "$BOT_DIR" fetch "$remote" "$branch"
 
     local_head="$(git -C "$BOT_DIR" rev-parse HEAD)"
@@ -368,6 +376,7 @@ cmd_upgrade() {
 
     if [[ "$local_head" == "$remote_head" ]]; then
         echo "✅ 已是最新版本，无需升级。"
+        trap - SIGTERM SIGINT
         return 0
     fi
 
@@ -375,11 +384,68 @@ cmd_upgrade() {
     if [[ "$merge_base" != "$local_head" ]]; then
         echo "❌ 当前分支无法对 $remote/$branch 进行 fast-forward。"
         echo "   请先手动处理分叉/冲突，再执行 bash service.sh upgrade"
+        trap - SIGTERM SIGINT
         exit 1
     fi
 
-    git -C "$BOT_DIR" pull --ff-only "$remote" "$branch"
-    cmd_update
+    # Use merge --ff-only instead of pull --ff-only to avoid redundant fetch
+    git -C "$BOT_DIR" merge --ff-only "$remote/$branch"
+
+    # Backup dist before rebuild; restore on failure
+    if [[ -d "$BOT_DIR/dist" ]]; then
+        dist_backup="$BOT_DIR/dist.bak.$$"
+        rm -rf "$dist_backup"
+        cp -a "$BOT_DIR/dist" "$dist_backup"
+    fi
+
+    if ! cmd_update; then
+        echo "❌ 升级失败（npm install/build/restart 阶段），正在回滚..."
+        upgrade_rollback "$pre_upgrade_head" "$dist_backup"
+        trap - SIGTERM SIGINT
+        exit 1
+    fi
+
+    # Success: clean up backup and trap
+    if [[ -n "$dist_backup" && -d "$dist_backup" ]]; then
+        rm -rf "$dist_backup"
+    fi
+    trap - SIGTERM SIGINT
+    echo "✅ 升级完成。"
+}
+
+# Rollback helper: restore git HEAD and dist on upgrade failure
+upgrade_rollback() {
+    local target_head="$1"
+    local dist_backup="$2"
+
+    if [[ -n "$target_head" ]]; then
+        echo "  🔄 回滚 Git HEAD 到 $target_head ..."
+        git -C "$BOT_DIR" reset --hard "$target_head" 2>/dev/null || \
+            echo "  ⚠️  Git 回滚失败，请手动检查: git reset --hard $target_head"
+    fi
+
+    if [[ -n "$dist_backup" && -d "$dist_backup" ]]; then
+        echo "  🔄 恢复 dist 备份..."
+        rm -rf "$BOT_DIR/dist"
+        cp -a "$dist_backup" "$BOT_DIR/dist"
+        rm -rf "$dist_backup"
+    fi
+
+    # Restore package-lock.json if it was dirtied by a failed npm install
+    if [[ -n "$target_head" ]]; then
+        git -C "$BOT_DIR" checkout -- package-lock.json 2>/dev/null || true
+    fi
+}
+
+# Trap handler: invoked when upgrade is interrupted by SIGTERM/SIGINT
+upgrade_trap_handler() {
+    local target_head="$1"
+    local dist_backup="$2"
+    echo ""
+    echo "⚠️  升级被信号中断，正在尝试回滚..."
+    upgrade_rollback "$target_head" "$dist_backup"
+    echo "❌ 升级已中断。请手动检查 git/npm 状态后重试。"
+    exit 1
 }
 
 print_upgrade_help() {

@@ -35,6 +35,8 @@ import { preprocessBridgeMessage } from "./bridge-message-preprocess.js";
 
 const MAINTENANCE_OUTPUT_LIMIT = 12_000;
 const SHUTDOWN_CANCEL_TIMEOUT_MS = 3_000;
+/** Max upgrade runtime before bridge forces a reconcile/timeout (matches upgrade-runner). */
+const UPGRADE_RUNNER_TIMEOUT_MS = 10 * 60 * 1000;
 
 type RunningMaintenanceTask = {
   kind: BridgeMaintenanceCommandKind;
@@ -242,6 +244,10 @@ export class Bridge {
 
     this.feishuBot.on("ready", () => {
       console.log("[bridge] Feishu bot connected and ready");
+      // Send upgrade result notification if a completed upgrade hasn't been notified yet
+      void this.notifyCompletedUpgrade().catch((err) => {
+        console.error("[bridge] notifyCompletedUpgrade failed:", err);
+      });
     });
 
     this.feishuBot.on("message", (msg: FeishuMessage) => {
@@ -264,6 +270,14 @@ export class Bridge {
         .catch((err) => {
           console.error("[bridge] cleanupExpired failed:", err);
         });
+      // Periodically reconcile upgrade state to detect stale/hung runners
+      void this.reconcileUpgradeAttempt().catch((err) => {
+        console.error("[bridge] reconcileUpgradeAttempt failed:", err);
+      });
+      // Check for unnotified completed upgrades
+      void this.notifyCompletedUpgrade().catch((err) => {
+        console.error("[bridge] notifyCompletedUpgrade failed:", err);
+      });
     }, 5 * 60 * 1000);
 
     console.log("[bridge] Service started successfully");
@@ -318,6 +332,24 @@ export class Bridge {
     }
     if (attempt.state === "running") {
       if (attempt.runnerPid && isPidRunning(attempt.runnerPid)) {
+        // Check for stale runner: if it has been running longer than the
+        // timeout, it is likely hung (e.g. git fetch blocked on network).
+        const startedAt = attempt.startedAt ?? attempt.requestedAt;
+        const elapsed = Date.now() - startedAt;
+        if (elapsed > UPGRADE_RUNNER_TIMEOUT_MS) {
+          try {
+            process.kill(attempt.runnerPid, "SIGTERM");
+          } catch {
+            // already dead
+          }
+          this.upgradeResultStore.setAttempt({
+            ...attempt,
+            state: "failed",
+            finishedAt: Date.now(),
+            errorMessage: `Upgrade runner timed out after ${Math.round(elapsed / 60_000)} minutes (PID ${attempt.runnerPid} still alive, sent SIGTERM)`,
+          });
+          await this.upgradeResultStore.flush();
+        }
         return;
       }
       this.upgradeResultStore.setAttempt({
@@ -595,6 +627,54 @@ export class Bridge {
         ? `；退出码：${attempt.exitCode}`
         : "";
     return `${stateLabel}（${timeLabel}）${detail}`;
+  }
+
+  private formatUpgradeResultMessage(attempt: UpgradeAttemptRecord): string {
+    const success = attempt.state === "succeeded";
+    const header = success ? "✅ 升级已完成" : "❌ 升级失败";
+    const summary = this.formatUpgradeAttemptSummary(attempt);
+    const detail = attempt.errorMessage?.trim()
+      ? `\n原因：${attempt.errorMessage.trim()}`
+      : "";
+    const output = attempt.outputTail?.trim()
+      ? `\n\n最近输出（尾部 ${attempt.outputTail.trim().length} 字符）：\n\`\`\`\n${attempt.outputTail.trim().slice(-2000)}\n\`\`\``
+      : "";
+    return `${header}\n${summary}${detail}${output}`;
+  }
+
+  /**
+   * Check if the most recent upgrade attempt has completed (succeeded/failed)
+   * but has not yet been notified to the requesting user. If so, send a
+   * Feishu message and mark it as notified.
+   */
+  private async notifyCompletedUpgrade(): Promise<void> {
+    const attempt = this.upgradeResultStore.getAttempt();
+    if (!attempt) return;
+    if (attempt.state !== "succeeded" && attempt.state !== "failed") return;
+    if (attempt.notified) return;
+    if (!attempt.requestedBy) return;
+
+    const { chatId, messageId, threadId } = attempt.requestedBy;
+    const message = this.formatUpgradeResultMessage(attempt);
+
+    try {
+      await this.feishuBot.sendText(
+        chatId,
+        message,
+        messageId,
+        threadId ? { replyInThread: true } : undefined,
+      );
+    } catch (err) {
+      console.error("[bridge] Failed to send upgrade notification:", err);
+      return;
+    }
+
+    // Mark as notified and persist
+    this.upgradeResultStore.setAttempt({
+      ...attempt,
+      notified: true,
+    });
+    await this.upgradeResultStore.flush();
   }
 
   private maintenanceUsage(kind: BridgeMaintenanceCommandKind): string {
