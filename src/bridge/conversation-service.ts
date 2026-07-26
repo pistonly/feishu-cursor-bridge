@@ -25,8 +25,8 @@ const AUTH_LIKE_REPLY_PREFIXES = [
 const DEFAULT_LEGACY_CURSOR_TIMEOUT_MS = 120_000;
 const MISLEADING_AUTH_TIMEOUT_TOLERANCE_MS = 5_000;
 const PROMPT_PROGRESS_POLL_MS = 5_000;
-const PROMPT_SLOW_NOTICE_MS = 20_000;
-const PROMPT_STUCK_NOTICE_MS = 60_000;
+const PROMPT_SLOW_NOTICE_MS = 5 * 60_000;
+const PROMPT_STUCK_NOTICE_MS = 10 * 60_000;
 
 function formatLegacyTimeoutSeconds(timeoutMs: number): string {
   const seconds = Math.max(1, Math.round(timeoutMs / 1000));
