@@ -378,6 +378,11 @@ export class CodexAppServerRuntime implements BridgeAcpRuntime {
 
   async closeSession(sessionId: string): Promise<void> {
     const rpc = this.rpc;
+    const pending = this.pendingTurns.get(sessionId);
+    if (pending && !pending.resolved) {
+      pending.resolved = true;
+      pending.reject(new Error("Session closed"));
+    }
     this.pendingTurns.delete(sessionId);
     this.threadModelOverrides.delete(sessionId);
     this.sessionModeStates.delete(sessionId);
@@ -623,7 +628,7 @@ export class CodexAppServerRuntime implements BridgeAcpRuntime {
         : undefined;
     if (effort && REASONING_EFFORT_VALUES.has(effort)) {
       const selector = composeModelSelector(base, effort);
-      return this.modelCatalog.has(selector) ? selector : selector;
+      return this.modelCatalog.has(selector) ? selector : base;
     }
     if (this.modelCatalog.has(base)) {
       return base;

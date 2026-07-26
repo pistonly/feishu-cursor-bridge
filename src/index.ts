@@ -106,22 +106,49 @@ async function main() {
 
   const bridge = new Bridge(config);
 
-  const shutdown = async () => {
-    console.log("\n[main] Shutting down...");
-    await bridge.stop();
-    releaseSingleInstanceLock?.();
-    fileLogger?.close();
-    process.exit(0);
+  let shuttingDown = false;
+  const shutdown = async (reason: string, exitCode = 0): Promise<void> => {
+    if (shuttingDown) {
+      console.log(`\n[main] Already shutting down (${reason}); forcing exit.`);
+      process.exit(130);
+    }
+    shuttingDown = true;
+    console.log(`\n[main] Shutting down (${reason})...`);
+    try {
+      await bridge.stop();
+    } catch (err) {
+      console.error(
+        "[main] Error during bridge.stop():",
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      releaseSingleInstanceLock?.();
+      fileLogger?.close();
+      process.exit(exitCode);
+    }
   };
 
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", () => void shutdown("SIGINT"));
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
+  process.on("uncaughtException", (err) => {
+    console.error("[main] uncaughtException:", err);
+    void shutdown("uncaughtException", 1);
+  });
+  process.on("unhandledRejection", (reason) => {
+    console.error("[main] unhandledRejection:", reason);
+    void shutdown("unhandledRejection", 1);
+  });
 
   try {
     await bridge.start();
     console.log("[main] Service is running. Press Ctrl+C to stop.");
   } catch (err) {
     console.error("[main] Failed to start:", err);
+    try {
+      await bridge.stop();
+    } catch {
+      /* ignore cleanup errors during failed start */
+    }
     releaseSingleInstanceLock?.();
     fileLogger?.close();
     process.exit(1);

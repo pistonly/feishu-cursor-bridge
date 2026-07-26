@@ -307,15 +307,15 @@ export class ConversationService {
         });
     };
 
-    this.acp.bridgeClient.on("acp", onAcp);
-    this.acp.bridgeClient.setFeishuPromptContext(session.sessionId, {
-      chatId: msg.chatId,
-      messageId: msg.messageId,
-      ...(replyOpts ? { replyInThread: true } : {}),
-    });
-    startProgressMonitor();
-
     try {
+      this.acp.bridgeClient.on("acp", onAcp);
+      this.acp.bridgeClient.setFeishuPromptContext(session.sessionId, {
+        chatId: msg.chatId,
+        messageId: msg.messageId,
+        ...(replyOpts ? { replyInThread: true } : {}),
+      });
+      startProgressMonitor();
+
       if (this.config.bridgeDebug) {
         console.log(
           `[conversation] prompt sessionId=${session.sessionId} len=${msg.content.length}`,
