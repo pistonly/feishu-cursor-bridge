@@ -37,9 +37,11 @@ type PendingTurn = {
   reject: (reason: unknown) => void;
   turnId?: string;
   resolved: boolean;
+  timeoutTimer?: ReturnType<typeof setTimeout>;
 };
 
 const APP_SERVER_PROTOCOL_VERSION = "codex-app-server/v2";
+const PROMPT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const MODE_UNSUPPORTED_ERROR =
   "Codex app-server backend 当前未提供等价于 ACP `session/set_mode` 的稳定接口。";
 
@@ -86,6 +88,7 @@ export class CodexAppServerRuntime implements BridgeAcpRuntime {
   private availableModels: AcpModelInfo[] = [];
   private modelCatalog = new Map<string, ModelCatalogEntry>();
   private defaultModelSelector: string | undefined;
+  private ensureStartedPromise: Promise<void> | null = null;
 
   constructor(config: Config, bridgeClient: FeishuBridgeClient) {
     this.config = config;
@@ -131,6 +134,37 @@ export class CodexAppServerRuntime implements BridgeAcpRuntime {
     return state ? { ...state } : undefined;
   }
 
+  async ensureStarted(): Promise<void> {
+    if (this.rpc && this.initialized && this.initResultValue) {
+      return;
+    }
+    if (this.ensureStartedPromise) {
+      return this.ensureStartedPromise;
+    }
+    this.ensureStartedPromise = (async () => {
+      // If the child died but wasn't fully cleaned up yet, stop first.
+      if (this.child === null || this.rpc === null) {
+        await this.stop().catch(() => {});
+        await this.start();
+      }
+      try {
+        if (!this.initialized) {
+          await this.initializeAndAuth();
+        }
+      } catch (error) {
+        try {
+          await this.stop();
+        } catch {
+          // ignore secondary stop failures while already surfacing startup error
+        }
+        throw error;
+      }
+    })().finally(() => {
+      this.ensureStartedPromise = null;
+    });
+    return this.ensureStartedPromise;
+  }
+
   async start(): Promise<void> {
     if (this.child) {
       throw new Error("Codex app-server runtime already running");
@@ -166,6 +200,17 @@ export class CodexAppServerRuntime implements BridgeAcpRuntime {
       this.rpc = null;
       this.child = null;
       this.initialized = false;
+      // Clear initResultValue so AcpRuntimeRegistry no longer considers
+      // this runtime "ready" — without this, reconcileEntryStateFromRuntime
+      // would keep state="ready" and startRuntime would skip reconnection.
+      this.initResultValue = null;
+      this.availableModels = [];
+      this.modelCatalog.clear();
+      this.defaultModelSelector = undefined;
+      this.sessionModeStates.clear();
+      this.sessionModelStates.clear();
+      this.sessionUsageStates.clear();
+      this.threadModelOverrides.clear();
       this.rejectPendingTurns(
         new Error("Codex app-server stopped while a turn was still running"),
       );
@@ -290,6 +335,20 @@ export class CodexAppServerRuntime implements BridgeAcpRuntime {
     const pending = createPendingTurn();
     this.pendingTurns.set(sessionId, pending);
 
+    // Guard against a turn that never receives a turn/completed notification.
+    // Without this, the pending promise would hang forever and block all
+    // subsequent prompts for this session.
+    pending.timeoutTimer = setTimeout(() => {
+      if (pending.resolved) return;
+      pending.resolved = true;
+      this.pendingTurns.delete(sessionId);
+      pending.reject(
+        new Error(
+          `Codex app-server prompt timed out after ${PROMPT_TIMEOUT_MS / 1000}s without a turn/completed notification`,
+        ),
+      );
+    }, PROMPT_TIMEOUT_MS);
+
     const override = this.threadModelOverrides.get(sessionId);
     try {
       const response = (await rpc.request("turn/start", {
@@ -326,6 +385,7 @@ export class CodexAppServerRuntime implements BridgeAcpRuntime {
       }
       return await pending.promise;
     } catch (error) {
+      clearTimeout(pending.timeoutTimer);
       this.pendingTurns.delete(sessionId);
       throw error;
     }
@@ -398,6 +458,7 @@ export class CodexAppServerRuntime implements BridgeAcpRuntime {
   }
 
   async stop(): Promise<void> {
+    this.ensureStartedPromise = null;
     this.rejectPendingTurns(new Error("Codex app-server runtime stopped"));
     this.rpc?.dispose(new Error("Codex app-server runtime stopped"));
     this.rpc = null;
@@ -1076,6 +1137,7 @@ export class CodexAppServerRuntime implements BridgeAcpRuntime {
     const pending = this.pendingTurns.get(threadId);
     if (!pending || pending.resolved) return;
     pending.resolved = true;
+    if (pending.timeoutTimer) clearTimeout(pending.timeoutTimer);
     this.pendingTurns.delete(threadId);
 
     if (status === "failed" && errorMessage) {
@@ -1100,6 +1162,7 @@ export class CodexAppServerRuntime implements BridgeAcpRuntime {
     for (const pending of this.pendingTurns.values()) {
       if (pending.resolved) continue;
       pending.resolved = true;
+      if (pending.timeoutTimer) clearTimeout(pending.timeoutTimer);
       pending.reject(error);
     }
     this.pendingTurns.clear();

@@ -15,5 +15,5 @@ const TOOL_KIND_EMOJI: Record<ToolKind, string> = {
 
 /** ACP `ToolKind` → 飞书工具行前缀；无 kind 时用 🔧。 */
 export function emojiForToolKind(kind: ToolKind | undefined): string {
-  return kind ? TOOL_KIND_EMOJI[kind] : "🔧";
+  return kind ? (TOOL_KIND_EMOJI[kind] ?? "🔧") : "🔧";
 }

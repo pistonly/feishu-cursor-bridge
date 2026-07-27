@@ -15,11 +15,14 @@ export class OfficialAcpRuntime extends SdkAcpRuntimeBase {
 
   protected createSpawnSpec() {
     const args: string[] = [];
+    // Pass sensitive credentials via environment variables instead of
+    // command-line arguments, which would be visible to all users via `ps`.
+    const env: NodeJS.ProcessEnv = { ...process.env };
     if (this.config.acp.officialApiKey) {
-      args.push("--api-key", this.config.acp.officialApiKey);
+      env["CURSOR_API_KEY"] = this.config.acp.officialApiKey;
     }
     if (this.config.acp.officialAuthToken) {
-      args.push("--auth-token", this.config.acp.officialAuthToken);
+      env["CURSOR_AUTH_TOKEN"] = this.config.acp.officialAuthToken;
     }
     args.push("acp");
 
@@ -27,7 +30,7 @@ export class OfficialAcpRuntime extends SdkAcpRuntimeBase {
       command: this.config.acp.officialAgentPath,
       args,
       cwd: this.config.acp.workspaceRoot,
-      env: { ...process.env },
+      env,
       label: "official Cursor ACP",
     };
   }

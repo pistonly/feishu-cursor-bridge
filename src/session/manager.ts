@@ -198,38 +198,40 @@ export class SessionManager {
   ): Promise<UserSession | null> {
     const chatType = this.chatType(chatTypeRaw);
     const key = this.makeKey(chatId, userId, chatType, threadId);
-    const now = Date.now();
+    return this.withKeyLock(key, async () => {
+      const now = Date.now();
 
-    let group = this.groups.get(key);
-    let restoredFromStore = false;
-    if (!group) {
-      group = await this.restoreGroupFromStore(
-        key,
-        chatId,
-        userId,
-        chatType,
-        now,
-        threadId,
-      );
-      restoredFromStore = group != null;
-    }
-
-    if (!group) return null;
-    const slot = this.findSlot(group, group.activeSlotIndex);
-    if (!slot) return null;
-
-    if (!this.isExpiredAt(slot.session.lastActiveAt, now)) {
-      if (!restoredFromStore && options?.skipAvailabilityProbe !== true) {
-        await this.ensureSlotSessionAvailable(slot, now, key);
+      let group = this.groups.get(key);
+      let restoredFromStore = false;
+      if (!group) {
+        group = await this.restoreGroupFromStore(
+          key,
+          chatId,
+          userId,
+          chatType,
+          now,
+          threadId,
+        );
+        restoredFromStore = group != null;
       }
-      slot.session.lastActiveAt = now;
+
+      if (!group) return null;
+      const slot = this.findSlot(group, group.activeSlotIndex);
+      if (!slot) return null;
+
+      if (!this.isExpiredAt(slot.session.lastActiveAt, now)) {
+        if (!restoredFromStore && options?.skipAvailabilityProbe !== true) {
+          await this.ensureSlotSessionAvailable(slot, now, key);
+        }
+        slot.session.lastActiveAt = now;
+        this.persistGroup(key, group);
+        return slot.session;
+      }
+
+      await this.renewSlotSession(slot, slot.session.workspaceRoot, now, key);
       this.persistGroup(key, group);
       return slot.session;
-    }
-
-    await this.renewSlotSession(slot, slot.session.workspaceRoot, now, key);
-    this.persistGroup(key, group);
-    return slot.session;
+    });
   }
 
   async createNewSlot(

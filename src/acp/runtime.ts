@@ -326,19 +326,35 @@ export class AcpRuntimeRegistry {
   }
 
   async stopAll(): Promise<void> {
+    const errors: unknown[] = [];
     for (const entry of this.runtimes.values()) {
       // Wait for any in-flight start to finish (or fail) before stopping,
       // so that a concurrent initializeAndAuth doesn't resurrect state after stop().
       if (entry.startPromise) {
         await entry.startPromise.catch(() => {});
       }
-      await entry.runtime.stop();
+      // Isolate individual stop() failures so one broken runtime doesn't
+      // prevent the rest from being cleaned up (which would leak child processes).
+      try {
+        await entry.runtime.stop();
+      } catch (err) {
+        errors.push(err);
+        console.error(
+          `[bridge] ${formatAcpBackendLabel(entry.runtime.backend)} stop() failed:`,
+          err,
+        );
+      }
       entry.state = "idle";
       delete entry.startedAt;
       delete entry.readyAt;
       delete entry.errorAt;
       delete entry.errorMessage;
       entry.startPromise = undefined;
+    }
+    if (errors.length > 0) {
+      // Re-throw the first error so callers know something went wrong,
+      // but only after all runtimes have been given a chance to stop.
+      throw errors[0];
     }
   }
 }

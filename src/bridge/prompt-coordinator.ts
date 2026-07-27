@@ -335,12 +335,12 @@ export class PromptCoordinator {
             this.deps.threadReplyOpts(nextDispatch.msg),
           )
           .catch(() => {});
-      } finally {
-        this.activePrompts.delete(promptKey);
       }
 
       const queued = this.queuedPrompts.get(promptKey);
       if (!queued) {
+        // Queue is empty — safe to release the prompt key now.
+        this.activePrompts.delete(promptKey);
         nextDispatch = undefined;
         continue;
       }
@@ -364,6 +364,12 @@ export class PromptCoordinator {
         hasPostEmbeddedImages: queued.hasPostEmbeddedImages,
         slotIndex: freshSlotIndex,
       };
+
+      // Keep promptKey in activePrompts while sending the notification so
+      // that a concurrent handlePromptMessage sees it as active and queues
+      // rather than starting a second execution for the same slot. The key
+      // was already added at the top of the loop iteration (line above the
+      // try block) and will be re-added there on the next iteration.
       await this.deps.getFeishuBot().sendText(
         nextDispatch.msg.chatId,
         "▶️ 已开始处理刚才排队的消息。",

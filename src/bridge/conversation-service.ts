@@ -430,6 +430,18 @@ export class ConversationService {
       clearProgressMonitorTimer();
       this.acp.bridgeClient.setFeishuPromptContext(session.sessionId, undefined);
       this.acp.bridgeClient.off("acp", onAcp);
+
+      // If the prompt threw before any renderable event was received, the
+      // loading card ("🤔 处理中...") is still the last thing the user sees.
+      // Update it to a failure indicator so it doesn't look stuck forever.
+      // (The error text itself is sent separately by PromptCoordinator.)
+      if (!sawRenderableEvent) {
+        try {
+          await this.feishu.updateCard(loadingCardId, "❌ 处理失败");
+        } catch {
+          // best-effort: card may already be gone or API may be unreachable
+        }
+      }
     }
   }
 }
