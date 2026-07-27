@@ -574,29 +574,31 @@ export class SessionManager {
   ): Promise<SlotListItem[]> {
     const chatType = this.chatType(chatTypeRaw);
     const key = this.makeKey(chatId, userId, chatType, threadId);
-    let group = this.groups.get(key);
-    if (!group) {
-      group = await this.restoreGroupFromStore(
-        key,
-        chatId,
-        userId,
-        chatType,
-        Date.now(),
-        threadId,
-      );
-    }
-    if (!group) return [];
-    return [...group.slots]
-      .sort((a, b) => a.slotIndex - b.slotIndex)
-      .map((slot) => ({
-        slotIndex: slot.slotIndex,
-        sessionId: slot.session.sessionId,
-        backend: slot.session.backend,
-        name: slot.name,
-        workspaceRoot: slot.session.workspaceRoot,
-        lastActiveAt: slot.session.lastActiveAt,
-        isActive: slot.slotIndex === group!.activeSlotIndex,
-      }));
+    return this.withKeyLock(key, async () => {
+      let group = this.groups.get(key);
+      if (!group) {
+        group = await this.restoreGroupFromStore(
+          key,
+          chatId,
+          userId,
+          chatType,
+          Date.now(),
+          threadId,
+        );
+      }
+      if (!group) return [];
+      return [...group.slots]
+        .sort((a, b) => a.slotIndex - b.slotIndex)
+        .map((slot) => ({
+          slotIndex: slot.slotIndex,
+          sessionId: slot.session.sessionId,
+          backend: slot.session.backend,
+          name: slot.name,
+          workspaceRoot: slot.session.workspaceRoot,
+          lastActiveAt: slot.session.lastActiveAt,
+          isActive: slot.slotIndex === group!.activeSlotIndex,
+        }));
+    });
   }
 
   async getSlot(
@@ -608,36 +610,38 @@ export class SessionManager {
   ): Promise<SessionSlot> {
     const chatType = this.chatType(chatTypeRaw);
     const key = this.makeKey(chatId, userId, chatType, threadId);
-    let group = this.groups.get(key);
-    if (!group) {
-      group = await this.restoreGroupFromStore(
-        key,
-        chatId,
-        userId,
-        chatType,
-        Date.now(),
-        threadId,
-      );
-    }
-    if (!group || group.slots.length === 0) {
-      throw new Error("当前没有任何 session。");
-    }
-
-    const slot =
-      target === null
-        ? this.findSlot(group, group.activeSlotIndex)
-        : this.resolveSlot(group, target);
-    if (!slot) {
-      if (target === null) {
-        throw new Error("当前没有可用的活跃 session。");
+    return this.withKeyLock(key, async () => {
+      let group = this.groups.get(key);
+      if (!group) {
+        group = await this.restoreGroupFromStore(
+          key,
+          chatId,
+          userId,
+          chatType,
+          Date.now(),
+          threadId,
+        );
       }
-      throw new Error(
-        typeof target === "number"
-          ? `找不到编号 #${target} 的 session。`
-          : `找不到名称为 "${target}" 的 session。`,
-      );
-    }
-    return slot;
+      if (!group || group.slots.length === 0) {
+        throw new Error("当前没有任何 session。");
+      }
+
+      const slot =
+        target === null
+          ? this.findSlot(group, group.activeSlotIndex)
+          : this.resolveSlot(group, target);
+      if (!slot) {
+        if (target === null) {
+          throw new Error("当前没有可用的活跃 session。");
+        }
+        throw new Error(
+          typeof target === "number"
+            ? `找不到编号 #${target} 的 session。`
+            : `找不到名称为 "${target}" 的 session。`,
+        );
+      }
+      return slot;
+    });
   }
 
   getSessionSnapshot(
@@ -797,52 +801,54 @@ export class SessionManager {
   ): Promise<SessionSlot> {
     const chatType = this.chatType(chatTypeRaw);
     const key = this.makeKey(chatId, userId, chatType, threadId);
-    const now = Date.now();
+    return this.withKeyLock(key, async () => {
+      const now = Date.now();
 
-    let group = this.groups.get(key);
-    if (!group) {
-      group = await this.restoreGroupFromStore(
-        key,
-        chatId,
-        userId,
-        chatType,
-        now,
-        threadId,
-      );
-    }
-    if (!group || group.slots.length === 0) {
-      throw new Error("当前没有任何 session。");
-    }
+      let group = this.groups.get(key);
+      if (!group) {
+        group = await this.restoreGroupFromStore(
+          key,
+          chatId,
+          userId,
+          chatType,
+          now,
+          threadId,
+        );
+      }
+      if (!group || group.slots.length === 0) {
+        throw new Error("当前没有任何 session。");
+      }
 
-    const activeSlot = this.findSlot(group, group.activeSlotIndex);
-    if (!activeSlot) {
-      throw new Error("当前没有可用的活跃 session。");
-    }
+      const activeSlot = this.findSlot(group, group.activeSlotIndex);
+      if (!activeSlot) {
+        throw new Error("当前没有可用的活跃 session。");
+      }
 
-    const preferredModelId = entry.preferredModelId?.trim();
-    activeSlot.session = {
-      ...activeSlot.session,
-      backend: entry.backend,
-      sessionId: entry.sessionId,
-      workspaceRoot: path.resolve(entry.workspaceRoot),
-      lastActiveAt: now,
-      ...(entry.recovery ? { recovery: entry.recovery } : {}),
-    };
-    if (!entry.recovery) {
-      delete activeSlot.session.recovery;
-    }
-    if (preferredModelId) {
-      activeSlot.session.preferredModelId = preferredModelId;
-    } else {
-      delete activeSlot.session.preferredModelId;
-    }
-    delete activeSlot.lastPrompt;
-    delete activeSlot.lastReply;
-    delete activeSlot.history;
+      const preferredModelId = entry.preferredModelId?.trim();
+      activeSlot.session = {
+        ...activeSlot.session,
+        backend: entry.backend,
+        sessionId: entry.sessionId,
+        workspaceRoot: path.resolve(entry.workspaceRoot),
+        lastActiveAt: now,
+        ...(entry.recovery ? { recovery: entry.recovery } : {}),
+      };
+      if (!entry.recovery) {
+        delete activeSlot.session.recovery;
+      }
+      if (preferredModelId) {
+        activeSlot.session.preferredModelId = preferredModelId;
+      } else {
+        delete activeSlot.session.preferredModelId;
+      }
+      delete activeSlot.lastPrompt;
+      delete activeSlot.lastReply;
+      delete activeSlot.history;
 
-    this.groups.set(key, group);
-    this.persistGroup(key, group);
-    return activeSlot;
+      this.groups.set(key, group);
+      this.persistGroup(key, group);
+      return activeSlot;
+    });
   }
 
   setSlotLastTurn(
@@ -955,34 +961,47 @@ export class SessionManager {
   async cleanupExpired(): Promise<number> {
     const now = Date.now();
     let cleaned = 0;
-    for (const [key, group] of this.groups) {
-      const before = group.slots.length;
-      const expired = group.slots.filter((s) =>
-        this.isExpiredAt(s.session.lastActiveAt, now),
-      );
-      for (const slot of expired) {
-        const runtime = this.runtimeForSlot(slot);
-        await runtime.cancelSession(slot.session.sessionId);
-        await runtime.closeSession(slot.session.sessionId);
-        this.removeResumeHistoryForSession(slot.session);
-      }
-      group.slots = group.slots.filter(
-        (s) => !this.isExpiredAt(s.session.lastActiveAt, now),
-      );
-      cleaned += before - group.slots.length;
+    // Snapshot keys to avoid mutation-during-iteration issues.
+    const keys = [...this.groups.keys()];
+    for (const key of keys) {
+      // Use per-key lock to prevent racing with concurrent getActiveSession
+      // or rebindActiveSlotToResumeHistory that might renew the same session.
+      cleaned += await this.withKeyLock(key, async () => {
+        const group = this.groups.get(key);
+        if (!group) return 0;
 
-      if (group.slots.length === 0) {
-        this.groups.delete(key);
-        this.store.delete(key);
-      } else {
-        if (!group.slots.find((s) => s.slotIndex === group.activeSlotIndex)) {
-          const best = group.slots.reduce((a, b) =>
-            b.session.lastActiveAt > a.session.lastActiveAt ? b : a,
-          );
-          group.activeSlotIndex = best.slotIndex;
+        const before = group.slots.length;
+        const expired = group.slots.filter((s) =>
+          this.isExpiredAt(s.session.lastActiveAt, now),
+        );
+        for (const slot of expired) {
+          const runtime = this.runtimeForSlot(slot);
+          await runtime.cancelSession(slot.session.sessionId);
+          await runtime.closeSession(slot.session.sessionId);
+          this.removeResumeHistoryForSession(slot.session);
         }
-        this.persistGroup(key, group);
-      }
+        group.slots = group.slots.filter(
+          (s) => !this.isExpiredAt(s.session.lastActiveAt, now),
+        );
+        const removed = before - group.slots.length;
+
+        if (group.slots.length === 0) {
+          this.groups.delete(key);
+          this.store.delete(key);
+          // Clean up pending notices for the removed group to prevent
+          // memory leak from accumulated notices for inactive sessions.
+          this.pendingNotices.delete(key);
+        } else {
+          if (!group.slots.find((s) => s.slotIndex === group.activeSlotIndex)) {
+            const best = group.slots.reduce((a, b) =>
+              b.session.lastActiveAt > a.session.lastActiveAt ? b : a,
+            );
+            group.activeSlotIndex = best.slotIndex;
+          }
+          this.persistGroup(key, group);
+        }
+        return removed;
+      });
     }
     if (cleaned) {
       await this.store.flush();

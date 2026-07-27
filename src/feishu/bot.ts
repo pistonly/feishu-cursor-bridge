@@ -405,6 +405,7 @@ export class FeishuBot extends EventEmitter {
   /** 群「1 用户 + 1 机器人」免 @ 判定缓存（chatId -> 结果） */
   private pairGroupCache = new Map<string, { v: boolean; exp: number }>();
   private readonly pairGroupCacheTtlMs = 60_000;
+  private readonly pairGroupCacheMaxSize = 500;
 
   constructor(config: FeishuBotConfig) {
     super();
@@ -1035,6 +1036,15 @@ export class FeishuBot extends EventEmitter {
    */
   async isPairUserBotGroup(chatId: string): Promise<boolean> {
     const now = Date.now();
+
+    // Self-regulating cleanup: when the cache exceeds the max size, sweep
+    // all expired entries to prevent unbounded growth from churned groups.
+    if (this.pairGroupCache.size > this.pairGroupCacheMaxSize) {
+      for (const [k, entry] of this.pairGroupCache) {
+        if (entry.exp <= now) this.pairGroupCache.delete(k);
+      }
+    }
+
     const cached = this.pairGroupCache.get(chatId);
     if (cached && cached.exp > now) return cached.v;
     if (!chatId.trim()) {

@@ -1226,6 +1226,9 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
     this.deleteSessionModelState(sessionId);
     this.deleteSessionConfigOptionState(sessionId);
     this.deleteSessionUsageState(sessionId);
+    // Clean up bridgeClient side-effects so session IDs don't leak in maps.
+    this.bridgeClient.removeSessionWorkspace(sessionId);
+    this.bridgeClient.setFeishuPromptContext(sessionId, undefined);
     if (!conn || !this.supportsCloseSession()) return;
     try {
       await conn.unstable_closeSession({ sessionId });
@@ -1245,6 +1248,7 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
     this.initResult = null;
     this.sessionModeStates.clear();
     this.sessionModelStates.clear();
+    this.sessionConfigOptionStates.clear();
     this.sessionUsageStates.clear();
     this.sessionPromptUsageFallbacks.clear();
   }
