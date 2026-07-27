@@ -43,5 +43,5 @@ reference/
 .worktree/
 # 项目记忆（本地/个人上下文，不纳入版本库）
 memory/
-.claude/worktrees/
+.claude/
 .playwright-mcp
