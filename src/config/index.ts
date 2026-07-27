@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   CONFIG_BACKEND_ALIAS_MAP,
   parseBackendAlias,
@@ -215,16 +216,29 @@ function resolveNodeExecutablePath(): string {
   return fallback;
 }
 
-/** 空格分隔，支持引号包裹片段（简单拆分） */
+/**
+ * 空格分隔，支持引号包裹片段与反斜杠转义。
+ * - 双引号内：`\"` 转义为字面 `"`，`\\` 转义为字面 `\`
+ * - 单引号内：不处理转义（与 POSIX shell 一致）
+ * - 引号外：`\` 转义下一个字符（如 `\ ` 表示字面空格）
+ */
 export function parseShellLikeArgs(raw: string): string[] {
   const out: string[] = [];
   let cur = "";
   let inQuote: "" | "\"" | "'" = "";
+  let escaped = false;
   for (let i = 0; i < raw.length; i++) {
     const ch = raw[i];
+    if (escaped) {
+      cur += ch;
+      escaped = false;
+      continue;
+    }
     if (inQuote) {
       if (ch === inQuote) {
         inQuote = "";
+      } else if (ch === "\\" && inQuote === "\"") {
+        escaped = true;
       } else {
         cur += ch;
       }
@@ -232,6 +246,10 @@ export function parseShellLikeArgs(raw: string): string[] {
     }
     if (ch === "\"" || ch === "'") {
       inQuote = ch as "\"" | "'";
+      continue;
+    }
+    if (ch === "\\") {
+      escaped = true;
       continue;
     }
     if (/\s/.test(ch)) {
@@ -501,6 +519,21 @@ function ensureAllowedWorkspaceRootsReady(roots: string[]): void {
   }
 }
 
+/**
+ * 解析 service.sh 的绝对路径。
+ * 优先使用环境变量 `BRIDGE_SERVICE_SCRIPT_PATH`；
+ * 否则相对于当前模块定位项目根目录下的 `service.sh`（src/config → 上两级，dist/config → 上两级）。
+ * 不再依赖 `process.cwd()`，避免从非项目目录启动时路径错误。
+ */
+function resolveServiceScriptPath(): string {
+  const fromEnv = process.env["BRIDGE_SERVICE_SCRIPT_PATH"]?.trim();
+  if (fromEnv) {
+    return path.resolve(expandHome(fromEnv));
+  }
+  const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+  return path.resolve(moduleDir, "..", "..", "service.sh");
+}
+
 export function loadConfig(): Config {
   const logLevel = process.env["LOG_LEVEL"] ?? "info";
   if (!LOG_LEVELS.has(logLevel)) {
@@ -663,7 +696,7 @@ export function loadConfig(): Config {
     userIds: parseIdList(process.env["BRIDGE_UPGRADE_ADMIN_USER_IDS"]),
     unionIds: parseIdList(process.env["BRIDGE_UPGRADE_ADMIN_UNION_IDS"]),
   };
-  const serviceScriptPath = path.resolve(process.cwd(), "service.sh");
+  const serviceScriptPath = resolveServiceScriptPath();
 
   const bridgeFromSource = isBridgeMainScriptSourceIndex();
 

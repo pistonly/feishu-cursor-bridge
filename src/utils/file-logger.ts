@@ -19,10 +19,28 @@ function prefixLines(message: string, prefix: string): string {
   );
 }
 
+/**
+ * 安装异步文件日志器：将 console.* 输出镜像写入文件。
+ *
+ * 使用 WriteStream + 缓冲队列替代 fs.writeSync，避免阻塞事件循环。
+ * - 普通级别日志缓冲后定时刷写（每秒）。
+ * - ERROR 级别立即刷写，确保崩溃前日志落盘。
+ * - close() 同步关闭流并恢复原始 console 方法。
+ */
 export function installFileLogger(filePath: string): FileLoggerHandle {
   const absPath = path.resolve(filePath);
   fs.mkdirSync(path.dirname(absPath), { recursive: true });
-  const fd = fs.openSync(absPath, "a");
+  const writeStream = fs.createWriteStream(absPath, { flags: "a" });
+
+  const buffer: string[] = [];
+  const FLUSH_INTERVAL_MS = 1_000;
+  let flushTimer: NodeJS.Timeout | null = setInterval(() => {
+    flushBuffer();
+  }, FLUSH_INTERVAL_MS);
+
+  if (flushTimer) {
+    flushTimer.unref?.();
+  }
 
   const original: Record<ConsoleMethodName, ConsoleMethod> = {
     log: console.log.bind(console),
@@ -32,13 +50,31 @@ export function installFileLogger(filePath: string): FileLoggerHandle {
     debug: console.debug.bind(console),
   };
 
+  function flushBuffer(): void {
+    if (buffer.length === 0) return;
+    const data = buffer.join("");
+    buffer.length = 0;
+    if (!writeStream.destroyed && writeStream.writable) {
+      writeStream.write(data, "utf8", (err) => {
+        if (err) {
+          original.error("[file-logger] write failed:", err.message);
+        }
+      });
+    }
+  }
+
   const write = (level: string, args: unknown[]): void => {
     const msg = formatWithOptions(
       { colors: false, depth: 8, maxArrayLength: 100, breakLength: 120 },
       ...args,
     );
     const prefix = `${new Date().toISOString()} [${level}] `;
-    fs.writeSync(fd, prefixLines(msg, prefix), undefined, "utf8");
+    buffer.push(prefixLines(msg, prefix));
+
+    // ERROR 立即刷写，防止崩溃前丢失关键日志
+    if (level === "ERROR") {
+      flushBuffer();
+    }
   };
 
   const patch = (name: ConsoleMethodName): void => {
@@ -64,12 +100,26 @@ export function installFileLogger(filePath: string): FileLoggerHandle {
 
   return {
     close(): void {
+      // 恢复原始 console 方法
       console.log = original.log;
       console.info = original.info;
       console.warn = original.warn;
       console.error = original.error;
       console.debug = original.debug;
-      fs.closeSync(fd);
+
+      // 停止定时器并同步刷写剩余缓冲
+      if (flushTimer) {
+        clearInterval(flushTimer);
+        flushTimer = null;
+      }
+      flushBuffer();
+
+      // 同步关闭流
+      try {
+        writeStream.end();
+      } catch {
+        // ignore
+      }
     },
   };
 }

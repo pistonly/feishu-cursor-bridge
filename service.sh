@@ -3,7 +3,7 @@
 # macOS: launchd（~/Library/LaunchAgents/）
 # Linux: systemd --user（~/.config/systemd/user/）
 # 用法: bash service.sh [install|update|upgrade|uninstall|start|stop|restart|status|logs]
-set -e
+set -euo pipefail
 
 UNAME_S="$(uname -s)"
 LABEL_LAUNCHD="com.feishu-cursor-bridge"
@@ -13,7 +13,8 @@ UNIT_DIR="$HOME/.config/systemd/user"
 UNIT_FILE="$UNIT_DIR/$UNIT_NAME"
 BOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DOTENV_FILE="$BOT_DIR/.env"
-LOG_FILE_MACOS="/tmp/feishu-cursor-bridge.log"
+LOG_DIR_MACOS="${XDG_DATA_HOME:-$HOME/.local/share}/feishu-cursor-bridge/logs"
+LOG_FILE_MACOS="$LOG_DIR_MACOS/service.log"
 ENTRY_JS="$BOT_DIR/dist/index.js"
 
 NODE_BIN="$(command -v node 2>/dev/null || true)"
@@ -209,6 +210,7 @@ verify_darwin_service_running() {
 }
 
 generate_plist() {
+    mkdir -p "$(dirname "$LOG_FILE_MACOS")"
     cat > "$PLIST" <<PEOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

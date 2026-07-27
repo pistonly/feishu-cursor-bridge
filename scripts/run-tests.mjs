@@ -5,6 +5,9 @@ import { spawn } from "node:child_process";
 const repoRoot = path.resolve(new URL("..", import.meta.url).pathname);
 const srcRoot = path.join(repoRoot, "src");
 
+/** 测试执行超时（毫秒），防止无响应测试导致 CI 挂起 */
+const TEST_TIMEOUT_MS = 120_000;
+
 async function collectTestFiles(dir) {
   const entries = await fs.readdir(dir, { withFileTypes: true });
   const files = [];
@@ -37,8 +40,25 @@ await new Promise((resolve, reject) => {
       env: process.env,
     },
   );
-  child.on("error", reject);
+
+  // 超时保护：超时后先 SIGTERM，3 秒后仍存活则 SIGKILL
+  const timeout = setTimeout(() => {
+    child.kill("SIGTERM");
+    const killTimer = setTimeout(() => {
+      child.kill("SIGKILL");
+    }, 3_000);
+    killTimer.unref?.();
+    reject(new Error(`Test runner timed out after ${TEST_TIMEOUT_MS}ms`));
+  }, TEST_TIMEOUT_MS);
+  timeout.unref?.();
+
+  child.on("error", (err) => {
+    clearTimeout(timeout);
+    reject(err);
+  });
+
   child.on("exit", (code, signal) => {
+    clearTimeout(timeout);
     if (signal) {
       reject(new Error(`Test runner exited with signal ${signal}`));
       return;
