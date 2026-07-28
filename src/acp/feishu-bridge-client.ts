@@ -21,6 +21,7 @@ import {
   writeTextFileSafe,
 } from "./fs-sandbox.js";
 import type { BridgeAcpEvent } from "./types.js";
+import { errorMessage } from "../utils/error-message.js";
 
 
 export type FeishuSendPromptContext = {
@@ -289,7 +290,7 @@ export class FeishuBridgeClient
     } catch (e) {
       return {
         ok: false,
-        error: e instanceof Error ? e.message : String(e),
+        error: errorMessage(e),
       };
     }
 
@@ -299,7 +300,7 @@ export class FeishuBridgeClient
     } catch (e) {
       return {
         ok: false,
-        error: e instanceof Error ? e.message : String(e),
+        error: errorMessage(e),
       };
     }
   }

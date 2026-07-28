@@ -3,73 +3,31 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
-import type { Config } from "./config/index.js";
 import { FeishuBridgeClient } from "./acp/feishu-bridge-client.js";
+import { createTestConfig } from "./test-utils/create-test-config.js";
 
-function createTestConfig(): Config {
-  const tmpRoot = path.join(os.tmpdir(), "feishu-cursor-bridge-client-tests");
-  return {
-    feishu: {
-      appId: "app-id",
-      appSecret: "app-secret",
-      domain: "feishu",
-    },
-    acp: {
-      backend: "cursor-official",
-      enabledBackends: ["cursor-official"],
-      nodePath: process.execPath,
-      adapterEntry: "",
-      extraArgs: [],
-      officialAgentPath: "agent",
-      officialApiKey: undefined,
-      officialAuthToken: undefined,
-      claudeSpawnCommand: "npx",
-      claudeSpawnArgs: ["-y", "@agentclientprotocol/claude-agent-acp"],
-      codexSpawnCommand: "npx",
-      codexSpawnArgs: ["-y", "@zed-industries/codex-acp"],
-      workspaceRoot: tmpRoot,
-      allowedWorkspaceRoots: [tmpRoot],
-      adapterSessionDir: path.join(tmpRoot, "acp-sessions"),
-    },
-    bridge: {
-      adminUserIds: [],
-      groupSessionScope: "per-user",
-      maxSessionsPerUser: 10,
-      sessionIdleTimeoutMs: 60_000,
-      sessionStorePath: path.join(tmpRoot, "sessions.json"),
-      cardUpdateThrottleMs: 200,
-      cardSplitMarkdownThreshold: 3_500,
-      cardSplitToolThreshold: 8,
-      workspacePresetsPath: path.join(tmpRoot, "workspace-presets.json"),
-      workspacePresetsSeed: [],
-      maintenanceStatePath: path.join(tmpRoot, "maintenance-state.json"),
-      singleInstanceLockPath: path.join(tmpRoot, "bridge.lock"),
-      allowMultipleInstances: false,
-      managedByService: false,
-      experimentalLogToFile: false,
-      experimentalLogFilePath: path.join(tmpRoot, "bridge.log"),
-      slotMessageLogEnabled: false,
-      sessionHistoryEnabled: true,
-      showAcpAvailableCommands: false,
-      enableBangCommand: false,
-      enableUpgradeCommand: false,
-      upgradeAdmins: {
-        openIds: new Set<string>(),
-        userIds: new Set<string>(),
-        unionIds: new Set<string>(),
-      },
-      serviceScriptPath: path.join(tmpRoot, "service.sh"),
-      upgradeResultPath: path.join(tmpRoot, "upgrade-result.json"),
-    },
-    autoApprovePermissions: false,
-    bridgeDebug: false,
-    acpReloadTraceLog: false,
-    logLevel: "info",
-  };
-}
+const tmpRoot = path.join(os.tmpdir(), "feishu-cursor-bridge-client-tests");
 
 test("FeishuBridgeClient 会把 session/update 映射为桥接事件", async () => {
-  const client = new FeishuBridgeClient(createTestConfig());
+  const client = new FeishuBridgeClient(
+    createTestConfig({
+      acp: {
+        workspaceRoot: tmpRoot,
+        allowedWorkspaceRoots: [tmpRoot],
+        adapterSessionDir: path.join(tmpRoot, "acp-sessions"),
+      },
+      bridge: {
+        cardUpdateThrottleMs: 200,
+        sessionStorePath: path.join(tmpRoot, "sessions.json"),
+        workspacePresetsPath: path.join(tmpRoot, "workspace-presets.json"),
+        maintenanceStatePath: path.join(tmpRoot, "maintenance-state.json"),
+        singleInstanceLockPath: path.join(tmpRoot, "bridge.lock"),
+        experimentalLogFilePath: path.join(tmpRoot, "bridge.log"),
+        serviceScriptPath: path.join(tmpRoot, "service.sh"),
+        upgradeResultPath: path.join(tmpRoot, "upgrade-result.json"),
+      },
+    }),
+  );
   const events: unknown[] = [];
   client.on("acp", (event) => {
     events.push(event);
@@ -115,7 +73,25 @@ test("FeishuBridgeClient 会把 session/update 映射为桥接事件", async () 
 });
 
 test("FeishuBridgeClient 接收 _claude/sdkMessage 时不会直接发出桥接 usage_update", async () => {
-  const client = new FeishuBridgeClient(createTestConfig());
+  const client = new FeishuBridgeClient(
+    createTestConfig({
+      acp: {
+        workspaceRoot: tmpRoot,
+        allowedWorkspaceRoots: [tmpRoot],
+        adapterSessionDir: path.join(tmpRoot, "acp-sessions"),
+      },
+      bridge: {
+        cardUpdateThrottleMs: 200,
+        sessionStorePath: path.join(tmpRoot, "sessions.json"),
+        workspacePresetsPath: path.join(tmpRoot, "workspace-presets.json"),
+        maintenanceStatePath: path.join(tmpRoot, "maintenance-state.json"),
+        singleInstanceLockPath: path.join(tmpRoot, "bridge.lock"),
+        experimentalLogFilePath: path.join(tmpRoot, "bridge.log"),
+        serviceScriptPath: path.join(tmpRoot, "service.sh"),
+        upgradeResultPath: path.join(tmpRoot, "upgrade-result.json"),
+      },
+    }),
+  );
   const events: unknown[] = [];
   client.on("acp", (event) => {
     events.push(event);
@@ -143,7 +119,25 @@ test("FeishuBridgeClient 接收 _claude/sdkMessage 时不会直接发出桥接 u
 });
 
 test("FeishuBridgeClient 会发出 permission_required 并选择允许选项", async () => {
-  const client = new FeishuBridgeClient(createTestConfig());
+  const client = new FeishuBridgeClient(
+    createTestConfig({
+      acp: {
+        workspaceRoot: tmpRoot,
+        allowedWorkspaceRoots: [tmpRoot],
+        adapterSessionDir: path.join(tmpRoot, "acp-sessions"),
+      },
+      bridge: {
+        cardUpdateThrottleMs: 200,
+        sessionStorePath: path.join(tmpRoot, "sessions.json"),
+        workspacePresetsPath: path.join(tmpRoot, "workspace-presets.json"),
+        maintenanceStatePath: path.join(tmpRoot, "maintenance-state.json"),
+        singleInstanceLockPath: path.join(tmpRoot, "bridge.lock"),
+        experimentalLogFilePath: path.join(tmpRoot, "bridge.log"),
+        serviceScriptPath: path.join(tmpRoot, "service.sh"),
+        upgradeResultPath: path.join(tmpRoot, "upgrade-result.json"),
+      },
+    }),
+  );
   const events: unknown[] = [];
   client.on("acp", (event) => {
     events.push(event);
@@ -193,7 +187,23 @@ test("FeishuBridgeClient 会按 session 工作区处理读写文件", async () =
   const tmpDir = await fs.mkdtemp(
     path.join(os.tmpdir(), "feishu-bridge-client-fs-"),
   );
-  const config = createTestConfig();
+  const config = createTestConfig({
+    acp: {
+      workspaceRoot: tmpRoot,
+      allowedWorkspaceRoots: [tmpRoot],
+      adapterSessionDir: path.join(tmpRoot, "acp-sessions"),
+    },
+    bridge: {
+      cardUpdateThrottleMs: 200,
+      sessionStorePath: path.join(tmpRoot, "sessions.json"),
+      workspacePresetsPath: path.join(tmpRoot, "workspace-presets.json"),
+      maintenanceStatePath: path.join(tmpRoot, "maintenance-state.json"),
+      singleInstanceLockPath: path.join(tmpRoot, "bridge.lock"),
+      experimentalLogFilePath: path.join(tmpRoot, "bridge.log"),
+      serviceScriptPath: path.join(tmpRoot, "service.sh"),
+      upgradeResultPath: path.join(tmpRoot, "upgrade-result.json"),
+    },
+  });
   config.acp.workspaceRoot = tmpDir;
   config.acp.allowedWorkspaceRoots = [tmpDir];
   const client = new FeishuBridgeClient(config);

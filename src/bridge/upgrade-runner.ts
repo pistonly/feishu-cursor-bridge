@@ -6,6 +6,7 @@ import {
   UpgradeResultStore,
   truncateOutputTail,
 } from "./upgrade-result-store.js";
+import { errorMessage } from "../utils/error-message.js";
 
 /** Upgrade execution timeout (10 minutes). Prevents permanent hangs on network issues. */
 const UPGRADE_TIMEOUT_MS = 10 * 60 * 1000;
@@ -201,7 +202,7 @@ process.on("SIGINT", () => void handleSignal("SIGINT"));
 main().catch(async (error) => {
   console.error(
     "[upgrade-runner] Fatal error:",
-    error instanceof Error ? error.message : String(error),
+    errorMessage(error),
   );
   try {
     // Reuse already-loaded store when available; avoids re-loading config
@@ -210,7 +211,7 @@ main().catch(async (error) => {
       await markFailed(
         activeStore,
         activeAttemptId,
-        error instanceof Error ? error.message : String(error),
+        errorMessage(error),
       );
     }
     // If activeStore is null, config loading failed before store was created.

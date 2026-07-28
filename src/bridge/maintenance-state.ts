@@ -1,5 +1,5 @@
-import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { atomicWriteJson, readJsonFileWithDefault } from "../utils/json-store.js";
 
 export type BridgeMaintenanceCommandKind = "restart" | "update" | "upgrade";
 export type BridgeMaintenanceTaskStatus = "succeeded" | "failed";
@@ -87,9 +87,11 @@ export class BridgeMaintenanceStateStore {
   }
 
   async load(): Promise<void> {
-    try {
-      const raw = await fs.readFile(this.filePath, "utf8");
-      const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const parsed = await readJsonFileWithDefault<Record<string, unknown> | null>(
+      this.filePath,
+      null,
+    );
+    if (parsed) {
       const lastTask = parseCompletedTask(parsed["lastTask"]);
       const pendingRestart = parsePendingRestart(parsed["pendingRestart"]);
       this.data = {
@@ -97,12 +99,6 @@ export class BridgeMaintenanceStateStore {
         ...(lastTask ? { lastTask } : {}),
         ...(pendingRestart ? { pendingRestart } : {}),
       };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        this.data = { version: 1 };
-        return;
-      }
-      throw error;
     }
   }
 
@@ -144,10 +140,6 @@ export class BridgeMaintenanceStateStore {
   }
 
   private async flush(): Promise<void> {
-    const dir = path.dirname(this.filePath);
-    await fs.mkdir(dir, { recursive: true });
-    const tmp = `${this.filePath}.${process.pid}.${++this.flushSeq}.tmp`;
-    await fs.writeFile(tmp, JSON.stringify(this.data, null, 2), "utf8");
-    await fs.rename(tmp, this.filePath);
+    await atomicWriteJson(this.filePath, this.data, ++this.flushSeq);
   }
 }

@@ -4,7 +4,7 @@ import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
-import type { Config } from "./config/index.js";
+import { createTestConfig } from "./test-utils/create-test-config.js";
 import { Bridge } from "./bridge/bridge.js";
 import { preprocessBridgeMessage } from "./bridge/bridge-message-preprocess.js";
 import { resolvePromptContentFromResource } from "./bridge/bridge-resource-prompt.js";
@@ -14,67 +14,6 @@ import {
 } from "./bridge/bridge-slot-logging.js";
 import type { BridgeAcpRuntime } from "./acp/runtime-contract.js";
 import type { FeishuMessage } from "./feishu/bot.js";
-
-function createTestConfig(): Config {
-  return {
-    feishu: {
-      appId: "app-id",
-      appSecret: "app-secret",
-      domain: "feishu",
-    },
-    acp: {
-      backend: "cursor-official",
-      enabledBackends: ["cursor-official", "codex"],
-      nodePath: process.execPath,
-      adapterEntry: "",
-      extraArgs: [],
-      officialAgentPath: "agent",
-      officialApiKey: undefined,
-      officialAuthToken: undefined,
-      claudeSpawnCommand: "npx",
-      claudeSpawnArgs: ["-y", "@agentclientprotocol/claude-agent-acp"],
-      codexSpawnCommand: "npx",
-      codexSpawnArgs: ["-y", "@zed-industries/codex-acp"],
-      workspaceRoot: "/tmp",
-      allowedWorkspaceRoots: ["/tmp"],
-      adapterSessionDir: "/tmp/acp-sessions",
-    },
-    bridge: {
-      adminUserIds: ["user-1"],
-      groupSessionScope: "per-user",
-      maxSessionsPerUser: 10,
-      sessionIdleTimeoutMs: 60_000,
-      sessionStorePath: "/tmp/sessions.json",
-      cardUpdateThrottleMs: 0,
-      cardSplitMarkdownThreshold: 3_500,
-      cardSplitToolThreshold: 8,
-      workspacePresetsPath: "/tmp/workspace-presets.json",
-      workspacePresetsSeed: [],
-      maintenanceStatePath: "/tmp/bridge-maintenance-state.json",
-      singleInstanceLockPath: "/tmp/bridge.lock",
-      allowMultipleInstances: false,
-      managedByService: true,
-      experimentalLogToFile: false,
-      experimentalLogFilePath: "/tmp/bridge.log",
-      slotMessageLogEnabled: false,
-      sessionHistoryEnabled: true,
-      showAcpAvailableCommands: false,
-      enableBangCommand: false,
-      enableUpgradeCommand: false,
-      upgradeAdmins: {
-        openIds: new Set<string>(),
-        userIds: new Set<string>(),
-        unionIds: new Set<string>(),
-      },
-      serviceScriptPath: "/tmp/service.sh",
-      upgradeResultPath: "/tmp/upgrade-result.json",
-    },
-    autoApprovePermissions: false,
-    bridgeDebug: false,
-    acpReloadTraceLog: false,
-    logLevel: "info",
-  };
-}
 
 function createMessage(content: string, overrides: Partial<FeishuMessage> = {}): FeishuMessage {
   return {
@@ -93,7 +32,7 @@ function createMessage(content: string, overrides: Partial<FeishuMessage> = {}):
 }
 
 test("bridge.start 会先启动 Feishu bot，再后台启动 runtimes", async () => {
-  const bridge = new Bridge(createTestConfig());
+  const bridge = new Bridge(createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } }));
   const callOrder: string[] = [];
 
   (bridge as any).ensureMaintenanceStateLoaded = async () => {
@@ -168,7 +107,7 @@ test("bridge.start 会先启动 Feishu bot，再后台启动 runtimes", async ()
 });
 
 test("bridge.stop 会在 stopAll 前 best-effort cancel 已知 sessions", async () => {
-  const bridge = new Bridge(createTestConfig());
+  const bridge = new Bridge(createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } }));
   const callOrder: string[] = [];
 
   (bridge as any).sessionManager = {
@@ -225,7 +164,7 @@ test("bridge.stop 会在 stopAll 前 best-effort cancel 已知 sessions", async 
 });
 
 test("/status 会显示当前模型与 context 用量", async () => {
-  const bridge = new Bridge(createTestConfig());
+  const bridge = new Bridge(createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } }));
   const sentTexts: string[] = [];
 
   const runtime: Partial<BridgeAcpRuntime> = {
@@ -335,7 +274,7 @@ test("/status 会显示当前模型与 context 用量", async () => {
 });
 
 test("/whoami 会返回当前消息识别到的飞书用户 ID", async () => {
-  const bridge = new Bridge(createTestConfig());
+  const bridge = new Bridge(createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } }));
   const sentTexts: string[] = [];
 
   (bridge as any).ensureMaintenanceStateLoaded = async () => {};
@@ -359,7 +298,7 @@ test("/whoami 会返回当前消息识别到的飞书用户 ID", async () => {
 });
 
 test("/new 会拒绝当前未启用的 backend", async () => {
-  const bridge = new Bridge(createTestConfig());
+  const bridge = new Bridge(createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } }));
   const sentTexts: string[] = [];
   let createCalled = false;
   (bridge as any).sessionManager = {
@@ -384,7 +323,7 @@ test("/new 会拒绝当前未启用的 backend", async () => {
 });
 
 test("bridge 在显式关闭时会拒绝 ! 终端命令", async () => {
-  const config = createTestConfig();
+  const config = createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } });
   config.bridge.enableBangCommand = false;
   const bridge = new Bridge(config);
   const sentTexts: string[] = [];
@@ -407,7 +346,7 @@ test("bridge 在显式关闭时会拒绝 ! 终端命令", async () => {
 });
 
 test("bridge 会拒绝非管理员执行 ! 终端命令", async () => {
-  const config = createTestConfig();
+  const config = createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } });
   config.bridge.enableBangCommand = true;
   const bridge = new Bridge(config);
   const sentTexts: string[] = [];
@@ -436,7 +375,7 @@ test("bridge 会拒绝非管理员执行 ! 终端命令", async () => {
 });
 
 test("bridge 会在当前 session 工作区执行 ! 终端命令", async () => {
-  const config = createTestConfig();
+  const config = createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } });
   config.bridge.enableBangCommand = true;
   const bridge = new Bridge(config);
   const sentTexts: string[] = [];
@@ -503,7 +442,7 @@ test("bridge 会在当前 session 工作区执行 ! 终端命令", async () => {
 });
 
 test("bridge 会在当前槽位仍有回复时拒绝 ! 终端命令", async () => {
-  const config = createTestConfig();
+  const config = createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } });
   config.bridge.enableBangCommand = true;
   const bridge = new Bridge(config);
   const sentTexts: string[] = [];
@@ -547,7 +486,7 @@ test("bridge 会在当前槽位仍有回复时拒绝 ! 终端命令", async () =
 });
 
 test("/update --force 会执行构建并登记待重启状态", async () => {
-  const bridge = new Bridge(createTestConfig());
+  const bridge = new Bridge(createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } }));
   const sentTexts: string[] = [];
   const pendingRestarts: unknown[] = [];
   let scheduledKind: string | undefined;
@@ -593,7 +532,7 @@ test("/update --force 会执行构建并登记待重启状态", async () => {
 });
 
 test("/restart 会拒绝非管理员", async () => {
-  const config = createTestConfig();
+  const config = createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } });
   config.bridge.adminUserIds = ["admin-user"];
   const bridge = new Bridge(config);
   const sentTexts: string[] = [];
@@ -615,7 +554,7 @@ test("/restart 会拒绝非管理员", async () => {
 });
 
 test("/upgrade 会拒绝未启用命令", async () => {
-  const bridge = new Bridge(createTestConfig());
+  const bridge = new Bridge(createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } }));
   const sentTexts: string[] = [];
 
   (bridge as any).ensureMaintenanceStateLoaded = async () => {};
@@ -636,7 +575,7 @@ test("/upgrade 会拒绝未启用命令", async () => {
 });
 
 test("/upgrade 会写入 queued 状态并启动后台 runner", async () => {
-  const config = createTestConfig();
+  const config = createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } });
   config.bridge.enableUpgradeCommand = true;
   config.bridge.upgradeAdmins.openIds.add("ou_admin_123");
   const bridge = new Bridge(config);
@@ -688,7 +627,7 @@ test("/upgrade 会写入 queued 状态并启动后台 runner", async () => {
 });
 
 test("/upgrade runner 路径会指向 dist/bridge/upgrade-runner.js", () => {
-  const bridge = new Bridge(createTestConfig());
+  const bridge = new Bridge(createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } }));
 
   assert.equal(
     (bridge as any).resolveUpgradeRunnerEntry(),
@@ -697,7 +636,7 @@ test("/upgrade runner 路径会指向 dist/bridge/upgrade-runner.js", () => {
 });
 
 test("/upgrade 在 runner 不存在时会立即失败，避免 queued 状态残留", async () => {
-  const config = createTestConfig();
+  const config = createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } });
   config.bridge.enableUpgradeCommand = true;
   const bridge = new Bridge(config);
   const sentTexts: string[] = [];
@@ -748,7 +687,7 @@ test("/upgrade 在 runner 不存在时会立即失败，避免 queued 状态残�
 });
 
 test("/upgrade 在未配置专用 allowlist 时默认继承 BRIDGE_ADMIN_USER_IDS", async () => {
-  const config = createTestConfig();
+  const config = createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } });
   config.bridge.enableUpgradeCommand = true;
   config.bridge.adminUserIds = ["ou_admin_123"];
   const bridge = new Bridge(config);
@@ -796,7 +735,7 @@ test("/upgrade 在未配置专用 allowlist 时默认继承 BRIDGE_ADMIN_USER_ID
 });
 
 test("/upgrade 在未配置任何有效管理员时返回明确错误", async () => {
-  const config = createTestConfig();
+  const config = createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } });
   config.bridge.enableUpgradeCommand = true;
   config.bridge.adminUserIds = [];
   const bridge = new Bridge(config);
@@ -821,7 +760,7 @@ test("/upgrade 在未配置任何有效管理员时返回明确错误", async ()
 });
 
 test("/upgrade 显式配置专用 allowlist 时会覆盖 BRIDGE_ADMIN_USER_IDS fallback", async () => {
-  const config = createTestConfig();
+  const config = createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } });
   config.bridge.enableUpgradeCommand = true;
   config.bridge.adminUserIds = ["ou_admin_123"];
   config.bridge.upgradeAdmins.openIds.add("ou_other_admin");
@@ -851,7 +790,7 @@ test("/upgrade 显式配置专用 allowlist 时会覆盖 BRIDGE_ADMIN_USER_IDS f
 });
 
 test("/upgrade 在 active prompt 存在时仅允许 --force", async () => {
-  const config = createTestConfig();
+  const config = createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } });
   config.bridge.enableUpgradeCommand = true;
   config.bridge.adminUserIds = ["ou_admin_123"];
   const bridge = new Bridge(config);
@@ -898,7 +837,7 @@ test("/upgrade 在 active prompt 存在时仅允许 --force", async () => {
 
 
 test("/model 在 codex backend 切换成功后会持久化首选模型", async () => {
-  const bridge = new Bridge(createTestConfig());
+  const bridge = new Bridge(createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } }));
   const sentTexts: string[] = [];
   const preferredModels: string[] = [];
   const setModelCalls: Array<{ sessionId: string; modelId: string }> = [];
@@ -966,7 +905,7 @@ test("/model 在 codex backend 切换成功后会持久化首选模型", async (
 });
 
 test("/model 成功后提示会回显运行时确认的当前模型", async () => {
-  const bridge = new Bridge(createTestConfig());
+  const bridge = new Bridge(createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } }));
   const sentTexts: string[] = [];
   let currentModelId = "claude-opus-4-6";
 
@@ -1017,7 +956,7 @@ test("/model 成功后提示会回显运行时确认的当前模型", async () =
 });
 
 test("/compact 在 codex-app-server backend 调用原生 compact RPC", async () => {
-  const bridge = new Bridge(createTestConfig());
+  const bridge = new Bridge(createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } }));
   const sentCards: string[] = [];
   const updatedCards: string[] = [];
   const compactCalls: string[] = [];
@@ -1088,7 +1027,7 @@ test("/compact 在 codex-app-server backend 调用原生 compact RPC", async () 
 });
 
 test("/compact 在非 codex-app-server backend 不被桥接拦截", async () => {
-  const bridge = new Bridge(createTestConfig());
+  const bridge = new Bridge(createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } }));
   const prompts: string[] = [];
 
   (bridge as any).ensureMaintenanceStateLoaded = async () => {};
@@ -1129,7 +1068,7 @@ test("/compact 在非 codex-app-server backend 不被桥接拦截", async () => 
 });
 
 test("/history 会像终端 history 一样只显示 prompt", async () => {
-  const bridge = new Bridge(createTestConfig());
+  const bridge = new Bridge(createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } }));
   const sentTexts: string[] = [];
   const slot = {
     slotIndex: 2,
@@ -1187,7 +1126,7 @@ test("/history 会像终端 history 一样只显示 prompt", async () => {
 });
 
 test("/history 在当前 slot 无历史时返回提示", async () => {
-  const bridge = new Bridge(createTestConfig());
+  const bridge = new Bridge(createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } }));
   const sentTexts: string[] = [];
   const slot = {
     slotIndex: 1,
@@ -1226,7 +1165,7 @@ test("/history 在当前 slot 无历史时返回提示", async () => {
 });
 
 test("普通对话会把 turn 记入 slot history", async () => {
-  const bridge = new Bridge(createTestConfig());
+  const bridge = new Bridge(createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } }));
   const recordedTurns: Array<{ slotIndex: number; turn: Record<string, unknown> }> = [];
 
   const slot = {
@@ -1299,7 +1238,7 @@ test("普通对话会为当前 slot 追加用户问题与回复日志", async ()
   const tmpRoot = await fsp.mkdtemp(
     path.join(os.tmpdir(), "bridge-slot-log-"),
   );
-  const config = createTestConfig();
+  const config = createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } });
   config.bridge.sessionStorePath = path.join(tmpRoot, "sessions.json");
   config.bridge.slotMessageLogEnabled = true;
 
@@ -1388,7 +1327,7 @@ test("默认不会写 slot 调试日志", async () => {
   const tmpRoot = await fsp.mkdtemp(
     path.join(os.tmpdir(), "bridge-slot-log-disabled-"),
   );
-  const config = createTestConfig();
+  const config = createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } });
   config.bridge.sessionStorePath = path.join(tmpRoot, "sessions.json");
 
   const bridge = new Bridge(config);
@@ -1457,7 +1396,7 @@ test("默认不会写 slot 调试日志", async () => {
 
 
 test("/resume 0 会跳过预探活并只执行一次 loadSession 回放", async () => {
-  const bridge = new Bridge(createTestConfig());
+  const bridge = new Bridge(createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } }));
   const sentTexts: string[] = [];
   const getActiveSessionCalls: Array<{
     chatId: string;
@@ -1545,7 +1484,7 @@ test("/resume 0 会跳过预探活并只执行一次 loadSession 回放", async 
 });
 
 test("/resume 0 在 backend 不支持 loadSession 时会直接报错", async () => {
-  const bridge = new Bridge(createTestConfig());
+  const bridge = new Bridge(createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } }));
   const sentTexts: string[] = [];
   const loadSessionCalls: string[] = [];
 
@@ -1601,7 +1540,7 @@ test("/resume 0 在 backend 不支持 loadSession 时会直接报错", async () 
 
 
 test("/resume 会列出当前 project 的历史 session", async () => {
-  const bridge = new Bridge(createTestConfig());
+  const bridge = new Bridge(createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } }));
   const sentTexts: string[] = [];
 
   (bridge as any).ensureMaintenanceStateLoaded = async () => {};
@@ -1664,7 +1603,7 @@ test("/resume 会列出当前 project 的历史 session", async () => {
 });
 
 test("/resume 1 会恢复指定历史 session 并重绑当前槽位", async () => {
-  const bridge = new Bridge(createTestConfig());
+  const bridge = new Bridge(createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } }));
   const sentTexts: string[] = [];
   const loadSessionCalls: Array<{ sessionId: string; workspaceRoot: string }> = [];
   const rebindCalls: string[] = [];
@@ -1768,7 +1707,7 @@ test("/resume 1 会恢复指定历史 session 并重绑当前槽位", async () =
 });
 
 test("/resume -b codex <sessionId> 会直接 load 外部 session 并重绑当前槽位", async () => {
-  const bridge = new Bridge(createTestConfig());
+  const bridge = new Bridge(createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } }));
   const sentTexts: string[] = [];
   const loadSessionCalls: Array<{ sessionId: string; workspaceRoot: string }> = [];
   const rebindCalls: Array<{ backend: string; sessionId: string; workspaceRoot: string }> = [];
@@ -1865,7 +1804,7 @@ test("/resume -b codex <sessionId> 会直接 load 外部 session 并重绑当前
 });
 
 test("/resume -b claude <id> 会用 newSession recovery 绑定外部会话", async () => {
-  const config = createTestConfig();
+  const config = createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } });
   config.acp.enabledBackends = ["cursor-official", "codex", "claude"];
   const bridge = new Bridge(config);
   const sentTexts: string[] = [];
@@ -1987,7 +1926,7 @@ test("/resume -b claude <id> 会用 newSession recovery 绑定外部会话", asy
 });
 
 test("/resume -b <backend> 在当前槽位仍有回复时会拒绝执行", async () => {
-  const bridge = new Bridge(createTestConfig());
+  const bridge = new Bridge(createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } }));
   const sentTexts: string[] = [];
   const loadSessionCalls: string[] = [];
 
@@ -2045,7 +1984,7 @@ test("/resume -b <backend> 在当前槽位仍有回复时会拒绝执行", async
 });
 
 test("成功回复后会写入 resume label", async () => {
-  const bridge = new Bridge(createTestConfig());
+  const bridge = new Bridge(createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } }));
   const labelCalls: string[] = [];
 
   const slot = {
@@ -2420,7 +2359,7 @@ test("appendSlotPromptLog 会把上下文透传给 store", async () => {
 
 
 test("忙时新消息会进入排队并提示可撤销", async () => {
-  const bridge = new Bridge(createTestConfig());
+  const bridge = new Bridge(createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } }));
   const sentTexts: string[] = [];
   let releaseFirstPrompt: (() => void) | undefined;
   const handledPrompts: string[] = [];
@@ -2503,7 +2442,7 @@ test("忙时新消息会进入排队并提示可撤销", async () => {
 });
 
 test("忙时后来的排队消息会覆盖之前的排队消息", async () => {
-  const bridge = new Bridge(createTestConfig());
+  const bridge = new Bridge(createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } }));
   const sentTexts: string[] = [];
   let releaseFirstPrompt: (() => void) | undefined;
   const handledPrompts: string[] = [];
@@ -2584,7 +2523,7 @@ test("忙时后来的排队消息会覆盖之前的排队消息", async () => {
 });
 
 test("重启后从 store 恢复的首条消息也会复用正确 slot prompt key", async () => {
-  const bridge = new Bridge(createTestConfig());
+  const bridge = new Bridge(createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } }));
   const sentTexts: string[] = [];
   let releaseFirstPrompt: (() => void) | undefined;
   const handledPrompts: string[] = [];
@@ -2674,7 +2613,7 @@ test("重启后从 store 恢复的首条消息也会复用正确 slot prompt key
 });
 
 test("结构化 prompt 错误会在飞书里展示具体细节而不是 [object Object]", async () => {
-  const bridge = new Bridge(createTestConfig());
+  const bridge = new Bridge(createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } }));
   const sentTexts: string[] = [];
 
   const slot = {
@@ -2800,7 +2739,7 @@ test("appendSlotErrorLog 会吞掉 store 写入失败并告警", async () => {
 });
 
 test("/cancel 在仅有排队消息时会撤销排队", async () => {
-  const bridge = new Bridge(createTestConfig());
+  const bridge = new Bridge(createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } }));
   const sentTexts: string[] = [];
 
   const slot = {
@@ -2859,7 +2798,7 @@ test("/cancel 在仅有排队消息时会撤销排队", async () => {
 });
 
 test("/stop 在有排队消息时只撤销排队，不中断当前生成", async () => {
-  const bridge = new Bridge(createTestConfig());
+  const bridge = new Bridge(createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } }));
   const sentTexts: string[] = [];
   let cancelCalled = false;
 
@@ -2933,7 +2872,7 @@ test("/stop 在有排队消息时只撤销排队，不中断当前生成", async
 });
 
 test("/close 会拒绝关闭仍在回复中的 slot", async () => {
-  const bridge = new Bridge(createTestConfig());
+  const bridge = new Bridge(createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } }));
   const sentTexts: string[] = [];
   let closeCalled = false;
 
@@ -2986,7 +2925,7 @@ test("/close 会拒绝关闭仍在回复中的 slot", async () => {
 });
 
 test("共享群 session key 不包含发送者 userId", () => {
-  const config = createTestConfig();
+  const config = createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } });
   config.bridge.groupSessionScope = "shared";
   const bridge = new Bridge(config);
 
@@ -3010,7 +2949,7 @@ test("共享群 session key 不包含发送者 userId", () => {
 });
 
 test("共享群 session 管理命令会拒绝非管理员 /new", async () => {
-  const config = createTestConfig();
+  const config = createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } });
   config.bridge.groupSessionScope = "shared";
   config.bridge.adminUserIds = ["admin-user"];
   const bridge = new Bridge(config);
@@ -3054,7 +2993,7 @@ test("共享群 session 管理命令会拒绝非管理员 /new", async () => {
 });
 
 test("共享群 session 管理命令会拒绝非管理员 /model", async () => {
-  const config = createTestConfig();
+  const config = createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } });
   config.bridge.groupSessionScope = "shared";
   config.bridge.adminUserIds = ["admin-user"];
   const bridge = new Bridge(config);
@@ -3098,7 +3037,7 @@ test("共享群 session 管理命令会拒绝非管理员 /model", async () => {
 });
 
 test("共享群 session 管理命令允许管理员 /new", async () => {
-  const config = createTestConfig();
+  const config = createTestConfig({ enabledBackends: ["cursor-official", "codex"], bridge: { adminUserIds: ["user-1"], managedByService: true, maintenanceStatePath: "/tmp/bridge-maintenance-state.json" } });
   config.bridge.groupSessionScope = "shared";
   config.bridge.adminUserIds = ["admin-user"];
   const bridge = new Bridge(config);

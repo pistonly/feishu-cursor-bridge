@@ -7,6 +7,7 @@ import {
   appendSlotPromptLog,
   appendSlotReplyLog,
 } from "./bridge-slot-logging.js";
+import { errorMessage } from "../utils/error-message.js";
 
 const BANG_OUTPUT_LIMIT = 6_000;
 const BANG_TIMEOUT_MS = 60_000;
@@ -308,7 +309,7 @@ export async function handleBangCommand(
       ctx.threadReplyOpts(msg),
     );
   } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
+    const detail = errorMessage(error);
     await appendSlotErrorLog(logArgs, detail);
     ctx.sessionManager.touchActiveSession(
       msg.chatId,

@@ -1,5 +1,5 @@
-import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { atomicWriteJson, readJsonFileWithDefault } from "../utils/json-store.js";
 
 interface PresetsFileV1 {
   version: 1;
@@ -19,22 +19,16 @@ export class WorkspacePresetsStore {
   }
 
   async load(seedFromEnv?: string[]): Promise<void> {
-    try {
-      const raw = await fs.readFile(this.filePath, "utf8");
-      const parsed = JSON.parse(raw) as PresetsFileV1;
-      if (
-        parsed?.version === 1 &&
-        Array.isArray(parsed.presets) &&
-        parsed.presets.every((p) => typeof p === "string")
-      ) {
-        this.data = parsed;
-      }
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === "ENOENT") {
-        this.data = { version: 1, presets: [] };
-      } else {
-        throw e;
-      }
+    const parsed = await readJsonFileWithDefault<PresetsFileV1 | null>(
+      this.filePath,
+      null,
+    );
+    if (
+      parsed?.version === 1 &&
+      Array.isArray(parsed.presets) &&
+      parsed.presets.every((p) => typeof p === "string")
+    ) {
+      this.data = parsed;
     }
     if (this.data.presets.length === 0 && seedFromEnv?.length) {
       this.data.presets = [...seedFromEnv];
@@ -73,14 +67,6 @@ export class WorkspacePresetsStore {
   }
 
   private async flush(): Promise<void> {
-    const dir = path.dirname(this.filePath);
-    await fs.mkdir(dir, { recursive: true });
-    const tmp = `${this.filePath}.${process.pid}.tmp`;
-    await fs.writeFile(
-      tmp,
-      JSON.stringify(this.data, null, 2),
-      "utf8",
-    );
-    await fs.rename(tmp, this.filePath);
+    await atomicWriteJson(this.filePath, this.data);
   }
 }

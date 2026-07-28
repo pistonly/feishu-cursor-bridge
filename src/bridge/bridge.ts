@@ -35,6 +35,7 @@ import {
 } from "./bridge-message-handler.js";
 import { preprocessBridgeMessage } from "./bridge-message-preprocess.js";
 import { isPidRunning } from "../utils/process-utils.js";
+import { errorMessage } from "../utils/error-message.js";
 
 const MAINTENANCE_OUTPUT_LIMIT = 12_000;
 const SHUTDOWN_CANCEL_TIMEOUT_MS = 3_000;
@@ -511,12 +512,12 @@ export class Bridge {
         }),
         state: "failed",
         finishedAt: Date.now(),
-        errorMessage: err instanceof Error ? err.message : String(err),
+        errorMessage: errorMessage(err),
       });
       await this.upgradeResultStore.flush();
       await this.feishuBot.sendText(
         msg.chatId,
-        `❌ 启动升级任务失败：${err instanceof Error ? err.message : String(err)}`,
+        `❌ 启动升级任务失败：${errorMessage(err)}`,
         msg.messageId,
         this.threadReplyOpts(msg),
       );
@@ -786,7 +787,7 @@ export class Bridge {
       );
     } catch (error) {
       console.warn(
-        `[bridge] 维护命令 /${command.kind} 起始通知发送失败: ${error instanceof Error ? error.message : String(error)}`,
+        `[bridge] 维护命令 /${command.kind} 起始通知发送失败: ${errorMessage(error)}`,
       );
     }
 
@@ -814,7 +815,7 @@ export class Bridge {
         );
       } catch (error) {
         console.warn(
-          `[bridge] 维护命令 /${command.kind} 完成通知发送失败: ${error instanceof Error ? error.message : String(error)}`,
+          `[bridge] 维护命令 /${command.kind} 完成通知发送失败: ${errorMessage(error)}`,
         );
       }
       if (detail) {
@@ -824,7 +825,7 @@ export class Bridge {
     } catch (error) {
       this.activeMaintenance = null;
       const detail =
-        error instanceof Error ? error.message : String(error);
+        errorMessage(error);
       await this.maintenanceStateStore.setLastTask({
         kind: command.kind,
         status: "failed",

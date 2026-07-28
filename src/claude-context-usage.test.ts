@@ -1,72 +1,9 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import test from "node:test";
-import type { Config } from "./config/index.js";
+import { createTestConfig } from "./test-utils/create-test-config.js";
 import { ClaudeAcpRuntime } from "./acp/claude-runtime.js";
 import { CodexAcpRuntime } from "./acp/codex-runtime.js";
-
-function createTestConfig(
-  backend: Config["acp"]["backend"],
-): Config {
-  return {
-    feishu: {
-      appId: "app-id",
-      appSecret: "app-secret",
-      domain: "feishu",
-    },
-    acp: {
-      backend,
-      enabledBackends: [backend],
-      nodePath: process.execPath,
-      adapterEntry: "",
-      extraArgs: [],
-      officialAgentPath: "agent",
-      officialApiKey: undefined,
-      officialAuthToken: undefined,
-      claudeSpawnCommand: "npx",
-      claudeSpawnArgs: ["-y", "@agentclientprotocol/claude-agent-acp"],
-      codexSpawnCommand: "npx",
-      codexSpawnArgs: ["-y", "@zed-industries/codex-acp"],
-      workspaceRoot: "/tmp",
-      allowedWorkspaceRoots: ["/tmp"],
-      adapterSessionDir: "/tmp/acp-sessions",
-    },
-    bridge: {
-      adminUserIds: [],
-      groupSessionScope: "per-user",
-      maxSessionsPerUser: 10,
-      sessionIdleTimeoutMs: 60_000,
-      sessionStorePath: "/tmp/sessions.json",
-      cardUpdateThrottleMs: 0,
-      cardSplitMarkdownThreshold: 3_500,
-      cardSplitToolThreshold: 8,
-      workspacePresetsPath: "/tmp/workspace-presets.json",
-      workspacePresetsSeed: [],
-      maintenanceStatePath: "/tmp/maintenance-state.json",
-      singleInstanceLockPath: "/tmp/bridge.lock",
-      allowMultipleInstances: false,
-      managedByService: false,
-      experimentalLogToFile: false,
-      experimentalLogFilePath: "/tmp/bridge.log",
-      slotMessageLogEnabled: false,
-      sessionHistoryEnabled: true,
-      showAcpAvailableCommands: false,
-      enableBangCommand: false,
-      enableUpgradeCommand: false,
-      upgradeAdmins: {
-        openIds: new Set<string>(),
-        userIds: new Set<string>(),
-        unionIds: new Set<string>(),
-      },
-      serviceScriptPath: "/tmp/service.sh",
-      upgradeResultPath: "/tmp/upgrade-result.json",
-    },
-    autoApprovePermissions: false,
-    bridgeDebug: false,
-    acpReloadTraceLog: false,
-    logLevel: "info",
-  };
-}
 
 function codexConfigOptions(
   currentModel = "gpt-5.5",
@@ -98,7 +35,7 @@ function codexConfigOptions(
 
 test("Claude runtime does not fall back to prompt totalTokens when usage_update reports zero", () => {
   const handler = new EventEmitter() as any;
-  const runtime = new ClaudeAcpRuntime(createTestConfig("claude"), handler);
+  const runtime = new ClaudeAcpRuntime(createTestConfig({ backend: "claude", enabledBackends: ["claude"] }), handler);
 
   handler.emit("acp", {
     type: "usage_update",
@@ -122,7 +59,7 @@ test("Claude runtime does not fall back to prompt totalTokens when usage_update 
 
 test("Non-Claude runtimes still use prompt totalTokens as a fallback when usage_update reports zero", () => {
   const handler = new EventEmitter() as any;
-  const runtime = new CodexAcpRuntime(createTestConfig("codex"), handler);
+  const runtime = new CodexAcpRuntime(createTestConfig({ backend: "codex", enabledBackends: ["codex"] }), handler);
 
   handler.emit("acp", {
     type: "usage_update",
@@ -147,7 +84,7 @@ test("Non-Claude runtimes still use prompt totalTokens as a fallback when usage_
 
 test("Non-Claude runtimes do not overwrite model state with an unknown selector after setSessionModel", async () => {
   const handler = new EventEmitter() as any;
-  const runtime = new CodexAcpRuntime(createTestConfig("codex"), handler);
+  const runtime = new CodexAcpRuntime(createTestConfig({ backend: "codex", enabledBackends: ["codex"] }), handler);
 
   (runtime as any).connection = {
     async unstable_setSessionModel(): Promise<void> {},
@@ -168,7 +105,7 @@ test("Non-Claude runtimes do not overwrite model state with an unknown selector 
 
 test("Non-Claude runtimes keep updating model state when setSessionModel uses a known model", async () => {
   const handler = new EventEmitter() as any;
-  const runtime = new CodexAcpRuntime(createTestConfig("codex"), handler);
+  const runtime = new CodexAcpRuntime(createTestConfig({ backend: "codex", enabledBackends: ["codex"] }), handler);
 
   (runtime as any).connection = {
     async unstable_setSessionModel(): Promise<void> {},
@@ -195,7 +132,7 @@ test("Non-Claude runtimes keep updating model state when setSessionModel uses a 
 
 test("Runtime preserves selector-rich model list when config options only contain base models", () => {
   const handler = new EventEmitter() as any;
-  const runtime = new ClaudeAcpRuntime(createTestConfig("claude"), handler);
+  const runtime = new ClaudeAcpRuntime(createTestConfig({ backend: "claude", enabledBackends: ["claude"] }), handler);
 
   (runtime as any).sessionModelStates.set("session-1", {
     currentModelId: "claude-opus-4-6/medium",
@@ -238,7 +175,7 @@ test("Runtime preserves selector-rich model list when config options only contai
 
 test("Codex runtime enriches gpt-5.5 with effort selectors when ACP omits them", () => {
   const handler = new EventEmitter() as any;
-  const runtime = new CodexAcpRuntime(createTestConfig("codex"), handler);
+  const runtime = new CodexAcpRuntime(createTestConfig({ backend: "codex", enabledBackends: ["codex"] }), handler);
 
   (runtime as any).updateSessionModelState("session-1", {
     currentModelId: "gpt-5.5",
@@ -262,7 +199,7 @@ test("Codex runtime enriches gpt-5.5 with effort selectors when ACP omits them",
 
 test("Codex runtime derives gpt-5.5 effort selectors from config option updates", () => {
   const handler = new EventEmitter() as any;
-  const runtime = new CodexAcpRuntime(createTestConfig("codex"), handler);
+  const runtime = new CodexAcpRuntime(createTestConfig({ backend: "codex", enabledBackends: ["codex"] }), handler);
 
   handler.emit("acp", {
     type: "config_option_update",
@@ -288,7 +225,7 @@ test("Codex runtime derives gpt-5.5 effort selectors from config option updates"
 
 test("Codex runtime consumes config options from session/new responses", async () => {
   const handler = new EventEmitter() as any;
-  const runtime = new CodexAcpRuntime(createTestConfig("codex"), handler);
+  const runtime = new CodexAcpRuntime(createTestConfig({ backend: "codex", enabledBackends: ["codex"] }), handler);
 
   (runtime as any).connection = {
     async newSession(): Promise<unknown> {
@@ -319,7 +256,7 @@ test("Codex runtime consumes config options from session/new responses", async (
 
 test("Codex runtime sets non-default model effort through config options when available", async () => {
   const handler = new EventEmitter() as any;
-  const runtime = new CodexAcpRuntime(createTestConfig("codex"), handler);
+  const runtime = new CodexAcpRuntime(createTestConfig({ backend: "codex", enabledBackends: ["codex"] }), handler);
   const calls: Array<{ configId: string; value: string }> = [];
   let currentModel = "gpt-5.5";
   let currentEffort = "medium";

@@ -3,6 +3,7 @@ import {
   formatPreferredBackendShortcuts,
   formatSupportedBackendValues,
 } from "../acp/backend-metadata.js";
+import { errorMessage } from "../utils/error-message.js";
 import { captureAcpReplayDuring } from "../acp/replay-capture.js";
 import type { BridgeAcpEvent } from "../acp/types.js";
 import {
@@ -147,7 +148,7 @@ async function sendWelcomeCard(
     );
   } catch (err) {
     console.warn(
-      `[bridge] Failed to send welcome card to user ${msg.senderId} in chat ${msg.chatId}: ${err instanceof Error ? err.message : String(err)}`,
+      `[bridge] Failed to send welcome card to user ${msg.senderId} in chat ${msg.chatId}: ${errorMessage(err)}`,
     );
   }
 }

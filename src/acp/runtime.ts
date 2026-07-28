@@ -13,6 +13,7 @@ import type {
   SessionRecovery,
 } from "./runtime-contract.js";
 import { SdkAcpRuntimeBase } from "./sdk-runtime-base.js";
+import { errorMessage } from "../utils/error-message.js";
 
 /**
  * `cursor-agent-acp` 在 `session/prompt` 链路里识别 `stream` 开关，走
@@ -306,7 +307,7 @@ export class AcpRuntimeRegistry {
       } catch (error) {
         entry.state = "error";
         entry.errorAt = Date.now();
-        entry.errorMessage = error instanceof Error ? error.message : String(error);
+        entry.errorMessage = errorMessage(error);
         console.error(
           `[bridge] ${formatAcpBackendLabel(backend)} 启动失败:`,
           error,

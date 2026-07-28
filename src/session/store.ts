@@ -1,6 +1,6 @@
-import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AcpBackend, SessionRecovery } from "../acp/runtime-contract.js";
+import { atomicWriteJson, readJsonFileWithDefault } from "../utils/json-store.js";
 
 export interface PersistedSessionTurnRecord {
   startedAt: number;
@@ -343,31 +343,25 @@ export class SessionStore {
   }
 
   async load(): Promise<void> {
-    try {
-      const raw = await fs.readFile(this.filePath, "utf8");
-      const parsed = JSON.parse(raw) as StoreFileV1 | StoreFileV2 | StoreFileV3 | StoreFileV4;
+    const parsed = await readJsonFileWithDefault<StoreFileV1 | StoreFileV2 | StoreFileV3 | StoreFileV4 | null>(
+      this.filePath,
+      null,
+    );
 
-      if (parsed?.version === 4) {
-        const v4 = parsed as StoreFileV4;
-        if (v4.sessions && typeof v4.sessions === "object") {
-          this.data = migrateV4ToLatest(v4, this.defaultBackend);
-        }
-      } else if (parsed?.version === 3) {
-        const v3 = parsed as StoreFileV3;
-        if (v3.sessions && typeof v3.sessions === "object") {
-          this.data = migrateV3ToV4(v3, this.defaultBackend);
-        }
-      } else if (parsed?.version === 2) {
-        this.data = migrateV2ToV4(parsed as StoreFileV2, this.defaultBackend);
-      } else if (parsed?.version === 1) {
-        this.data = migrateV1ToV4(parsed as StoreFileV1, this.defaultBackend);
+    if (parsed?.version === 4) {
+      const v4 = parsed as StoreFileV4;
+      if (v4.sessions && typeof v4.sessions === "object") {
+        this.data = migrateV4ToLatest(v4, this.defaultBackend);
       }
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === "ENOENT") {
-        this.data = { version: 4, sessions: {}, resumeHistory: {} };
-        return;
+    } else if (parsed?.version === 3) {
+      const v3 = parsed as StoreFileV3;
+      if (v3.sessions && typeof v3.sessions === "object") {
+        this.data = migrateV3ToV4(v3, this.defaultBackend);
       }
-      throw e;
+    } else if (parsed?.version === 2) {
+      this.data = migrateV2ToV4(parsed as StoreFileV2, this.defaultBackend);
+    } else if (parsed?.version === 1) {
+      this.data = migrateV1ToV4(parsed as StoreFileV1, this.defaultBackend);
     }
   }
 
@@ -414,11 +408,7 @@ export class SessionStore {
   }
 
   private async flushNow(): Promise<void> {
-    const dir = path.dirname(this.filePath);
-    await fs.mkdir(dir, { recursive: true });
-    const tmp = `${this.filePath}.${process.pid}.${++this.flushSeq}.tmp`;
-    await fs.writeFile(tmp, JSON.stringify(this.data, null, 2), "utf8");
-    await fs.rename(tmp, this.filePath);
+    await atomicWriteJson(this.filePath, this.data, ++this.flushSeq);
   }
 
   allKeys(): string[] {

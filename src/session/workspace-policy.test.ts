@@ -7,62 +7,7 @@ import {
   isPathUnderAllowedRoots,
   resolveAllowedWorkspaceDir,
 } from "./workspace-policy.js";
-import type { Config } from "../config/index.js";
-
-function createTestConfig(roots: string[]): Config {
-  return {
-    feishu: { appId: "app", appSecret: "secret", domain: "feishu" },
-    acp: {
-      backend: "cursor-official",
-      enabledBackends: ["cursor-official"],
-      nodePath: process.execPath,
-      adapterEntry: "",
-      extraArgs: [],
-      officialAgentPath: "agent",
-      claudeSpawnCommand: "npx",
-      claudeSpawnArgs: [],
-      codexSpawnCommand: "npx",
-      codexSpawnArgs: [],
-      workspaceRoot: roots[0] ?? "/tmp",
-      allowedWorkspaceRoots: roots,
-      adapterSessionDir: "/tmp/sessions",
-    },
-    bridge: {
-      adminUserIds: [],
-      groupSessionScope: "per-user",
-      maxSessionsPerUser: 10,
-      sessionIdleTimeoutMs: 60_000,
-      sessionStorePath: "/tmp/s.json",
-      cardUpdateThrottleMs: 0,
-      cardSplitMarkdownThreshold: 3500,
-      cardSplitToolThreshold: 8,
-      workspacePresetsPath: "/tmp/p.json",
-      workspacePresetsSeed: [],
-      maintenanceStatePath: "/tmp/m.json",
-      singleInstanceLockPath: "/tmp/bridge.lock",
-      allowMultipleInstances: false,
-      managedByService: false,
-      experimentalLogToFile: false,
-      experimentalLogFilePath: "/tmp/bridge.log",
-      slotMessageLogEnabled: false,
-      sessionHistoryEnabled: false,
-      showAcpAvailableCommands: false,
-      enableBangCommand: false,
-      enableUpgradeCommand: false,
-      upgradeAdmins: {
-        openIds: new Set(),
-        userIds: new Set(),
-        unionIds: new Set(),
-      },
-      serviceScriptPath: "/tmp/service.sh",
-      upgradeResultPath: "/tmp/u.json",
-    },
-    autoApprovePermissions: false,
-    bridgeDebug: false,
-    acpReloadTraceLog: false,
-    logLevel: "info",
-  };
-}
+import { createTestConfig } from "../test-utils/create-test-config.js";
 
 // ─── isPathUnderAllowedRoots ───
 
@@ -147,7 +92,7 @@ test("resolveAllowedWorkspaceDir 在允许范围内的目录成功", async () =>
   const subDir = path.join(tmpRoot, "subdir");
   await fs.mkdir(subDir);
   try {
-    const config = createTestConfig([tmpRoot]);
+    const config = createTestConfig({ acp: { workspaceRoot: tmpRoot, allowedWorkspaceRoots: [tmpRoot] } });
     const result = await resolveAllowedWorkspaceDir(subDir, config);
     assert.equal(result, path.resolve(subDir));
   } finally {
@@ -158,7 +103,7 @@ test("resolveAllowedWorkspaceDir 在允许范围内的目录成功", async () =>
 test("resolveAllowedWorkspaceDir 允许 root 本身", async () => {
   const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "ws-policy-"));
   try {
-    const config = createTestConfig([tmpRoot]);
+    const config = createTestConfig({ acp: { workspaceRoot: tmpRoot, allowedWorkspaceRoots: [tmpRoot] } });
     const result = await resolveAllowedWorkspaceDir(tmpRoot, config);
     assert.equal(result, path.resolve(tmpRoot));
   } finally {
@@ -169,7 +114,7 @@ test("resolveAllowedWorkspaceDir 允许 root 本身", async () => {
 test("resolveAllowedWorkspaceDir 拒绝不存在路径", async () => {
   const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "ws-policy-"));
   try {
-    const config = createTestConfig([tmpRoot]);
+    const config = createTestConfig({ acp: { workspaceRoot: tmpRoot, allowedWorkspaceRoots: [tmpRoot] } });
     await assert.rejects(
       resolveAllowedWorkspaceDir(path.join(tmpRoot, "nonexistent"), config),
       /路径无效或不可访问/,
@@ -184,7 +129,7 @@ test("resolveAllowedWorkspaceDir 拒绝文件而非目录", async () => {
   const filePath = path.join(tmpRoot, "file.txt");
   await fs.writeFile(filePath, "hello");
   try {
-    const config = createTestConfig([tmpRoot]);
+    const config = createTestConfig({ acp: { workspaceRoot: tmpRoot, allowedWorkspaceRoots: [tmpRoot] } });
     await assert.rejects(
       resolveAllowedWorkspaceDir(filePath, config),
       /不是目录/,
@@ -198,7 +143,7 @@ test("resolveAllowedWorkspaceDir 拒绝允许范围外的路径", async () => {
   const tmpRootA = await fs.mkdtemp(path.join(os.tmpdir(), "ws-policy-a-"));
   const tmpRootB = await fs.mkdtemp(path.join(os.tmpdir(), "ws-policy-b-"));
   try {
-    const config = createTestConfig([tmpRootA]);
+    const config = createTestConfig({ acp: { workspaceRoot: tmpRootA, allowedWorkspaceRoots: [tmpRootA] } });
     await assert.rejects(
       resolveAllowedWorkspaceDir(tmpRootB, config),
       /工作区不在允许范围内/,
@@ -214,7 +159,7 @@ test("resolveAllowedWorkspaceDir 支持 ~ 路径展开", async () => {
   const subDir = path.join(tmpRoot, "subdir");
   await fs.mkdir(subDir);
   try {
-    const config = createTestConfig([tmpRoot]);
+    const config = createTestConfig({ acp: { workspaceRoot: tmpRoot, allowedWorkspaceRoots: [tmpRoot] } });
     // 使用绝对路径（~ 展开由 expandHome 处理）
     const result = await resolveAllowedWorkspaceDir(subDir, config);
     assert.equal(result, path.resolve(subDir));
@@ -226,7 +171,7 @@ test("resolveAllowedWorkspaceDir 支持 ~ 路径展开", async () => {
 test("resolveAllowedWorkspaceDir 会 trim 路径首尾空白", async () => {
   const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "ws-policy-"));
   try {
-    const config = createTestConfig([tmpRoot]);
+    const config = createTestConfig({ acp: { workspaceRoot: tmpRoot, allowedWorkspaceRoots: [tmpRoot] } });
     const result = await resolveAllowedWorkspaceDir(`  ${tmpRoot}  `, config);
     assert.equal(result, path.resolve(tmpRoot));
   } finally {
@@ -239,7 +184,7 @@ test("resolveAllowedWorkspaceDir 防止路径遍历逃逸", async () => {
   const siblingDir = path.join(path.dirname(tmpRoot), "ws-sibling");
   await fs.mkdir(siblingDir, { recursive: true });
   try {
-    const config = createTestConfig([tmpRoot]);
+    const config = createTestConfig({ acp: { workspaceRoot: tmpRoot, allowedWorkspaceRoots: [tmpRoot] } });
     const escapePath = path.join(tmpRoot, "..", path.basename(siblingDir));
     await assert.rejects(
       resolveAllowedWorkspaceDir(escapePath, config),

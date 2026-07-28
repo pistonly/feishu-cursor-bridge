@@ -9,6 +9,7 @@ import {
   type InitializeResponse,
 } from "@agentclientprotocol/sdk";
 import type { Config } from "../config/index.js";
+import { errorMessage } from "../utils/error-message.js";
 import { FeishuBridgeClient } from "./feishu-bridge-client.js";
 import { normalizeConfigOptionValues } from "./events.js";
 import type {
@@ -83,7 +84,7 @@ function formatTraceValue(value: unknown, maxLen = 6000): string {
     }
     return text.length > maxLen ? `${text.slice(0, maxLen)}...<truncated>` : text;
   } catch (error) {
-    return `[unserializable:${error instanceof Error ? error.message : String(error)}]`;
+    return `[unserializable:${errorMessage(error)}]`;
   }
 }
 
@@ -382,7 +383,7 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
   }
 
   private buildStartupFailureDetail(error: unknown): string {
-    const base = error instanceof Error ? error.message : String(error);
+    const base = errorMessage(error);
     const details = [base];
     const exit = this.formatChildExitSummary();
     const stderr = this.formatRecentStderrSummary();
@@ -811,7 +812,7 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
         snap.promptSessionIdInAgentList = ids.includes(sessionId);
         snap.agentSessionIdsSample = ids.slice(0, 12);
       } catch (e) {
-        snap.listSessionsError = e instanceof Error ? e.message : String(e);
+        snap.listSessionsError = errorMessage(e);
       }
     } else {
       snap.listSessions = "agent_did_not_advertise_session_list";
@@ -982,7 +983,7 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
     } catch (error) {
       this.logOfficialModelTrace("prompt_error", sessionId, {
         cached: this.summarizeModelStateForTrace(this.sessionModelStates.get(sessionId)),
-        error: error instanceof Error ? error.message : String(error),
+        error: errorMessage(error),
       });
       throw error;
     }
@@ -1171,7 +1172,7 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
           requestedModelId: modelId,
           selection: configSelection,
           cached: this.summarizeModelStateForTrace(this.sessionModelStates.get(sessionId)),
-          error: error instanceof Error ? error.message : String(error),
+          error: errorMessage(error),
         });
       }
     }
@@ -1190,7 +1191,7 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
                   : String(configOptionError),
             }
           : {}),
-        error: error instanceof Error ? error.message : String(error),
+        error: errorMessage(error),
       });
       if (configOptionError) {
         throw new Error(
@@ -1199,7 +1200,7 @@ export abstract class SdkAcpRuntimeBase implements BridgeAcpRuntime {
               ? configOptionError.message
               : String(configOptionError)
           }; unstable_setSessionModel failed: ${
-            error instanceof Error ? error.message : String(error)
+            errorMessage(error)
           }`,
         );
       }

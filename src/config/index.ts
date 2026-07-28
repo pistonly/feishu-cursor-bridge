@@ -14,6 +14,16 @@ import {
   resolveBundledTsxCliEntry,
 } from "../acp/paths.js";
 import type { AcpBackend } from "../acp/runtime-contract.js";
+import { errorMessage } from "../utils/error-message.js";
+
+/**
+ * 解析布尔环境变量：值为 "true"（不区分大小写）时返回 true，否则返回 defaultValue。
+ */
+function parseBoolEnv(name: string, defaultValue: boolean): boolean {
+  const raw = process.env[name];
+  if (raw === undefined) return defaultValue;
+  return raw.trim().toLowerCase() === "true";
+}
 
 /**
  * 是否由 `tsx src/index.ts`（即 `npm run dev`）启动桥接主进程。
@@ -356,9 +366,7 @@ function resolveClaudeAgentAcpSpawn(): { command: string; args: string[] } {
 function resolveCodexAgentAcpSpawn(): { command: string; args: string[] } {
   const envRaw = process.env["CODEX_AGENT_ACP_COMMAND"]?.trim();
   const extra = parseExtraArgs(process.env["CODEX_AGENT_ACP_EXTRA_ARGS"]);
-  const autoApprovePermissions =
-    (process.env["AUTO_APPROVE_PERMISSIONS"] ?? "false").toLowerCase() ===
-    "true";
+  const autoApprovePermissions = parseBoolEnv("AUTO_APPROVE_PERMISSIONS", false);
   if (envRaw) {
     const tokens = parseShellLikeArgs(envRaw);
     if (tokens.length === 0) {
@@ -509,7 +517,7 @@ function ensureAllowedWorkspaceRootsReady(roots: string[]): void {
       }
       fs.mkdirSync(workspaceRoot, { recursive: true });
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = errorMessage(e);
       throw new Error(
         `BRIDGE_WORK_ALLOWLIST 路径不可用: ${workspaceRoot}\n` +
           `请创建该目录或修正 .env。若 cwd 不存在，子进程会启动失败（常被误报为 Node ENOENT）。\n` +
@@ -610,9 +618,7 @@ export function loadConfig(): Config {
         defaultSingleInstanceLock,
     ),
   );
-  const allowMultipleInstances =
-    (process.env["BRIDGE_ALLOW_MULTIPLE_INSTANCES"] ?? "false").toLowerCase() ===
-    "true";
+  const allowMultipleInstances = parseBoolEnv("BRIDGE_ALLOW_MULTIPLE_INSTANCES", false);
   const managedByService =
     ["1", "true", "yes"].includes(
       (process.env["BRIDGE_MANAGED_BY_SERVICE"] ?? "").trim().toLowerCase(),
@@ -620,22 +626,15 @@ export function loadConfig(): Config {
     !!process.env["INVOCATION_ID"]?.trim();
 
   const defaultExperimentalLogFile = path.join(defaultStateDir, "logs", "bridge.log");
-  const experimentalLogToFile =
-    (process.env["EXPERIMENT_LOG_TO_FILE"] ?? "false").toLowerCase() === "true";
+  const experimentalLogToFile = parseBoolEnv("EXPERIMENT_LOG_TO_FILE", false);
   const experimentalLogFilePath = path.resolve(
     expandHome(
       process.env["EXPERIMENT_LOG_FILE"]?.trim() || defaultExperimentalLogFile,
     ),
   );
-  const showAcpAvailableCommands =
-    (process.env["BRIDGE_SHOW_ACP_AVAILABLE_COMMANDS"] ?? "false").toLowerCase() ===
-    "true";
-  const sessionHistoryEnabled =
-    (process.env["BRIDGE_SESSION_HISTORY_ENABLED"] ?? "true").toLowerCase() ===
-    "true";
-  const enableBangCommand =
-    (process.env["BRIDGE_ENABLE_BANG_COMMAND"] ?? "false").toLowerCase() ===
-    "true";
+  const showAcpAvailableCommands = parseBoolEnv("BRIDGE_SHOW_ACP_AVAILABLE_COMMANDS", false);
+  const sessionHistoryEnabled = parseBoolEnv("BRIDGE_SESSION_HISTORY_ENABLED", true);
+  const enableBangCommand = parseBoolEnv("BRIDGE_ENABLE_BANG_COMMAND", false);
 
   const defaultPresetsFile = path.join(defaultStateDir, "workspace-presets.json");
   const workspacePresetsPath = path.resolve(
@@ -688,9 +687,7 @@ export function loadConfig(): Config {
       process.env["BRIDGE_UPGRADE_RESULT_FILE"]?.trim() || defaultUpgradeResultPath,
     ),
   );
-  const enableUpgradeCommand =
-    (process.env["BRIDGE_ENABLE_UPGRADE_COMMAND"] ?? "false").toLowerCase() ===
-    "true";
+  const enableUpgradeCommand = parseBoolEnv("BRIDGE_ENABLE_UPGRADE_COMMAND", false);
   const upgradeAdmins: UpgradeAdminIds = {
     openIds: parseIdList(process.env["BRIDGE_UPGRADE_ADMIN_OPEN_IDS"]),
     userIds: parseIdList(process.env["BRIDGE_UPGRADE_ADMIN_USER_IDS"]),
@@ -773,9 +770,7 @@ export function loadConfig(): Config {
       managedByService,
       experimentalLogToFile,
       experimentalLogFilePath,
-      slotMessageLogEnabled:
-        (process.env["BRIDGE_SLOT_LOG_ENABLED"] ?? "false").toLowerCase() ===
-        "true",
+      slotMessageLogEnabled: parseBoolEnv("BRIDGE_SLOT_LOG_ENABLED", false),
       sessionHistoryEnabled,
       showAcpAvailableCommands,
       enableBangCommand,
@@ -784,13 +779,9 @@ export function loadConfig(): Config {
       serviceScriptPath,
       upgradeResultPath,
     },
-    autoApprovePermissions:
-      (process.env["AUTO_APPROVE_PERMISSIONS"] ?? "false").toLowerCase() ===
-      "true",
-    bridgeDebug:
-      (process.env["BRIDGE_DEBUG"] ?? "false").toLowerCase() === "true",
-    acpReloadTraceLog:
-      (process.env["ACP_RELOAD_TRACE_LOG"] ?? "false").toLowerCase() === "true",
+    autoApprovePermissions: parseBoolEnv("AUTO_APPROVE_PERMISSIONS", false),
+    bridgeDebug: parseBoolEnv("BRIDGE_DEBUG", false),
+    acpReloadTraceLog: parseBoolEnv("ACP_RELOAD_TRACE_LOG", false),
     logLevel: logLevel as Config["logLevel"],
   };
 }

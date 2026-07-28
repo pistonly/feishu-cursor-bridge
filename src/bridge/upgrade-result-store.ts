@@ -1,5 +1,5 @@
-import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { atomicWriteJson, readJsonFileWithDefault } from "../utils/json-store.js";
 
 export type UpgradeAttemptState =
   | "queued"
@@ -73,28 +73,22 @@ export class UpgradeResultStore {
   }
 
   async load(): Promise<void> {
-    try {
-      const raw = await fs.readFile(this.filePath, "utf8");
-      const parsed = JSON.parse(raw);
-      if (parsed?.version === 2) {
-        this.data = {
-          version: 2,
-          attempts: Array.isArray(parsed.attempts) ? parsed.attempts : [],
-        };
-      } else if (parsed?.version === 1) {
-        // Migrate V1 (single attempt) to V2 (array)
-        const attempts: UpgradeAttemptRecord[] = [];
-        if (parsed.attempt) {
-          attempts.push(parsed.attempt);
-        }
-        this.data = { version: 2, attempts };
+    const parsed = await readJsonFileWithDefault<{ version?: number; attempt?: UpgradeAttemptRecord; attempts?: UpgradeAttemptRecord[] } | null>(
+      this.filePath,
+      null,
+    );
+    if (parsed?.version === 2) {
+      this.data = {
+        version: 2,
+        attempts: Array.isArray(parsed.attempts) ? parsed.attempts : [],
+      };
+    } else if (parsed?.version === 1) {
+      // Migrate V1 (single attempt) to V2 (array)
+      const attempts: UpgradeAttemptRecord[] = [];
+      if (parsed.attempt) {
+        attempts.push(parsed.attempt);
       }
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === "ENOENT") {
-        this.data = { version: 2, attempts: [] };
-        return;
-      }
-      throw e;
+      this.data = { version: 2, attempts };
     }
   }
 
@@ -127,10 +121,6 @@ export class UpgradeResultStore {
   }
 
   async flush(): Promise<void> {
-    const dir = path.dirname(this.filePath);
-    await fs.mkdir(dir, { recursive: true });
-    const tmp = `${this.filePath}.${process.pid}.${++this.flushSeq}.tmp`;
-    await fs.writeFile(tmp, JSON.stringify(this.data, null, 2), "utf8");
-    await fs.rename(tmp, this.filePath);
+    await atomicWriteJson(this.filePath, this.data, ++this.flushSeq);
   }
 }

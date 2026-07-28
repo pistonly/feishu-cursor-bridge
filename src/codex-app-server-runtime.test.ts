@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import test from "node:test";
 import { CodexAppServerRuntime } from "./acp/codex-app-server-runtime.js";
-import type { Config } from "./config/index.js";
+import { createTestConfig } from "./test-utils/create-test-config.js";
 
 function createBridgeClient(): EventEmitter & {
   setSessionWorkspace: (_sessionId: string, _workspaceRoot: string) => void;
@@ -17,72 +17,17 @@ function createBridgeClient(): EventEmitter & {
   return bridgeClient;
 }
 
-function createTestConfig(): Config {
-  return {
-    feishu: {
-      appId: "app-id",
-      appSecret: "app-secret",
-      domain: "feishu",
-    },
-    acp: {
-      backend: "codex-app-server",
-      enabledBackends: ["codex-app-server"],
-      nodePath: process.execPath,
-      adapterEntry: "",
-      extraArgs: [],
-      officialAgentPath: "agent",
-      officialApiKey: undefined,
-      officialAuthToken: undefined,
-      claudeSpawnCommand: "npx",
-      claudeSpawnArgs: ["-y", "@agentclientprotocol/claude-agent-acp"],
-      codexSpawnCommand: "npx",
-      codexSpawnArgs: ["-y", "@zed-industries/codex-acp"],
-      codexAppServerSpawnCommand: "codex",
-      codexAppServerSpawnArgs: ["app-server"],
-      workspaceRoot: "/tmp",
-      allowedWorkspaceRoots: ["/tmp"],
-      adapterSessionDir: "/tmp/acp-sessions",
-    },
-    bridge: {
-      adminUserIds: [],
-      groupSessionScope: "per-user",
-      maxSessionsPerUser: 10,
-      sessionIdleTimeoutMs: 60_000,
-      sessionStorePath: "/tmp/sessions.json",
-      cardUpdateThrottleMs: 0,
-      cardSplitMarkdownThreshold: 3_500,
-      cardSplitToolThreshold: 8,
-      workspacePresetsPath: "/tmp/workspace-presets.json",
-      workspacePresetsSeed: [],
-      maintenanceStatePath: "/tmp/maintenance-state.json",
-      singleInstanceLockPath: "/tmp/bridge.lock",
-      allowMultipleInstances: false,
-      managedByService: false,
-      experimentalLogToFile: false,
-      experimentalLogFilePath: "/tmp/bridge.log",
-      slotMessageLogEnabled: false,
-      sessionHistoryEnabled: false,
-      showAcpAvailableCommands: false,
-      enableBangCommand: false,
-      enableUpgradeCommand: false,
-      upgradeAdmins: {
-        openIds: new Set<string>(),
-        userIds: new Set<string>(),
-        unionIds: new Set<string>(),
-      },
-      serviceScriptPath: "/tmp/service.sh",
-      upgradeResultPath: "/tmp/upgrade-result.json",
-    },
-    autoApprovePermissions: false,
-    bridgeDebug: false,
-    acpReloadTraceLog: false,
-    logLevel: "info",
-  };
-}
-
 test("CodexAppServerRuntime initializeAndAuth can initialize before runtime is marked initialized", async () => {
   const runtime = new CodexAppServerRuntime(
-    createTestConfig(),
+    createTestConfig({
+      backend: "codex-app-server",
+      enabledBackends: ["codex-app-server"],
+      acp: {
+        codexAppServerSpawnCommand: "codex",
+        codexAppServerSpawnArgs: ["app-server"],
+      },
+      bridge: { sessionHistoryEnabled: false },
+    }),
     createBridgeClient() as any,
   );
   const calls: string[] = [];
@@ -124,7 +69,15 @@ test("CodexAppServerRuntime initializeAndAuth can initialize before runtime is m
 
 test("CodexAppServerRuntime keeps current model when thread/started omits model", async () => {
   const runtime = new CodexAppServerRuntime(
-    createTestConfig(),
+    createTestConfig({
+      backend: "codex-app-server",
+      enabledBackends: ["codex-app-server"],
+      acp: {
+        codexAppServerSpawnCommand: "codex",
+        codexAppServerSpawnArgs: ["app-server"],
+      },
+      bridge: { sessionHistoryEnabled: false },
+    }),
     createBridgeClient() as any,
   );
 
@@ -182,7 +135,15 @@ test("CodexAppServerRuntime keeps current model when thread/started omits model"
 
 test("CodexAppServerRuntime uses default model selector when thread response omits model", async () => {
   const runtime = new CodexAppServerRuntime(
-    createTestConfig(),
+    createTestConfig({
+      backend: "codex-app-server",
+      enabledBackends: ["codex-app-server"],
+      acp: {
+        codexAppServerSpawnCommand: "codex",
+        codexAppServerSpawnArgs: ["app-server"],
+      },
+      bridge: { sessionHistoryEnabled: false },
+    }),
     createBridgeClient() as any,
   );
 
@@ -237,7 +198,15 @@ test("CodexAppServerRuntime uses default model selector when thread response omi
 
 test("CodexAppServerRuntime compactSession calls thread/compact/start", async () => {
   const runtime = new CodexAppServerRuntime(
-    createTestConfig(),
+    createTestConfig({
+      backend: "codex-app-server",
+      enabledBackends: ["codex-app-server"],
+      acp: {
+        codexAppServerSpawnCommand: "codex",
+        codexAppServerSpawnArgs: ["app-server"],
+      },
+      bridge: { sessionHistoryEnabled: false },
+    }),
     createBridgeClient() as any,
   );
   const calls: Array<{ method: string; params: unknown }> = [];
@@ -264,7 +233,15 @@ test("CodexAppServerRuntime maps contextCompaction item to tool progress events"
     events.push(event);
   });
   const runtime = new CodexAppServerRuntime(
-    createTestConfig(),
+    createTestConfig({
+      backend: "codex-app-server",
+      enabledBackends: ["codex-app-server"],
+      acp: {
+        codexAppServerSpawnCommand: "codex",
+        codexAppServerSpawnArgs: ["app-server"],
+      },
+      bridge: { sessionHistoryEnabled: false },
+    }),
     bridgeClient as any,
   );
 
@@ -304,7 +281,15 @@ test("CodexAppServerRuntime uses last input tokens for approximate context usage
     events.push(event);
   });
   const runtime = new CodexAppServerRuntime(
-    createTestConfig(),
+    createTestConfig({
+      backend: "codex-app-server",
+      enabledBackends: ["codex-app-server"],
+      acp: {
+        codexAppServerSpawnCommand: "codex",
+        codexAppServerSpawnArgs: ["app-server"],
+      },
+      bridge: { sessionHistoryEnabled: false },
+    }),
     bridgeClient as any,
   );
 
