@@ -78,14 +78,13 @@ export interface BotIdSnapshot {
 
 const TEXT_CHUNK_LIMIT = 4000;
 /**
- * interactive 卡片里的 lark_md 比普通 text 更容易被内容长度和 Markdown 方言差异影响。
- * 这里做一层保守规范化：
+ * Card JSON 2.0 的 markdown 组件比旧版 lark_md 拥有更完整的 CommonMark + GFM 支持，
+ * 但仍需做一层保守规范化：
  * - 统一换行并压缩过多空行；
- * - 去掉代码围栏后的 info string / Cursor 代码引用头，避免飞书在该位置后停止渲染；
  * - 超长时截断并补上闭合围栏，尽量避免整张卡片 patch 失败。
  */
-const CARD_LARK_MD_LIMIT = 20_000;
-const CARD_LARK_MD_TRUNCATED_HINT = "\n\n_（内容过长，已截断）_";
+const CARD_MARKDOWN_LIMIT = 20_000;
+const CARD_MARKDOWN_TRUNCATED_HINT = "\n\n_（内容过长，已截断）_";
 
 /** 飞书群聊、话题群等均需按「群」处理 @ 与会话维度 */
 function isGroupLikeChatType(raw: string | undefined): boolean {
@@ -253,20 +252,37 @@ function splitTextChunks(text: string, limit = TEXT_CHUNK_LIMIT): string[] {
 function normalizeCardMarkdown(content: string): string {
   let out = content.replace(/\r\n?/g, "\n");
   out = out.replace(/\n{4,}/g, "\n\n\n");
-  // Feishu lark_md 对 ``` 后跟复杂 info string / 路径标题的兼容性较差，统一降级为纯代码块。
-  out = out.replace(/^```[^\s`][^\n]*$/gm, "```");
-  out = out.replace(/^\n+```/gm, "\n```");
 
-  if (out.length > CARD_LARK_MD_LIMIT) {
-    const keep = Math.max(0, CARD_LARK_MD_LIMIT - CARD_LARK_MD_TRUNCATED_HINT.length);
-    out = out.slice(0, keep) + CARD_LARK_MD_TRUNCATED_HINT;
+  if (out.length > CARD_MARKDOWN_LIMIT) {
+    const keep = Math.max(0, CARD_MARKDOWN_LIMIT - CARD_MARKDOWN_TRUNCATED_HINT.length);
+    out = out.slice(0, keep) + CARD_MARKDOWN_TRUNCATED_HINT;
   }
 
-  const fenceCount = (out.match(/^```$/gm) ?? []).length;
+  // 统计未闭合的代码围栏（``` 开头的行，含带语言标识的如 ```typescript）
+  const fenceCount = (out.match(/^```/gm) ?? []).length;
   if (fenceCount % 2 === 1) {
     out += "\n```";
   }
   return out.trim();
+}
+
+/**
+ * 构建 Card JSON 2.0 的 markdown 卡片 payload 字符串。
+ * JSON 2.0 的 markdown 组件支持完整的 CommonMark + GFM 语法（标题、引用、表格、行内代码等），
+ * 远优于旧版 JSON 1.0 的 lark_md。
+ */
+function buildMarkdownCard(content: string): string {
+  const normalized = normalizeCardMarkdown(content);
+  const card = {
+    schema: "2.0",
+    config: { wide_screen_mode: true },
+    body: {
+      elements: [
+        { tag: "markdown", content: normalized },
+      ],
+    },
+  };
+  return JSON.stringify(card);
 }
 
 function escapeRegExp(s: string): string {
@@ -723,7 +739,7 @@ export class FeishuBot extends EventEmitter {
   }
 
   /**
-   * 发送简单的 Markdown 卡片
+   * 发送简单的 Markdown 卡片（Card JSON 2.0）
    */
   async sendCard(
     chatId: string,
@@ -731,17 +747,7 @@ export class FeishuBot extends EventEmitter {
     replyToMessageId?: string,
     opts?: FeishuSendReplyOptions,
   ): Promise<string> {
-    const normalized = normalizeCardMarkdown(content);
-    const card = {
-      config: { wide_screen_mode: true },
-      elements: [
-        {
-          tag: "div",
-          text: { tag: "lark_md", content: normalized },
-        },
-      ],
-    };
-    const payload = JSON.stringify(card);
+    const payload = buildMarkdownCard(content);
     const replyInThread = opts?.replyInThread === true;
 
     if (replyToMessageId) {
@@ -768,7 +774,7 @@ export class FeishuBot extends EventEmitter {
   }
 
   /**
-   * 发送工作区选择的交互式卡片
+   * 发送工作区选择的交互式卡片（Card JSON 2.0）
    */
   async sendWorkspaceSelectCard(
     chatId: string,
@@ -779,39 +785,36 @@ export class FeishuBot extends EventEmitter {
     const replyInThread = opts?.replyInThread === true;
 
     const card = {
+      schema: "2.0",
       config: { wide_screen_mode: true },
-      elements: [
-        {
-          tag: "div",
-          text: {
-            tag: "lark_md",
-            content: "📋 **选择工作区**\n\n请选择一个工作区来创建新会话:"
+      body: {
+        elements: [
+          {
+            tag: "markdown",
+            content: "📋 **选择工作区**\n\n请选择一个工作区来创建新会话:",
           },
-        },
-        {
-          tag: "action",
-          actions: presets.map((preset, index) => ({
-            tag: "button",
-            text: {
-              tag: "lark_md",
-              content: `**${index + 1}.** \`${preset}\``
-            },
-            type: "primary",
-            value: {
-              action: "select_workspace",
-              index: index + 1,
-              path: preset
-            },
-          })),
-        },
-        {
-          tag: "div",
-          text: {
-            tag: "lark_md",
-            content: "或者直接输入命令:\n• `/new <序号>` - 使用快捷列表创建会话\n• `/new <路径>` - 使用指定路径\n• `/new list` - 查看完整列表"
+          {
+            tag: "action",
+            actions: presets.map((preset, index) => ({
+              tag: "button",
+              text: {
+                tag: "plain_text",
+                content: `${index + 1}. ${preset}`,
+              },
+              type: "primary",
+              value: {
+                action: "select_workspace",
+                index: index + 1,
+                path: preset
+              },
+            })),
           },
-        },
-      ],
+          {
+            tag: "markdown",
+            content: "或者直接输入命令:\n• `/new <序号>` - 使用快捷列表创建会话\n• `/new <路径>` - 使用指定路径\n• `/new list` - 查看完整列表",
+          },
+        ],
+      },
     };
 
     const payload = JSON.stringify(card);
@@ -840,20 +843,11 @@ export class FeishuBot extends EventEmitter {
   }
 
   async updateCard(messageId: string, content: string): Promise<void> {
-    const normalized = normalizeCardMarkdown(content);
-    const card = {
-      config: { wide_screen_mode: true },
-      elements: [
-        {
-          tag: "div",
-          text: { tag: "lark_md", content: normalized },
-        },
-      ],
-    };
+    const payload = buildMarkdownCard(content);
 
     await this.client.im.message.patch({
       path: { message_id: messageId },
-      data: { content: JSON.stringify(card) },
+      data: { content: payload },
     } as any);
   }
 
