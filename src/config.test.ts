@@ -5,7 +5,7 @@ import * as fs from "node:fs/promises";
 import test from "node:test";
 import { loadConfig } from "./config/index.js";
 
-test("loadConfig 默认开启 bridge bang command", async () => {
+test("loadConfig 默认关闭 bridge bang command", async () => {
   const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "bridge-config-"));
   const originalAppId = process.env["FEISHU_APP_ID"];
   const originalAppSecret = process.env["FEISHU_APP_SECRET"];
@@ -21,7 +21,7 @@ test("loadConfig 默认开启 bridge bang command", async () => {
 
   try {
     const config = loadConfig();
-    assert.equal(config.bridge.enableBangCommand, true);
+    assert.equal(config.bridge.enableBangCommand, false);
     assert.equal(config.bridge.sessionHistoryEnabled, true);
     assert.equal(config.acp.geminiSpawnCommand, "gemini");
     assert.equal(config.acp.geminiSpawnArgs?.[0], "--acp");

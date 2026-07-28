@@ -16,6 +16,7 @@ import type {
   PersistedSessionGroup,
   PersistedSlotRecord,
 } from "./store.js";
+import { buildSessionKey } from "./session-key.js";
 
 const MAX_SLOT_HISTORY_TURNS = 20;
 const MAX_SLOT_HISTORY_TEXT_CHARS = 4_000;
@@ -134,6 +135,14 @@ export class SessionManager {
    * (e.g. two /new at once racing past maxSlots check).
    */
   private keyLocks = new Map<string, Promise<void>>();
+  /**
+   * Coalesce concurrent store.flush() calls. When multiple persistGroup
+   * calls happen while a flush is in-flight, only one additional flush
+   * is queued after the current one completes. This avoids multiple
+   * rapid disk writes while still flushing immediately.
+   */
+  private flushInProgress = false;
+  private flushPending = false;
 
   constructor(
     resolver: AcpRuntimeResolver | BridgeAcpRuntime,
@@ -1633,9 +1642,46 @@ export class SessionManager {
     for (const slot of group.slots) {
       this.upsertResumeHistoryForSession(slot.session);
     }
-    void this.store.flush().catch((e) => {
-      console.error("[session] flush failed:", e);
-    });
+    this.schedulePersistFlush();
+  }
+
+  /**
+   * Start a store.flush() immediately, but coalesce concurrent calls.
+   * If a flush is already in progress, mark that another flush is needed
+   * and return; the in-progress flush will trigger a follow-up flush
+   * when it completes.
+   */
+  private schedulePersistFlush(): void {
+    if (this.flushInProgress) {
+      this.flushPending = true;
+      return;
+    }
+    this.flushInProgress = true;
+    void this.store.flush()
+      .catch((e) => {
+        console.error("[session] flush failed:", e);
+      })
+      .finally(() => {
+        this.flushInProgress = false;
+        if (this.flushPending) {
+          this.flushPending = false;
+          this.schedulePersistFlush();
+        }
+      });
+  }
+
+  /**
+   * Immediately flush any pending debounced write. Called on shutdown.
+   */
+  flushPendingPersist(): void {
+    // With the coalescing approach, flush starts immediately so there's
+    // nothing to cancel. This method is a no-op kept for shutdown safety
+    // and future extensibility.
+    if (!this.flushInProgress) {
+      void this.store.flush().catch((e) => {
+        console.error("[session] flush failed:", e);
+      });
+    }
   }
 
   private countAliveSlotsForUser(userId: string, now: number): number {
@@ -1667,14 +1713,13 @@ export class SessionManager {
     chatType: string,
     threadId?: string,
   ): string {
-    if (this.chatType(chatType) === "p2p") return `dm:${userId}`;
-    const t = threadId?.trim();
-    if (this.usesSharedGroupSessions(chatType)) {
-      if (t) return `${chatId}:t:${t}`;
-      return chatId;
-    }
-    if (t) return `${chatId}:t:${t}:${userId}`;
-    return `${chatId}:${userId}`;
+    return buildSessionKey(
+      chatId,
+      userId,
+      this.chatType(chatType),
+      this.groupSessionScope,
+      threadId,
+    );
   }
 
   private chatType(t: string): "p2p" | "group" {

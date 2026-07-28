@@ -357,7 +357,7 @@ function resolveCodexAgentAcpSpawn(): { command: string; args: string[] } {
   const envRaw = process.env["CODEX_AGENT_ACP_COMMAND"]?.trim();
   const extra = parseExtraArgs(process.env["CODEX_AGENT_ACP_EXTRA_ARGS"]);
   const autoApprovePermissions =
-    (process.env["AUTO_APPROVE_PERMISSIONS"] ?? "true").toLowerCase() ===
+    (process.env["AUTO_APPROVE_PERMISSIONS"] ?? "false").toLowerCase() ===
     "true";
   if (envRaw) {
     const tokens = parseShellLikeArgs(envRaw);
@@ -634,7 +634,7 @@ export function loadConfig(): Config {
     (process.env["BRIDGE_SESSION_HISTORY_ENABLED"] ?? "true").toLowerCase() ===
     "true";
   const enableBangCommand =
-    (process.env["BRIDGE_ENABLE_BANG_COMMAND"] ?? "true").toLowerCase() ===
+    (process.env["BRIDGE_ENABLE_BANG_COMMAND"] ?? "false").toLowerCase() ===
     "true";
 
   const defaultPresetsFile = path.join(defaultStateDir, "workspace-presets.json");
@@ -785,7 +785,7 @@ export function loadConfig(): Config {
       upgradeResultPath,
     },
     autoApprovePermissions:
-      (process.env["AUTO_APPROVE_PERMISSIONS"] ?? "true").toLowerCase() ===
+      (process.env["AUTO_APPROVE_PERMISSIONS"] ?? "false").toLowerCase() ===
       "true",
     bridgeDebug:
       (process.env["BRIDGE_DEBUG"] ?? "false").toLowerCase() === "true",

@@ -3,6 +3,7 @@ import type { Config } from "../config/index.js";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { AcpRuntimeRegistry } from "../acp/runtime.js";
 import type {
   AcpBackend,
@@ -17,6 +18,7 @@ import {
 import { FeishuBot, type FeishuMessage } from "../feishu/bot.js";
 import { SessionManager } from "../session/manager.js";
 import { SessionStore } from "../session/store.js";
+import { buildSessionKey } from "../session/session-key.js";
 import { ConversationService } from "./conversation-service.js";
 import { WorkspacePresetsStore } from "../session/workspace-presets-store.js";
 import {
@@ -32,6 +34,7 @@ import {
   type BridgeMessageHandlerDeps,
 } from "./bridge-message-handler.js";
 import { preprocessBridgeMessage } from "./bridge-message-preprocess.js";
+import { isPidRunning } from "../utils/process-utils.js";
 
 const MAINTENANCE_OUTPUT_LIMIT = 12_000;
 const SHUTDOWN_CANCEL_TIMEOUT_MS = 3_000;
@@ -44,17 +47,6 @@ type RunningMaintenanceTask = {
   requestedAt: number;
   forced: boolean;
 };
-
-function isPidRunning(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (e) {
-    const err = e as NodeJS.ErrnoException;
-    if (err.code === "ESRCH") return false;
-    return true;
-  }
-}
 
 function formatWhoAmIMessage(senderId: string): string {
   if (!senderId.trim()) {
@@ -385,7 +377,9 @@ export class Bridge {
   }
 
   private resolveUpgradeRunnerEntry(): string {
-    return path.resolve(process.cwd(), "dist", "bridge", "upgrade-runner.js");
+    const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+    // bridge.ts → 上两级到项目根目录，再进入 dist/bridge/upgrade-runner.js
+    return path.resolve(moduleDir, "..", "..", "dist", "bridge", "upgrade-runner.js");
   }
 
   private assertUpgradeRunnerAvailable(): string {
@@ -530,14 +524,13 @@ export class Bridge {
   }
 
   private feishuSessionKey(msg: FeishuMessage): string {
-    if (msg.chatType === "p2p") return `dm:${msg.senderId}`;
-    const t = this.threadScope(msg);
-    if (this.config.bridge.groupSessionScope === "shared") {
-      if (t) return `${msg.chatId}:t:${t}`;
-      return msg.chatId;
-    }
-    if (t) return `${msg.chatId}:t:${t}:${msg.senderId}`;
-    return `${msg.chatId}:${msg.senderId}`;
+    return buildSessionKey(
+      msg.chatId,
+      msg.senderId,
+      msg.chatType,
+      this.config.bridge.groupSessionScope,
+      this.threadScope(msg),
+    );
   }
 
   private async flushPendingSessionNotices(msg: FeishuMessage): Promise<void> {
@@ -975,6 +968,8 @@ export class Bridge {
     await this.feishuBot.stop();
     await this.cancelKnownSessionsForShutdown();
     await this.runtimeRegistry.stopAll();
+    // Flush any in-progress debounced writes before exit
+    this.sessionManager.flushPendingPersist?.();
     console.log("[bridge] Service stopped");
   }
 }
