@@ -42,12 +42,14 @@ export function installFileLogger(filePath: string): FileLoggerHandle {
     flushTimer.unref?.();
   }
 
+  // 直接保存引用而非 .bind(console)：Node.js 的 console 方法已是 bound function，
+  // 再次 bind 会创建新引用，导致多次 install/close 后引用不一致。
   const original: Record<ConsoleMethodName, ConsoleMethod> = {
-    log: console.log.bind(console),
-    info: console.info.bind(console),
-    warn: console.warn.bind(console),
-    error: console.error.bind(console),
-    debug: console.debug.bind(console),
+    log: console.log,
+    info: console.info,
+    warn: console.warn,
+    error: console.error,
+    debug: console.debug,
   };
 
   function flushBuffer(): void {
